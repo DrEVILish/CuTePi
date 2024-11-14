@@ -1,0 +1,13 @@
+h2 Media Controls
+//div(hx-get="/api/progress" hx-trigger="every 50ms" hx-swap="innerHTML")
+  | 0:00.00/0:00.00  -0:00.00
+
+button(hx-post="/api/prev") prev
+button(hx-post="/api/play") play
+button(hx-post="/api/togglePause") pause
+button(hx-post="/api/stop") stop
+button(hx-post="/api/next") next
+button(hx-post="/api/panic") panic
+button(hx-post="/api/fadeOut") fadeOut
+
+button(hx-post="/api/test") Show Test

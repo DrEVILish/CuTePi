@@ -1,0 +1,20 @@
+div#cuesheet
+  h2 Cuesheet
+  button(hx-get="/cuesheet", hx-target="#cuesheet") Refresh
+  button(hx-post="/api/clear", hx-target="#cuesheet") Clear List
+  ul
+    each cue in cuesheet
+      li
+        =cue.cuePos
+        | -
+        =cue.cueNum
+        =cue.title
+        =cue.posStart
+        =cue.posEnd
+        =cue.duration
+        =cue.mimetype
+        =cue.size
+        button(
+          hx-delete=`/api/cue/${cue.cuePos}`
+          hx-target="#cuesheet" hx-swap="outerHTML swap:250ms"
+        )= "Delete"

@@ -1,0 +1,26 @@
+#dropzone {
+  width: 100px;
+  height: 100px;
+  color: blue;
+  border: 4px dashed cyan;
+  padding: 3rem;
+  line-height: 140%;
+
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+#dropzone.drag-over {
+  background-color: #eee;
+}
+
+#dropzone.has-advanced-upload {
+  background-color: white;
+  outline: 2px dashed black;
+  outline-offset: -10px;
+}
+#dropzone.has-advanced-upload .dragndrop {
+  display: block;
+}

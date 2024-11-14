@@ -1,0 +1,27 @@
+doctype html
+html
+  head
+    meta(charset='UTF-8')
+    title Control Centre - CuTePi
+
+    link(rel='stylesheet', href='/css/index.css')
+  body
+    header
+      h1 CuTePi
+
+    section#mediacontrols
+      include mediacontrols.pug
+
+    main#cuesheet
+      include cuesheet.pug
+
+    section#mediapool
+      include mediapool.pug
+
+    section#upload
+      include dropzone.pug
+
+    section#youtube
+      include youtube.pug
+
+    script(src='/src/htmx.org@2.0.3')

@@ -1,0 +1,38 @@
+- var  formatBytes = function(bytes, decimals = 2) {
+-    if (!+bytes) return '0 Bytes'
+-
+-    const k = 1024
+-    const dm = decimals < 0 ? 0 : decimals
+-    const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB']
+-
+-    const i = Math.floor(Math.log(bytes) / Math.log(k))
+-
+-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`
+-}
+
+div(hx-get="/mediapool" hx-trigger="mediapool-updated from:body" hx-swap="outerHTML")
+  h2 Mediapool
+  button(hx-put="/mediapool") Refresh
+  ul.mediapool
+    each media in mediapool
+      li= media.filename + `\t`
+        span= media.mimetype + `\t`
+        span= formatBytes(media.size) + `\t`
+        button(
+          hx-post=`/api/play/${media.filename}`
+          hx-swap="none"
+          onclick="play()"
+        )= "Play"
+        button(
+          hx-post=`/api/load/${media.filename}`
+          hx-swap="none"
+        )= "Load"
+        button(
+          hx-post=`/api/add/cue/${media.filename}`
+          hx-target=`#cuesheet`
+        )= "Add"
+        button(
+          hx-delete=`/api/${media.filename}`
+          hx-target="closest li"
+          hx-swap="outerHTML swap:250ms"
+        )= "Delete"

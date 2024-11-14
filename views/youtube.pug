@@ -1,0 +1,15 @@
+h2 YouTube Downloader
+form#youtube-dl(
+  hx-encoding="multipart/form-data",
+  hx-post="/youtube",
+  hx-swap="innerHTML",
+  hx-target="#info"
+)
+  label(for="url") YouTube URL
+  input#url(
+    type="url",
+    name="url",
+    placeholder="url"
+  )
+  button#download start
+  span#info
