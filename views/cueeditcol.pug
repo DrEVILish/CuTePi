@@ -1,0 +1,9 @@
+form(
+  hx-put=`/api/cue/${cuePos}/edit/${col}`
+  hx-target="#cuesheet"
+  hx-swap="innerHTML"
+)
+  input(
+    name="val"
+    value=cue
+  )

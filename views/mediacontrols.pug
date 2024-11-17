@@ -1,13 +1,13 @@
 h2 Media Controls
 //div(hx-get="/api/progress" hx-trigger="every 50ms" hx-swap="innerHTML")
   | 0:00.00/0:00.00  -0:00.00
+div.btn-group
+  button.btn.btn-primary(hx-post="/api/prev") prev
+  button.btn.btn-success(hx-post="/api/play") play
+  button.btn.btn-secondary(hx-post="/api/togglePause") pause
+  button.btn.btn-danger(hx-post="/api/stop") stop
+  button.btn.btn-primary(hx-post="/api/next") next
+  button.btn.btn-danger(hx-post="/api/panic") panic
+  button.btn.btn-warning(hx-post="/api/fadeOut") fadeOut
 
-button(hx-post="/api/prev") prev
-button(hx-post="/api/play") play
-button(hx-post="/api/togglePause") pause
-button(hx-post="/api/stop") stop
-button(hx-post="/api/next") next
-button(hx-post="/api/panic") panic
-button(hx-post="/api/fadeOut") fadeOut
-
-button(hx-post="/api/test") Show Test
+button.btn.btn-danger(hx-post="/api/test") Show Test

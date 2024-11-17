@@ -112,11 +112,62 @@ router.delete('/media/:filename', async (req, res) => {
   }
 })
 
+router.get('/cuesheet', async (req, res) => {
+  const cuesheet = await ctp.getCuesheet()
+  res.render('cuesheet', { cuesheet })
+})
+
+router.post('/cue/play', async (req, res) => {
+  console.log('Play Cue')
+  const cuesheet = await ctp.getCuesheet()
+  res.render('cuesheet', { cuesheet })
+})
+
+router.post('/cue/next', async (req, res) => {
+  await ctp.nextCue()
+  const cuesheet = await ctp.getCuesheet()
+  res.render('cuesheet', { cuesheet })
+})
+
+router.post('/cue/prev', async (req, res) => {
+  await ctp.prevCue()
+  const cuesheet = await ctp.getCuesheet()
+  res.render('cuesheet', { cuesheet })
+})
+
+router.get('/cue/:cuePos', async (req, res) =>{
+  const { cuePos } = req.params;
+  await ctp.setCue(cuePos)
+  const cuesheet = await ctp.getCuesheet()
+  res.render('cuesheet', { cuesheet })
+})
+
+router.post('/cue/:cuePos/edit/:col', async (req, res)=>{
+  const { cuePos, col } = req.params;
+  const cue = (await ctp.getCue(cuePos))[0][col]
+  res.render('cueeditcol', { cuePos, col, cue })
+})
+
+router.put('/cue/:cuePos/edit/:col', async (req, res)=>{
+  const { cuePos, col } = req.params;
+  const { val } = req.body
+  //get post update
+  console.log("Update", cuePos, "Column", col, "Value", val)
+  //const cue = await ctp.updateCue()
+  const cuesheet = await ctp.getCuesheet()
+  res.render('cuesheet', { cuesheet })
+})
+
 router.delete('/cue/:cuePos', async (req, res) => {
   const { cuePos } = req.params;
   await ctp.removeCue(cuePos)
   const cuesheet = await ctp.getCuesheet()
   res.render('cuesheet', { cuesheet })
+})
+
+router.get('/test', async (req, res) => {
+  console.log("TESTING")
+  res.send("TEST")
 })
 
 router.get('/progress', async (req, res) => {

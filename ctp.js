@@ -7,18 +7,25 @@ const config = require('./config')
 
 const ctp = {};
 
-ctp.currentCue = -1
-ctp.getCue = async (cue_id) => {
-  return ctp.currentCue
+ctp.currentCue = 1
+ctp.cuesheetLength = 1
+ctp.getCue = async (cuePos) => {
+  return rows = await (await db).all("SELECT * FROM cuesheet LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id WHERE cuePos = $cuePos", {$cuePos: cuePos})
 }
-ctp.setCue = async (cue_id) => {
-  return ctp.currentCue = cue_id
+ctp.setCue = async (cuePos) => {
+  return ctp.currentCue = parseInt(cuePos)
 }
 ctp.nextCue = async () => {
-
+  if (ctp.currentCue + 1 > ctp.cuesheetLength ){
+    return
+  }
+  return ctp.currentCue = ctp.currentCue + 1
 }
 ctp.prevCue = async () => {
-
+  if (ctp.currentCue - 1 < 1 ){
+    return
+  }
+  return ctp.currentCue = ctp.currentCue - 1
 }
 
 
@@ -31,7 +38,19 @@ ctp.clearCuesheet = async () => {
 }
 
 ctp.getCuesheet = async () => {
-  return rows = (await db).all("SELECT * FROM cuesheet LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id")
+  const rows = await (await db).all("SELECT * FROM cuesheet LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id")
+
+  ctp.cuesheetLength = rows.length
+  if(ctp.currentCue > rows.length){
+    ctp.currentCue = rows.length
+  }
+
+  rows.forEach((row, i)=>{
+    if(row.cuePos == ctp.currentCue){
+      rows[i].selected = true;
+    }
+  })
+  return rows
 }
 
 ctp.getPlaylist = async () => {
@@ -50,7 +69,7 @@ ctp.getPlaylist = async () => {
 }
 
 ctp.addCue = async (filename) => {
-  const row = await (await db).run(
+  return await (await db).run(
     `INSERT INTO cuesheet (cuePos, cueNum, media_id, title)
     SELECT
         (SELECT COALESCE(MAX(cuePos), 0) + 1 FROM cuesheet) AS cuePos,
@@ -62,9 +81,6 @@ ctp.addCue = async (filename) => {
     {$filename: filename}
   )
 
-    ctp.currentCue = row.index
-    console.log(row.lastID)
-  return ctp.currentCue;
 }
 
 ctp.removeCue = async (cuePos) => {

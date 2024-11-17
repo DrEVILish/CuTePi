@@ -30,6 +30,7 @@ div(hx-get="/mediapool" hx-trigger="mediapool-updated from:body" hx-swap="outerH
         button(
           hx-post=`/api/add/cue/${media.filename}`
           hx-target=`#cuesheet`
+          hx-swap="innerHTML"
         )= "Add"
         button(
           hx-delete=`/api/${media.filename}`

@@ -26,7 +26,12 @@ router.get('/', async (req,res)=>{
     //db.run(createTableMediapool);
     //db.run(createTableCuesheet);
   })
-  res.send('install')
+
+  // create Directory /CTP/bin /CTP/media /CTP/config
+  // wget yt-dlp
+  // chmod 555 yt-dlp
+
+  res.send('installed')
 })
 
 module.exports = router

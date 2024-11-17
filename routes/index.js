@@ -20,15 +20,9 @@ router.get('/mediapool', async (req,res)=>{
   res.render('mediapool', { mediapool } )
 })
 
-router.get("/cuesheet", async (req, res)=>{
+router.all("/cuesheet", async (req, res)=>{
   const cuesheet = await ctp.getCuesheet()
-  console.log(cuesheet)
   res.render('cuesheet', { cuesheet })
-})
-
-router.put('/cuesheet', async (req,res )=>{
-  res.setHeader('Hx-Trigger', 'cuesheet-updated')
-  res.send("update")
 })
 
 router.get('/', async (req,res)=>{
