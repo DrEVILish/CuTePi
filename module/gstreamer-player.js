@@ -72,7 +72,7 @@ class GStreamerPlayer {
       const fbResolution = await getFrameBufferResolution()
 
       if(pattern == undefined){
-        pipe = `videotestsrc ! videoscale ! video/x-raw,pixel-aspect-ratio=1/1,width=${fbResolution.width},height=${fbResolution.height} ! videoconvert ! outputSink`
+        pipe = `videotestsrc ! videoscale ! video/x-raw,pixel-aspect-ratio=1/1,width=${fbResolution.width},height=${fbResolution.height} ! videoconvert ! ${outputSink}`
       }else {
         // Patterns ->
           // smpte (0) – SMPTE 100%% color bars
@@ -101,7 +101,7 @@ class GStreamerPlayer {
           // gradient (23) – Gradient
           // colors (24) – Colors
           // smpte-rp-219 (25) – SMPTE test pattern, RP 219 conformant
-        pipe = `videotestsrc pattern=${pattern} ! videoscale ! video/x-raw,pixel-aspect-ratio=1/1,width=${fbResolution.width},height=${fbResolution.height} ! videoconvert ! outputSink`
+        pipe = `videotestsrc pattern=${pattern} ! videoscale ! video/x-raw,pixel-aspect-ratio=1/1,width=${fbResolution.width},height=${fbResolution.height} ! videoconvert ! ${outputSink}`
       }
 
       this.pipeline1 = new GStreamer.Pipeline(pipe);
@@ -301,7 +301,7 @@ class GStreamerPlayer {
           compositor name=comp background=transparent
           sink_0::alpha=1
           sink_1::alpha=1 sink_1::sizing-policy=keep-aspect-ratio sink_1::width=${fbResolution.width} sink_1::height=${fbResolution.height}
-          ! videoconvert ! outputSink
+          ! videoconvert ! ${outputSink}
 
           videotestsrc pattern=2 ! video/x-raw, framerate=\(fraction\)1/1, width=${fbResolution.width}, height=${fbResolution.height} ! comp.
 
@@ -323,7 +323,7 @@ class GStreamerPlayer {
         console.log(fbResolution.width)
         console.log(fbResolution.height)
 
-        const pipe = `filesrc location="${filePath}" ! decodebin ! videoconvert ! videoscale ! video/x-raw,pixel-aspect-ratio=1/1,width=${fbResolution.width} ! outputSink`;
+        const pipe = `filesrc location="${filePath}" ! decodebin ! videoconvert ! videoscale ! video/x-raw,pixel-aspect-ratio=1/1,width=${fbResolution.width} ! ${outputSink}`;
 
         this.pipeline2 = new GStreamer.Pipeline(pipe);
         this.pipeline2.play();
