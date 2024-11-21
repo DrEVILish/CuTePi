@@ -19,40 +19,41 @@ mixin tableRow(cue)
       =cue.posEnd
   td Follow
   td
-    button.btn.btn-warning(
-      hx-post=`/api/cue/${cue.cuePos}/edit`
-      hx-target="closest tr" hx-swap="innerHTML"
-    )= "Edit"
-    button.btn.btn-danger(
+    //button.btn.btn-warning(
+    //  hx-post=`/api/cue/${cue.cuePos}/edit`
+    //  hx-target="closest tr" hx-swap="innerHTML"
+    //)= "Edit"
+    button.btn.btn-close.btn-close-white.btn-sm(
       hx-delete=`/api/cue/${cue.cuePos}`
-      hx-target="#cuesheet" hx-swap="innerHTML"
-    )= "Delete"
+      hx-target="#cuesheet"
+      hx-swap="innerHTML"
+      aria-label="Close"
+    )
 
-
-
-h2 Cuesheet
-button(hx-get="/api/cuesheet", hx-target="#cuesheet" hx-swap="innerHTML") Refresh
-button(hx-post="/api/clear", hx-target="#cuesheet") Clear List
-div(hx-trigger="keyup[key=='ArrowDown'] from:body" hx-post="/api/cue/next" hx-target="#cuesheet" hx-swap="innerHTML")
-div(hx-trigger="keyup[key=='ArrowUp'] from:body" hx-post="/api/cue/prev" hx-target="#cuesheet" hx-swap="innerHTML")
-div(hx-trigger="keyup[keyCode==32] from:body" hx-post="/api/cue/play" hx-target="#cuesheet" hx-swap="innerHTML")
-table.table.table-dark
-  thead
-    tr
-      th(scope="col")
-      th(scope="col") Position
-      th(scope="col") Number
-      th(scope="col") Name
-      th(scope="col") Pre-Wait
-      th(scope="col") Duration
-      th(scope="col") Post-Wait
-      th(scope="col") Post-Action
-      th(scope="col") Buttons
-  tbody
-    each cue in cuesheet
-      if cue.selected
-        tr.cue.table-active
-          +tableRow(cue)
-      else
-        tr.cue(hx-trigger="click" hx-get="/api/cue/"+cue.cuePos hx-target="#cuesheet")
-          +tableRow(cue)
+#cuesheet
+  h2 Cuesheet
+  //button(hx-get="/api/cuesheet", hx-target="#cuesheet" hx-swap="innerHTML") Refresh
+  //button(hx-post="/api/clear", hx-target="#cuesheet") Clear List
+  div#ArrowDown(hx-trigger="ArrowDown" hx-post="/api/cue/next" hx-target="#cuesheet" hx-swap="innerHTML")
+  div#ArrowUp(hx-trigger="ArrowUp" hx-post="/api/cue/prev" hx-target="#cuesheet" hx-swap="innerHTML")
+  div#spaceBar(hx-trigger="spaceBar" hx-post="/api/cue/play" hx-target="#cuesheet" hx-swap="innerHTML")
+  table.table.table-dark.table-striped.table-sm.align-middle
+    thead
+      tr
+        th(scope="col")
+        th(scope="col") Position
+        th(scope="col") Number
+        th(scope="col") Name
+        th(scope="col") Pre-Wait
+        th(scope="col") Duration
+        th(scope="col") Post-Wait
+        th(scope="col") Post-Action
+        th(scope="col") Buttons
+    tbody
+      each cue in cuesheet
+        if cue.selected
+          tr.cue.table-warning
+            +tableRow(cue)
+        else
+          tr.cue(hx-trigger="click" hx-get="/api/cue/"+cue.cuePos hx-target="#cuesheet")
+            +tableRow(cue)

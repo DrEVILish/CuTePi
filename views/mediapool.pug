@@ -1,4 +1,4 @@
-- var  formatBytes = function(bytes, decimals = 2) {
+- var  formatBytes = function(bytes, decimals = 0) {
 -    if (!+bytes) return '0 Bytes'
 -
 -    const k = 1024
@@ -10,30 +10,45 @@
 -    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`
 -}
 
-div(hx-get="/mediapool" hx-trigger="mediapool-updated from:body" hx-swap="outerHTML")
-  h2 Mediapool
-  button(hx-put="/mediapool") Refresh
-  ul.mediapool
+#mediapool(hx-get="/mediapool" hx-trigger="mediapool-updated from:body" hx-swap="outerHTML")
+  h5.mb-3 Mediapool
+  //button(hx-put="/mediapool") Refresh
+  .row.g-3
     each media in mediapool
-      li= media.filename + `\t`
-        span= media.mimetype + `\t`
-        span= formatBytes(media.size) + `\t`
-        button(
-          hx-post=`/api/play/${media.filename}`
-          hx-swap="none"
-          onclick="play()"
-        )= "Play"
-        button(
-          hx-post=`/api/load/${media.filename}`
-          hx-swap="none"
-        )= "Load"
-        button(
-          hx-post=`/api/add/cue/${media.filename}`
-          hx-target=`#cuesheet`
-          hx-swap="innerHTML"
-        )= "Add"
-        button(
-          hx-delete=`/api/${media.filename}`
-          hx-target="closest li"
-          hx-swap="outerHTML swap:250ms"
-        )= "Delete"
+      .col-12.col-xl-6
+        .media_thumbnail.position-relative.img-thumbnail.w-100.h-100.ratio.ratio-16x9(style="background-image:url('/img/slideshow/2560x1440-abstract-ice-water-free-website-background-image.jpg');", alt="Thumbnail")
+          .media_text.position-absolute.top-50.start-50.translate-middle.text-bottom.text-light.bg-dark.bg-opacity-75.p-2.rounded.z-1
+            p.mb-0= media.filename
+            .position-absolute.bottom-0.start-0.m-2
+              if(media.mimetype.startsWith('image'))
+                i.bi.bi-image
+              else if(media.mimetype.startsWith('video'))
+                i.bi.bi-film
+              | &nbsp;
+              = formatBytes(media.size)
+            button.btn.btn-secondary.btn-sm.position-absolute.bottom-0.end-0.m-2.z-3(type="button", data-bs-toggle="dropdown", aria-expanded="false")
+              i.bi.bi-three-dots
+            ul.dropdown-menu.z-3
+              li
+                button.dropdown-item(
+                  hx-post=`/api/play/${media.filename}`
+                  hx-swap="none"
+                  onclick="play()"
+                )= "Play"
+              li
+                button.dropdown-item(
+                  hx-post=`/api/load/${media.filename}`
+                  hx-swap="none"
+                )= "Load"
+              li
+                button.dropdown-item(
+                  hx-post=`/api/add/cue/${media.filename}`
+                  hx-target=`#cuesheet`
+                  hx-swap="innerHTML"
+                )= "Add"
+              li
+                button.dropdown-item(
+                  hx-delete=`/api/${media.filename}`
+                  hx-target="closest li"
+                  hx-swap="outerHTML swap:250ms"
+                )= "Delete"

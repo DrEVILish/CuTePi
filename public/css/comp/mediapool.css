@@ -1,0 +1,9 @@
+.media_text{
+  opacity: 0;
+  transition: opacity 0.4s;
+  font-size: 0.7rem;
+}
+
+.media_thumbnail:hover .media_text{
+  opacity: 1;
+}

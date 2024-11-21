@@ -92,6 +92,13 @@ router.post('/load/:filename', async (req, res) => {
   res.send("Load");
 })
 
+router.post('/add/cue/:filename/:cuePos', async (req, res) => {
+  const { filename, cuePos } = req.params;
+  await ctp.addCue(filename, cuePos)
+  const cuesheet = await ctp.getCuesheet()
+  res.render('cuesheet', { cuesheet })
+})
+
 router.post('/add/cue/:filename', async (req, res) => {
   const { filename } = req.params;
   await ctp.addCue(filename)
@@ -153,7 +160,7 @@ router.put('/cue/:cuePos/edit/:col', async (req, res)=>{
   const { val } = req.body
   //get post update
   console.log("Update", cuePos, "Column", col, "Value", val)
-  //const cue = await ctp.updateCue()
+  await ctp.updateCue(cuePos,col,val)
   const cuesheet = await ctp.getCuesheet()
   res.render('cuesheet', { cuesheet })
 })

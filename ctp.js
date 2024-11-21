@@ -68,19 +68,47 @@ ctp.getPlaylist = async () => {
   return newPlaylist;
 }
 
-ctp.addCue = async (filename) => {
-  return await (await db).run(
-    `INSERT INTO cuesheet (cuePos, cueNum, media_id, title)
-    SELECT
-        (SELECT COALESCE(MAX(cuePos), 0) + 1 FROM cuesheet) AS cuePos,
-        (SELECT COALESCE(MAX(cueNum), 0) + 1 FROM cuesheet) AS cueNum,
-        mp.media_id,
-        $filename AS title
-    FROM
+ctp.addCue = async (filename,i) => {
+  if (typeof i === 'undefined') {
+    return await (await db).run(
+      `INSERT INTO cuesheet (cuePos, cueNum, media_id, title)
+        SELECT
+            (SELECT COALESCE(MAX(cuePos), 0) + 1 FROM cuesheet) AS cuePos,
+            (SELECT COALESCE(MAX(cueNum), 0) + 1 FROM cuesheet) AS cueNum,
+            mp.media_id,
+            $filename AS title
+        FROM
         (SELECT media_id FROM mediapool WHERE filename = $filename) AS mp;`,
-    {$filename: filename}
-  )
+      { $filename: filename }
+    )
+  } else {
+    //bump every cue up one to make space.
+    await (await db).run(`
+      UPDATE cuesheet
+      SET cuePos = cuePos + 1
+      WHERE cuePos > $cuePos;`,
+      {$cuePos: i})
+    //insert new cue at the new cuePos space.
+    await (await db).run(
+      `INSERT INTO cuesheet (cuePos, cueNum, media_id, title)
+        SELECT
+            $cuePos AS cuePos,
+            (SELECT COALESCE(MAX(cueNum), 0) + 1 FROM cuesheet) AS cueNum,
+            mp.media_id,
+            $filename AS title
+        FROM
+        (SELECT media_id FROM mediapool WHERE filename = $filename) AS mp;`,
+      { $filename: filename, $cuePos: i }
+    )
+  }
+}
 
+ctp.updateCue = async (cuePos,col,val) => {
+  return await (await db).run(`
+    UPDATE cuesheet
+    SET ${col} = $val
+    WHERE cuePos = $cuePos;`,
+    {$cuePos: cuePos, $val: val})
 }
 
 ctp.removeCue = async (cuePos) => {
@@ -89,7 +117,7 @@ ctp.removeCue = async (cuePos) => {
     WHERE cuePos = $cuePos;`,
     {$cuePos: cuePos}
   )
-  return await (await db).run(`
+  return (await db).run(`
     UPDATE cuesheet
     SET cuePos = cuePos - 1
     WHERE cuePos > $cuePos;`,

@@ -1,9 +1,11 @@
-form(
+form#updateValue(
+  hx-trigger="updateValue"
   hx-put=`/api/cue/${cuePos}/edit/${col}`
   hx-target="#cuesheet"
   hx-swap="innerHTML"
 )
   input(
+    onblur="htmx.trigger('#updateValue', 'updateValue')"
     name="val"
     value=cue
   )

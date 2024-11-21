@@ -1,0 +1,30 @@
+.modal.fade#uploadModal(tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true")
+  .modal-dialog.modal-xl
+    .modal-content
+      .modal-header
+        h1.modal-title.fs-5#uploadModalLabel Upload
+        a.btn.btn-lg(href="/upload")
+          i.bi.bi-box-arrow-right
+        button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
+      form#dropform(
+        hx-encoding="multipart/form-data",
+        hx-post="/upload",
+        hx-swap="innerHTML",
+        hx-target="#mediapool"
+      )
+        .modal-body
+          div#dropzone
+            input#file-input(
+              type="file",
+              name="media",
+              multiple,
+              hidden
+            )
+            label(for="media")
+              strong Choose a file
+              span.dragndrop  or drag it here
+          ul#filelist
+          progress#progress(value='0', max='100')
+      .modal-footer
+        button#upload upload
+script(src='/src/dropzone.js')
