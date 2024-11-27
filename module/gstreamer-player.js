@@ -17,10 +17,30 @@ class GStreamerPlayer {
       height: 1080
     }
     this.outputSink = "autovideosink";
-    this.outputStage = `! videoscale
-    ! video/x-raw,pixel-aspect-ratio=1/1,width=${this.fbResolution.width},height=${this.fbResolution.height}
-    ! videoconvert
-    ! ${this.outputSink}`
+
+    this.outputStage = `
+      ! videoscale
+      ! video/x-raw,pixel-aspect-ratio=1/1,width=${this.fbResolution.width},height=${this.fbResolution.height}
+      ! videoconvert
+      ! ${this.outputSink}
+    `;
+
+    this.mixStage = `
+      compositor name=comp background=transparent
+      sink_0::alpha=1
+      sink_1::alpha=1
+      sink_1::sizing-policy=keep-aspect-ratio
+      sink_1::width=${this.fbResolution.width}
+      sink_1::height=${this.fbResolution.height}
+      ! ${this.outputStage}
+
+      videotestsrc pattern=2
+      ! video/x-raw
+      framerate=\(fraction\)1/1
+      width=${this.fbResolution.width}
+      height=${this.fbResolution.height}
+      ! comp.
+    `;
   }
 
   async panic() {
@@ -52,9 +72,10 @@ class GStreamerPlayer {
     console.log("SHOW TEST")
 
     let pipe = `
-        videotestsrc pattern=${pattern}
-        ! ${this.outputStage}
-      `;
+      ${this.mixStage}
+      videotestsrc pattern=${pattern}
+      ! comp.
+    `;
 
     this.pipeline1 = new GStreamer.Pipeline(pipe);
     if (this.pipeline1) {
@@ -275,21 +296,7 @@ class GStreamerPlayer {
     // const pipe = 'videotestsrc ! capsfilter name=filter ! textoverlay name=text ! fbdevsink'
     // const pipe = "playbin uri=https://www.freedesktop.org/software/gstreamer-sdk/data/media/sintel_trailer-480p.webm"
     const pipe = `
-      compositor name=comp background=transparent
-      sink_0::alpha=1
-      sink_1::alpha=1
-      sink_1::sizing-policy=keep-aspect-ratio
-      sink_1::width=${this.fbResolution.width}
-      sink_1::height=${this.fbResolution.height}
-      ! ${this.outputStage}
-
-      videotestsrc pattern=2
-      ! video/x-raw
-      framerate=\(fraction\)1/1
-      width=${this.fbResolution.width}
-      height=${this.fbResolution.height}
-      ! comp.
-
+      ${this.mixStage}
       filesrc location="${filePath}"
       ! decodebin
       ! videoconvert

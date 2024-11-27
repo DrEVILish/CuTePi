@@ -13,6 +13,10 @@ const config = {
   mpv: {
 
   },
+  gsp: {
+    outputResolutionWidth: 1920,
+    outputResolutionHeight: 1080
+  },
   ytdlp: {
     binary: "/opt/homebrew/bin/yt-dlp"
   }
