@@ -32,12 +32,11 @@ class GStreamerPlayer {
       sink_1::sizing-policy=keep-aspect-ratio
       sink_1::width=${this.fbResolution.width}
       sink_1::height=${this.fbResolution.height}
-      ! ${this.outputStage}
+      ${this.outputStage}
 
       videotestsrc pattern=2
-      ! video/x-raw
-      framerate=\(fraction\)1/1
-      width=${this.fbResolution.width}
+      ! video/x-raw,framerate=\(fraction\)1/1,
+      width=${this.fbResolution.width},
       height=${this.fbResolution.height}
       ! comp.
     `;
