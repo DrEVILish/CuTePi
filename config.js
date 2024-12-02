@@ -10,9 +10,6 @@ const config = {
   db: {
     location: workingDir + "/config/db",
   },
-  mpv: {
-
-  },
   gsp: {
     outputResolutionWidth: 1920,
     outputResolutionHeight: 1080

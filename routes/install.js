@@ -22,13 +22,11 @@ router.get('/', async (req,res)=>{
         ON DELETE CASCADE
     )`;
 
-  db.serialize(() => {
-    //db.run(createTableMediapool);
-    //db.run(createTableCuesheet);
-  })
+  await (await db).run(createTableCuesheet)
+  await (await db).run(createTableMediapool)
 
   // create Directory /CTP/bin /CTP/media /CTP/config
-  // wget yt-dlp
+  // wget yt-dlp (part of bash script app install process)
   // chmod 555 yt-dlp
 
   res.send('installed')
