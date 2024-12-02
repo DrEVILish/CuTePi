@@ -16,7 +16,7 @@ class GStreamerPlayer {
       width: 1920,
       height: 1080
     }
-    this.outputSink = "autovideosink";
+    this.outputSink = `glimagesink rotate-method="clockwise"`;
 
     this.outputStage = `
       ! videoscale
