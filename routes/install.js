@@ -6,7 +6,7 @@ const db = require('../db')
 // /install
 router.get('/', async (req,res)=>{
 
-  const createTableMediapool = `CREATE TABLE [NOT EXISTS] mediapool (
+  const createTableMediapool = `CREATE TABLE mediapool (
     media_id INTEGER PRIMARY KEY NOT NULL,
     filename TEXT UNIQUE NOT NULL
     )`;
@@ -22,8 +22,8 @@ router.get('/', async (req,res)=>{
         ON DELETE CASCADE
     )`;
 
-  await (await db).run(createTableCuesheet)
   await (await db).run(createTableMediapool)
+  await (await db).run(createTableCuesheet)
 
   // create Directory /CTP/bin /CTP/media /CTP/config
   // wget yt-dlp (part of bash script app install process)
