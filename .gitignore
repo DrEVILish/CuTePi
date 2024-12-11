@@ -1,3 +1,45 @@
+# GO Project
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built by `go test -c`
+*.test
+
+# Output of the `go build` and `go run` commands
+/main
+
+# Vendor directory for dependencies (if not using go modules)
+vendor/
+
+# Dependency directories (if not using go modules)
+Godeps/
+
+# Environment-specific files
+.env
+
+# IDE and editor files
+.idea/
+*.iml
+*.vscode/
+*.swp
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Build directories
+bin/
+build/
+
+# Node.js tools (if the project integrates with frontend tools)
+node_modules/
+package-lock.json
+
 # Logs
 logs
 crash.log
