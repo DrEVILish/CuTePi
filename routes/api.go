@@ -55,7 +55,13 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet := ctp.GetCuesheet()
+		cuesheet,err := ctp.GetCuesheet()
+		if err != nil {
+  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+  			"error": err.Error(),
+  		})
+  		return
+		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
 			"cuesheet": cuesheet,
 		})
@@ -112,7 +118,13 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet := ctp.GetCuesheet()
+		cuesheet,err := ctp.GetCuesheet()
+		if err != nil {
+  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+  			"error": err.Error(),
+  		})
+  		return
+		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
 			"cuesheet": cuesheet,
 		})
@@ -146,7 +158,13 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet := ctp.GetCuesheet()
+		cuesheet,err := ctp.GetCuesheet()
+		if err != nil {
+  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+  			"error": err.Error(),
+  		})
+  		return
+		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
 			"cuesheet": cuesheet,
 		})
@@ -160,11 +178,16 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet := ctp.GetCuesheet()
+		cuesheet,err := ctp.GetCuesheet()
+		if err != nil {
+  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+  			"error": err.Error(),
+  		})
+  		return
+		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
 			"cuesheet": cuesheet,
 		})
-		c.Status(http.StatusOK)
 	})
 
 	rg.POST("/cue/:cuePos", func(c *gin.Context) {
@@ -177,7 +200,13 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet := ctp.GetCuesheet()
+		cuesheet,err := ctp.GetCuesheet()
+		if err != nil {
+  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+  			"error": err.Error(),
+  		})
+  		return
+		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
 			"cuesheet": cuesheet,
 		})
@@ -212,7 +241,13 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet := ctp.GetCuesheet()
+		cuesheet,err := ctp.GetCuesheet()
+		if err != nil {
+  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+  			"error": err.Error(),
+  		})
+  		return
+		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
 			"cuesheet": cuesheet,
 		})

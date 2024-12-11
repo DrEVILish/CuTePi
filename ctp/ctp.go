@@ -79,14 +79,14 @@ func PrevCue() (error) {
 	return nil
 }
 
-func GetCuesheet() Cuesheet {
+func GetCuesheet() (Cuesheet, error) {
 	rows, err := db.Query(`
 		SELECT *
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
 	`)
 	if err != nil {
-		panic(err) // Handle the error appropriately
+		return Cuesheet{}, err // Handle the error appropriately
 	}
 	defer rows.Close() // Ensure rows are closed after processing
 
@@ -94,7 +94,7 @@ func GetCuesheet() Cuesheet {
 	for rows.Next() {
 		var cue Cue
 		if err := rows.Scan(&cue.cuePos, &cue.cueNum, &cue.media_id, &cue.title, &cue.posStart, &cue.posEnd, &cue.selected); err != nil {
-			panic(err) // Handle the error appropriately
+			return Cuesheet{}, err
 		}
 		cues = append(cues, cue)
 	}
@@ -109,7 +109,7 @@ func GetCuesheet() Cuesheet {
 			cues[i].selected = true
 		}
 	}
-	return Cuesheet{cues}
+	return Cuesheet{cues}, nil
 }
 
 func AddCue(filename string, cuePos string) (error) {
