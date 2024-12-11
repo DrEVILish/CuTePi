@@ -1,0 +1,22 @@
+{{ template "header.html" }}
+
+
+<body data-bs-theme="dark">
+    {{ template "topbar.html" }}
+
+    <div class="container-fluid mt-3">
+      <div class="row gx-3">
+        <div class="col-md-3 d-flex flex-column overflow-auto" style="max-height: 90svh;">
+          {{ template "mediapool.html" . }}
+        </div>
+        <div class="col-md-9 overflow-auto" style="max-height: 90svh;">
+          {{ template "cuesheet.html" }}
+        </div>
+      </div>
+    </div>
+
+    {{ template "uploadModal.html" }}
+    {{ template "ytdlModal.html" }}
+
+
+{{ template "footer.html" }}

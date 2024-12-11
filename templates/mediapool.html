@@ -1,0 +1,95 @@
+{{ define "mediapool.html" }}
+
+<!-- <script>
+  var formatBytes = function (bytes, decimals = 0) {
+    if (!+bytes) return '0 Bytes';
+
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
+
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+  };
+</script> -->
+
+<div id="mediapool" hx-get="/mediapool" hx-trigger="mediapool-updated from:body" hx-swap="outerHTML">
+  <h5 class="mb-3">Mediapool</h5>
+  <!-- <button hx-put="/mediapool">Refresh</button> -->
+  <div class="row g-3">
+    <!-- Assuming mediapool is dynamically populated -->
+    {{ range .Mediapool }}
+
+      <div class="col-12 col-xl-6">
+        <div class="media_thumbnail position-relative img-thumbnail w-100 h-100 ratio ratio-16x9"
+          style="background-image:url(' {{ .Thumbnail }} ');"
+          alt="Thumbnail">
+          <div class="media_text position-absolute top-50 start-50 translate-middle text-bottom text-light bg-dark bg-opacity-75 p-2 rounded z-1">
+            <p class="mb-0">{{ .Filename }}</p>
+            <div class="position-absolute bottom-0 start-0 m-2">
+              {{ if hasPrefix .Mimetype "image" }}
+              <!-- if(media.mimetype.startsWith('image')) -->
+                <i class="bi bi-image"></i>
+              {{ else }}
+              <!-- else if(media.mimetype.startsWith('video')) -->
+                <i class="bi bi-film"></i>
+              {{ end }}
+              {{ .Size }}
+              <!-- formatBytes(media.size) -->
+            </div>
+            <button
+              class="btn btn-secondary btn-sm position-absolute bottom-0 end-0 m-2 z-3"
+              type="button"
+              data-bs-toggle="dropdown"
+              aria-expanded="false">
+              <i class="bi bi-three-dots"></i>
+            </button>
+            <ul class="dropdown-menu z-3">
+              <li>
+                <button
+                  class="dropdown-item"
+                  hx-post="/api/play/{{ .Filename }}"
+                  hx-swap="none"
+                  onclick="play()">
+                  Play
+                </button>
+              </li>
+              <li>
+                <button
+                  class="dropdown-item"
+                  hx-post="/api/load/{{ .Filename }}"
+                  hx-swap="none"
+                >
+                  Load
+                </button>
+              </li>
+              <li>
+                <button
+                  class="dropdown-item"
+                  hx-post="/api/add/cue/{{ .Filename }}"
+                  hx-target="#cuesheet"
+                  hx-swap="innerHTML"
+                >
+                  Add
+                </button>
+              </li>
+              <li>
+                <button
+                  class="dropdown-item"
+                  hx-delete="/api/{{ .Filename }}"
+                  hx-target="closest li"
+                  hx-swap="outerHTML swap:250ms"
+                >
+                  Delete
+                </button>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+    {{ end }}
+  </div>
+</div>
+{{ end }}

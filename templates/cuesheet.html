@@ -1,0 +1,88 @@
+{{ define "cuesheet.html" }}
+
+<div id="cuesheet">
+  <h2>Cuesheet</h2>
+  <div id="ArrowDown" hx-trigger="ArrowDown" hx-post="/api/cue/next" hx-target="#cuesheet" hx-swap="innerHTML"></div>
+  <div id="ArrowUp" hx-trigger="ArrowUp" hx-post="/api/cue/prev" hx-target="#cuesheet" hx-swap="innerHTML"></div>
+  <div id="spaceBar" hx-trigger="spaceBar" hx-post="/api/cue/play" hx-target="#cuesheet" hx-swap="innerHTML"></div>
+  <table class="table table-dark table-striped table-sm align-middle">
+    <thead>
+      <tr>
+        <th scope="col"></th>
+        <th scope="col">Position</th>
+        <th scope="col">Number</th>
+        <th scope="col">Name</th>
+        <th scope="col">Pre-Wait</th>
+        <th scope="col">Duration</th>
+        <th scope="col">Post-Wait</th>
+        <th scope="col">Post-Action</th>
+        <th scope="col">Buttons</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Loop over cues -->
+      <!-- Example cue row when selected -->
+      <tr class="cue table-warning">
+        <th scope="row"></th>
+        <td>1</td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/1/edit/cueNum" hx-swap="outerHTML">1</span>
+        </td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/1/edit/title" hx-swap="outerHTML">Cue Title</span>
+        </td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/1/edit/posStart" hx-swap="outerHTML">00:00</span>
+        </td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/1/edit/duration" hx-swap="outerHTML">00:30</span>
+        </td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/1/edit/title" hx-swap="outerHTML">00:30</span>
+        </td>
+        <td>Follow</td>
+        <td>
+          <button
+            class="btn btn-close btn-close-white btn-sm"
+            hx-delete="/api/cue/1"
+            hx-target="#cuesheet"
+            hx-swap="innerHTML"
+            aria-label="Close"
+          ></button>
+        </td>
+      </tr>
+      <!-- Example cue row when not selected -->
+      <tr class="cue" hx-trigger="click" hx-get="/api/cue/2" hx-target="#cuesheet">
+        <th scope="row"></th>
+        <td>2</td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/2/edit/cueNum" hx-swap="outerHTML">2</span>
+        </td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/2/edit/title" hx-swap="outerHTML">Another Cue</span>
+        </td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/2/edit/posStart" hx-swap="outerHTML">00:30</span>
+        </td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/2/edit/duration" hx-swap="outerHTML">01:00</span>
+        </td>
+        <td>
+          <span hx-trigger="dblclick" hx-post="/api/cue/2/edit/title" hx-swap="outerHTML">01:30</span>
+        </td>
+        <td>Follow</td>
+        <td>
+          <button
+            class="btn btn-close btn-close-white btn-sm"
+            hx-delete="/api/cue/2"
+            hx-target="#cuesheet"
+            hx-swap="innerHTML"
+            aria-label="Close"
+          ></button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+{{ end }}

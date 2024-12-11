@@ -1,0 +1,39 @@
+{{ define "ytdlModal.html" }}
+
+<div class="modal fade" id="ytdlModal" tabindex="-1" aria-labelledby="ytdlModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h1 class="modal-title fs-5" id="ytdlModalLabel">YouTube Downloader</h1>
+        <a class="btn btn-lg" href="/upload">
+          <i class="bi bi-box-arrow-right"></i>
+        </a>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form
+        id="youtube-dl"
+        hx-encoding="multipart/form-data"
+        hx-post="/youtube"
+        hx-swap="innerHTML"
+        hx-target="#mediapool"
+      >
+        <div class="modal-body">
+          <label class="form-label" for="url">YouTube URL&nbsp;</label>
+          <input
+            class="form-control"
+            id="url"
+            type="url"
+            name="url"
+            placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          />
+          <span id="info"></span>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-danger" id="download">Download</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{{ end }}

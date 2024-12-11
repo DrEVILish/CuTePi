@@ -1,0 +1,46 @@
+{{ define "uploadModal.html" }}
+
+<div class="modal fade" id="uploadModal" tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h1 class="modal-title fs-5" id="uploadModalLabel">Upload</h1>
+        <a class="btn btn-lg" href="/upload">
+          <i class="bi bi-box-arrow-right"></i>
+        </a>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form
+        id="dropform"
+        hx-encoding="multipart/form-data"
+        hx-post="/upload"
+        hx-swap="innerHTML"
+        hx-target="#mediapool"
+      >
+        <div class="modal-body">
+          <div id="dropzone">
+            <input
+              id="file-input"
+              type="file"
+              name="media"
+              multiple
+              hidden
+            />
+            <label for="media">
+              <strong>Choose a file</strong>
+              <span class="dragndrop"> or drag it here</span>
+            </label>
+          </div>
+          <ul id="filelist"></ul>
+          <progress id="progress" value="0" max="100"></progress>
+        </div>
+        <div class="modal-footer">
+          <button id="upload" class="btn btn-primary">Upload</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<script src="/src/dropzone.js"></script>
+
+{{ end }}

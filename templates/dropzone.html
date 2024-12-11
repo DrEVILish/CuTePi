@@ -1,0 +1,25 @@
+{{ define "dropzone.html" }}
+
+<div id="mediapool">
+  <form
+    id="dropform"
+    hx-encoding="multipart/form-data"
+    hx-post="/upload"
+    hx-swap="innerHTML"
+    hx-target="#mediapool"
+  >
+    <div id="dropzone">
+      <input id="file-input" type="file" name="media" multiple hidden />
+      <label for="media">
+        <strong>Choose a file</strong>
+        <span class="dragndrop"> or drag it here</span>
+      </label>
+    </div>
+    <ul id="filelist"></ul>
+    <progress id="progress" value="0" max="100"></progress>
+    <button id="upload">upload</button>
+  </form>
+  <script src="/src/dropzone.js"></script>
+</div>
+
+{{ end }}

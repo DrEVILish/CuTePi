@@ -1,0 +1,49 @@
+{{ define "mediacontrols.html" }}
+
+<!-- <div hx-get="/api/progress" hx-trigger="every 50ms" hx-swap="innerHTML"> -->
+  <!-- 0:00.00/0:00.00  -0:00.00 -->
+<!-- </div> -->
+<div id="esc" hx-trigger="esc" hx-post="/api/stop" hx-target="#cuesheet" hx-swap="innerHTML" style="display: none;"></div>
+<!-- <div id="escDbl" hx-trigger="escDbl" hx-post="/api/panic" hx-target="#cuesheet" hx-swap="innerHTML"></div> -->
+<div class="d-flex gap-2">
+  <button class="btn btn-lg btn-success" hx-post="/api/play">
+    <i class="bi bi-play-fill"></i>
+  </button>
+  <div class="btn-group">
+    <button class="btn btn-sm btn-secondary" hx-post="/api/togglePause">pause</button>
+    <button class="btn btn-sm btn-danger" hx-post="/api/stop">stop</button>
+    <button class="btn btn-sm btn-primary" hx-post="/api/prev">prev</button>
+    <button class="btn btn-sm btn-primary" hx-post="/api/next">next</button>
+    <button class="btn btn-sm btn-danger" hx-post="/api/panic">panic</button>
+    <button class="btn btn-sm btn-warning" hx-post="/api/fadeOut">fadeOut</button>
+  </div>
+
+  <div class="btn-group">
+    <button class="btn btn-sm btn-danger" hx-post="/api/test">Show Test</button>
+    <button class="btn btn-sm btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false"></button>
+    <ul class="dropdown-menu">
+      <li>
+        <button class="dropdown-item">
+          <i class="bi bi-person-video2"></i>&nbsp;Tests
+        </button>
+      </li>
+      <li>
+        <button class="dropdown-item">
+          <i class="bi bi-gear-fill"></i>&nbsp;Settings
+        </button>
+      </li>
+      <li>
+        <button class="dropdown-item">
+          <i class="bi bi-arrow-clockwise"></i>&nbsp;Restart
+        </button>
+      </li>
+      <li>
+        <button class="dropdown-item">
+          <i class="bi bi-power"></i>&nbsp;Shutdown
+        </button>
+      </li>
+    </ul>
+  </div>
+</div>
+
+{{ end }}
