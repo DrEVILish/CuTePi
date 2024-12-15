@@ -2,21 +2,22 @@ package ctp
 
 import (
 	"CuTePi/config"
-	"database/sql"
 
-	_ "github.com/mattn/go-sqlite3" // sqlite3 driver
+	_ "github.com/mattn/go-sqlite3" // sqlite3 driver:
+	"github.com/jmoiron/sqlx"
 )
 
-var db *sql.DB
+var db *sqlx.DB
 
 func initDB() {
 	var err error
 	dbLocation := *config.DbLocation() // Dereference the pointer to get the string value
-	db, err = sql.Open("sqlite3", dbLocation)
+	db, err = sqlx.Open("sqlite3", dbLocation)
 	db.SetMaxOpenConns(1)
 	if err != nil {
 		panic(err)
 	}
+	defer db.Close()
 
 	// Check and create tables if they do not exist
 	_, err = db.Exec(`
