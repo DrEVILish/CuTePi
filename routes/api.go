@@ -16,9 +16,7 @@ func Api(rg *gin.RouterGroup) {
 	})
 	rg.POST("/play", func(c *gin.Context) {
 		fmt.Println("PLAY")
-
 		gsp.Play()
-
 		c.Status(http.StatusOK)
 	})
 	rg.POST("/pause", func(c *gin.Context) {
@@ -29,11 +27,6 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/togglePause", func(c *gin.Context) {
 		fmt.Println("togglePause")
 		gsp.TogglePause()
-		// if(!gsp.isPaused){
-		//   res.send("resume");
-		// }else {
-		//   res.send("pause");
-		// }
 		c.Status(http.StatusOK)
 	})
 	rg.POST("/fadeOut", func(c *gin.Context) {

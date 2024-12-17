@@ -11,7 +11,7 @@ var db *sqlx.DB
 
 func initDB() {
 	var err error
-	dbLocation := *config.DbLocation() // Dereference the pointer to get the string value
+	dbLocation := config.DbLocation() // Dereference the pointer to get the string value
 	db, err = sqlx.Open("sqlite3", dbLocation)
 	db.SetMaxOpenConns(1)
 	if err != nil {

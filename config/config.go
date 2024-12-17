@@ -99,16 +99,16 @@ func Port() int {
 }
 
 // WorkingDir returns the working directory from the configuration
-func WorkingDir() *string {
-	return &conf.WorkingDir
+func WorkingDir() string {
+	return conf.WorkingDir
 }
 
 // DbLocation returns the database location from the configuration
-func DbLocation() *string {
-	return &conf.Db.Location
+func DbLocation() string {
+	return conf.Db.Location
 }
 
 // MediaLocation returns the media location from the configuration
-func MediaLocation() *string {
-	return &conf.Media.Location
+func MediaLocation() string {
+	return conf.Media.Location
 }

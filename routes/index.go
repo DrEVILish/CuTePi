@@ -16,7 +16,7 @@ func Index(rg *gin.RouterGroup){
   rg.GET("/", func(c *gin.Context){
 
     mediapool := []Mediapool{
-        {Filename: "File1", Size: "12MB", Mimetype: "video/mp4", Thumbnail: "yes"},
+        {Filename: "The Quest To Make Unbreakable Glass.mp4", Size: "12MB", Mimetype: "video/mp4", Thumbnail: "yes"},
         {Filename: "File2", Size: "1MB", Mimetype: "image/jpg"},
         {Filename: "File3", Size: "2GB", Mimetype: "video/mp4"},
     }
