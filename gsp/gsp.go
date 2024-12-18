@@ -4,6 +4,7 @@ import (
  	"log"
   "errors"
   "strings"
+  "time"
 	"github.com/go-gst/go-gst/gst"
 
 	"CuTePi/config"
@@ -15,32 +16,38 @@ var (
 )
 
 func Play() {
-  runPipeline()
+  if pipeline != nil {
+    runPipeline()
+  }
 }
 
 func Pause() {
-	err := pipeline.SetState(gst.StatePaused)
-	if err != nil {
-		log.Println("Error pausing")
-	}
+  if pipeline != nil {
+    err := pipeline.SetState(gst.StatePaused)
+    if err != nil {
+      log.Println("Error pausing")
+    }
+  }
 }
 
 func TogglePause() {
-	// Get the current state of the pipeline
-	stateChangeReturn, currentState := pipeline.GetState(gst.StateNull, gst.ClockTimeNone)
-	if stateChangeReturn == gst.StateChangeSuccess {
-		if currentState == gst.StatePlaying {
-			err := pipeline.SetState(gst.StatePaused)
-			if err != nil {
-				log.Println("Error toggling pause")
-			}
-		} else if currentState == gst.StatePaused {
-			err := pipeline.SetState(gst.StatePlaying)
-			if err != nil {
-				log.Println("Error toggling pause")
-			}
-		}
-	}
+  if pipeline != nil {
+    // Get the current state of the pipeline
+    stateChangeReturn, currentState := pipeline.GetState(gst.StateNull, gst.ClockTimeNone)
+    if stateChangeReturn == gst.StateChangeSuccess {
+      if currentState == gst.StatePlaying {
+        err := pipeline.SetState(gst.StatePaused)
+        if err != nil {
+          log.Println("Error toggling pause")
+        }
+      } else if currentState == gst.StatePaused {
+        err := pipeline.SetState(gst.StatePlaying)
+        if err != nil {
+          log.Println("Error toggling pause")
+        }
+      }
+    }
+  }
 }
 
 func FadeOut() {
@@ -49,8 +56,10 @@ func FadeOut() {
 }
 
 func Panic() {
-	pipeline.SetState(gst.StateNull)
-	pipeline = nil
+  if pipeline != nil {
+    pipeline.SetState(gst.StateNull)
+    pipeline = nil
+  }
 }
 
 func Clear() {
@@ -88,23 +97,30 @@ func Prev() {
 }
 
 func Stop() {
- 	pipeline.SetState(gst.StateNull)
+  if pipeline != nil {
+    pipeline.SetState(gst.StateNull)
+  }
 }
 
 func ShowTest(pattern string) (error) {
-
+  if pipeline != nil {
+    pipeline.SetState(gst.StateNull)
+    pipeline = nil
+  }
   newPipeline, err := buildTestPipeline(pattern)
   if err != nil {
     return err
   }
   pipeline = newPipeline
-
 	runPipeline()
-
 	return nil
 }
 
 func Load(filename string) error {
+  if pipeline != nil {
+    pipeline.SetState(gst.StateNull)
+    pipeline = nil
+  }
   newPipeline, err := buildFilePipeline(filename)
   if err != nil {
     return err
@@ -128,6 +144,9 @@ func CurrentDuration() float64 {
 
 
 func runPipeline() error {
+  if pipeline == nil {
+    return errors.New("pipeline is nil")
+  }
 	// Start the pipeline
 	pipeline.SetState(gst.StatePlaying)
 
@@ -375,4 +394,52 @@ func buildTestPipeline(pattern string) (*gst.Pipeline, error) {
 		}
 	})
 	return pipeline, nil
+}
+
+
+func monitorProgress() {
+  duration := queryDuration()
+  if duration == 0 {
+      log.Println("Unable to retrieve video duration.")
+      return
+  }
+
+  for pipeline != nil {
+    position := queryPosition()
+    if position >= 0 {
+      // progressBar.Set64(position)
+      elapsed := formatTime(position)
+      remaining := formatTime(duration - position)
+      log.Printf("\r[%s/%s]", elapsed, remaining)
+    }
+    time.Sleep(1 * time.Second)
+  }
+}
+
+func queryPosition() int64 {
+  if pipeline == nil {
+      return -1
+  }
+  success, position := pipeline.QueryPosition(gst.FormatTime)
+  if !success {
+    log.Println("Failed to query video position.")
+    return -1
+  }
+  return position
+}
+
+func queryDuration() int64 {
+  if pipeline == nil {
+      return 0
+  }
+  success, duration := pipeline.QueryDuration(gst.FormatTime)
+  if !success {
+      log.Println("Failed to query video duration.")
+      return 0
+  }
+  return duration
+}
+
+func formatTime(ns int64) string {
+    return time.Unix(0, ns).UTC().Format("15:04:05")
 }
