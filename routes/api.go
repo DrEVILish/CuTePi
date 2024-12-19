@@ -3,6 +3,7 @@ package routes
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -98,11 +99,12 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/cue/add/:filename/*cuePos", func(c *gin.Context) {
 		filename := c.Param("filename")
 		cuePos := c.Param("cuePos")
+		cuePos = strings.Trim(cuePos, "/")
 
 		if cuePos != "" {
-			fmt.Println("Add at" + cuePos + "new Cue" + filename)
+			fmt.Printf("Add at %v new Cue %v\n", cuePos, filename)
 		} else {
-			fmt.Println("Add new Cue" + filename)
+			fmt.Printf("Add new Cue %v\n", filename)
 		}
 		err := ctp.AddCue(filename, cuePos)
 		if err != nil {

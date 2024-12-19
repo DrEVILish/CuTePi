@@ -67,7 +67,7 @@
               <li>
                 <button
                   class="dropdown-item"
-                  hx-post="/api/add/{{ .Filename }}"
+                  hx-post="/api/cue/add/{{ .Filename }}"
                   hx-target="#cuesheet"
                   hx-swap="innerHTML"
                 >
@@ -77,7 +77,7 @@
               <li>
                 <button
                   class="dropdown-item"
-                  hx-delete="/api/{{ .Filename }}"
+                  hx-delete="/api/media/{{ .Filename }}"
                   hx-target="closest li"
                   hx-swap="outerHTML swap:250ms"
                 >
