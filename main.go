@@ -9,13 +9,16 @@ import (
 
 	"CuTePi/config"
 	"CuTePi/routes"
+	"CuTePi/ctp"
 )
 
 func main() {
+  defer ctp.CloseDB();
 	// Load configuration
 	config.LoadConfig()
 
 	r := gin.Default()
+	r.SetTrustedProxies(nil)
 
 	extendedFuncs := map[string]any{
 		"contains":  strings.Contains,

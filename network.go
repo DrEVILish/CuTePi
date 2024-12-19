@@ -34,5 +34,4 @@ func printNetworkInfo() {
 	}
 
 	fmt.Printf("Server is running on port %d\n", config.Port())
-	fmt.Println("You can access the app by navigating to this URL in your web browser.")
 }

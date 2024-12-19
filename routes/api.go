@@ -119,7 +119,7 @@ func Api(rg *gin.RouterGroup) {
   		return
 		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"cuesheet": cuesheet,
+			"Cuesheet": cuesheet,
 		})
 	})
 
@@ -159,7 +159,7 @@ func Api(rg *gin.RouterGroup) {
   		return
 		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"cuesheet": cuesheet,
+			"Cuesheet": cuesheet,
 		})
 	})
 	rg.POST("/cue/prev", func(c *gin.Context) {
@@ -179,7 +179,7 @@ func Api(rg *gin.RouterGroup) {
   		return
 		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"cuesheet": cuesheet,
+			"Cuesheet": cuesheet,
 		})
 	})
 
@@ -201,7 +201,7 @@ func Api(rg *gin.RouterGroup) {
   		return
 		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"cuesheet": cuesheet,
+			"Cuesheet": cuesheet,
 		})
 	})
 
@@ -242,7 +242,7 @@ func Api(rg *gin.RouterGroup) {
   		return
 		}
 		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"cuesheet": cuesheet,
+			"Cuesheet": cuesheet,
 		})
 	})
 	rg.DELETE("/cue/:cuePos", func(c *gin.Context) {

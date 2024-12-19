@@ -9,48 +9,48 @@ import (
 )
 
 type CTP struct {
-	currentCue     int
-	cuesheetLength int
+	CurrentCue     int
+	CuesheetLength int
 }
 
 type Media struct {
-	media_id int `db:"media_id"`
-	filename string `db:"filename"`
-	mimetype string `db:"mimetype"`
-	size     int `db:"size"`
-	duration int `db:"duration"`
+	Media_id int     `db:"media_id"`
+	Filename string  `db:"filename"`
+	Mimetype string  `db:"mimetype"`
+	Size     int     `db:"size"`
+	Duration int     `db:"duration"`
 }
 
 type Cue struct {
   Media
-  cue_id   int `db:"cue_id"`
- 	cuePos   int `db:"cuePos"`
-	cueNum   string `db:"cueNum"`
-	media_id int `db:"media_id"`
-	title    string `db:"title"`
-	posStart int `db:"posStart"`
-	posEnd   int `db:"posEnd"`
-	selected bool
+  Cue_id   int    `db:"cue_id"`
+ 	CuePos   int    `db:"cuePos"`
+	CueNum   string `db:"cueNum"`
+	Media_id int    `db:"media_id"`
+	Title    string `db:"title"`
+	PosStart int    `db:"posStart"`
+	PosEnd   int    `db:"posEnd"`
+	Selected bool
 }
 
 type Cuesheet struct {
-	cues []Cue
+	Cues []Cue
 }
 
 type Mediapool struct {
-	medias []Media
+	Medias []Media
 }
 
 var ctp CTP
 
-func GetCue(cuePos string) (Cue, error) {
-	var cue Cue
-	err := db.Get(&cue, `
+func GetCue(cuePos string) (cue Cue, err error) {
+  query := `
 		SELECT *
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
 		WHERE cuePos = :cuePos
-	`, sql.Named("cuePos", cuePos))
+	`
+  err = db.Get(&cue, query, sql.Named("cuePos", cuePos))
 	if err != nil {
 	  log.Printf("Error Getting Cue: %v", err)
 		return Cue{}, err // Return an empty Cue
@@ -58,9 +58,8 @@ func GetCue(cuePos string) (Cue, error) {
 	return cue, nil // Return the found Cue
 }
 
-func SetCue(cuePos string) (error) {
-	var err error
-	ctp.currentCue, err = strconv.Atoi(cuePos)
+func SetCue(cuePos string) (err error) {
+	ctp.CurrentCue, err = strconv.Atoi(cuePos)
 	if err != nil {
 	  log.Printf("Error setting cue: %v", err)
 		// Handle the error appropriately, e.g., log it or return a default value
@@ -69,73 +68,52 @@ func SetCue(cuePos string) (error) {
 	return nil
 }
 
-func NextCue() (error) {
-	if ctp.currentCue+1 < ctp.cuesheetLength {
-		ctp.currentCue = ctp.currentCue + 1
+func NextCue() (err error) {
+	if ctp.CurrentCue + 1 < ctp.CuesheetLength {
+		ctp.CurrentCue = ctp.CurrentCue + 1
 	}
 	return nil
 }
 
-func PrevCue() (error) {
-	if ctp.currentCue-1 > 1 {
-		ctp.currentCue = ctp.currentCue - 1
+func PrevCue() (err error) {
+	if ctp.CurrentCue - 1 > 1 {
+		ctp.CurrentCue = ctp.CurrentCue - 1
 	}
 	return nil
 }
 
-func GetCuesheet() (Cuesheet, error) {
-	rows, err := db.Query(`
+func GetCuesheet() (cuesheet Cuesheet, err error) {
+  var cues []Cue
+
+	query := `
 		SELECT *
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
-	`)
+		ORDER BY cuesheet.cuePos
+	`
+
+	err = db.Select(&cues, query)
 	if err != nil {
 	  log.Printf("Error GetCuesheet: %v", err)
-		return Cuesheet{}, err // Handle the error appropriately
-	}
-	defer rows.Close() // Ensure rows are closed after processing
-
-	var cues []Cue
-	for rows.Next() {
-		var cue Cue
-		err := rows.Scan(
-		  &cue.cuePos,
-			&cue.cueNum,
-			&cue.media_id,
-			&cue.title,
-			&cue.posStart,
-			&cue.posEnd,
-			&cue.selected,
-			&cue.filename,
-			&cue.mimetype,
-			&cue.size,
-			&cue.duration,
-			&cue.cue_id,
-		);
-
-		if err != nil {
-		  log.Printf("Error scanning cue rows: %v", err)
-			return Cuesheet{}, err
-		}
-		cues = append(cues, cue)
+		return Cuesheet{}, err
 	}
 
 	cuesheetLength := len(cues)
-	if ctp.currentCue > cuesheetLength {
-		ctp.currentCue = cuesheetLength
+	if ctp.CurrentCue > cuesheetLength {
+		ctp.CurrentCue = cuesheetLength
 	}
 
 	for i := range cues {
-		if cues[i].cuePos == ctp.currentCue {
-			cues[i].selected = true
+		if cues[i].CuePos == ctp.CurrentCue {
+			cues[i].Selected = true
 		}
 	}
 	return Cuesheet{cues}, nil
 }
 
-func AddCue(filename string, cuePos string) (error) {
+func AddCue(filename string, cuePos string) (err error) {
   if (cuePos == "") {
-  	_, err := db.Exec(`
+  	_, err = db.Exec(`
   		INSERT INTO cuesheet (cuePos, cueNum, media_id, title)
   		SELECT
   			(SELECT COALESCE(MAX(cuePos), 0) + 1 FROM cuesheet) AS cuePos,
@@ -150,23 +128,20 @@ func AddCue(filename string, cuePos string) (error) {
       return err// Log the error instead of panicking
   	}
   } else {
-
   	// bump every cue up one to make space
-  	{
-     _, err := db.Exec(`
+    _, err = db.Exec(`
   		UPDATE cuesheet
   		SET cuePos = cuePos + 1
   		WHERE cuePos > ?;
-  	`, sql.Named("cuePos", cuePos))
-  	if err != nil {
+   	`, sql.Named("cuePos", cuePos))
+   	if err != nil {
      	log.Printf("Error updating cuePos: %v", err)
       return err// Log the error instead of panicking
-  	}
-   }
+   	}
+
 
   	// insert new cue at the new cuePos position
-  	{
-     _, err := db.Exec(`
+     _, err = db.Exec(`
   		INSERT INTO cuesheet (cuePos, cueNum, media_id, title)
   		SELECT
   			:cuePos AS cuePos,
@@ -180,7 +155,6 @@ func AddCue(filename string, cuePos string) (error) {
      	log.Printf("Error inserting into cuesheet: %v", err)
      return err// Log the error instead of panicking
   	}
-   }
   }
   return nil
 }
@@ -201,8 +175,8 @@ func UpdateCue(cuePos string, col string, val string) (err error) {
 	return nil
 }
 
-func RemoveCue(filename string) (error) {
-	_, err := db.Exec(`
+func RemoveCue(filename string) (err error) {
+	_, err = db.Exec(`
 		DELETE FROM cuesheet
 		WHERE media_id = (SELECT media_id FROM mediapool WHERE filename = :filename);
 	`, sql.Named("filename", filename))
@@ -213,9 +187,9 @@ func RemoveCue(filename string) (error) {
 	return nil
 }
 
-func Upload(files []string) error {
+func Upload(files []string) (err error) {
 	for _, file := range files {
-		_, err := db.Exec(`
+		_, err = db.Exec(`
 			INSERT INTO mediapool (filename, mimetype, size, duration)
 			VALUES (:filename, :mimetype, :size, :duration);
 		`,
@@ -232,8 +206,8 @@ func Upload(files []string) error {
 	return nil
 }
 
-func Delete(filename string) (error) {
-  _, err := db.Exec(`
+func Delete(filename string) (err error) {
+  _, err = db.Exec(`
 		DELETE FROM mediapool
 		WHERE filename = :filename;
 	`, sql.Named("filename", filename))
@@ -244,8 +218,8 @@ func Delete(filename string) (error) {
 	return nil
 }
 
-func ClearCueSheet() (error) {
-	_, err := db.Exec(`DELETE FROM cuesheet;`)
+func ClearCueSheet() (err error) {
+	_, err = db.Exec(`DELETE FROM cuesheet;`)
 	if err != nil {
 	  log.Printf("Error clearing cuesheet: %v", err)
 		return err
