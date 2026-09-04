@@ -14,16 +14,57 @@
   };
 </script> -->
 
-<div id="mediapool" hx-get="/mediapool" hx-trigger="mediapool-updated from:body" hx-swap="outerHTML">
-  <h5 class="mb-3">Mediapool</h5>
-  <!-- <button hx-put="/mediapool">Refresh</button> -->
-  <div class="row g-3">
+<div id="mediapool" class="d-flex flex-column h-100 position-relative">
+  <button
+    type="button"
+    class="btn btn-sm btn-outline-secondary"
+    id="mediapool-collapse-btn"
+    title="Collapse the media pool"
+    aria-label="Collapse the media pool"
+  >
+    <i class="bi bi-chevron-double-left"></i>
+  </button>
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h5 class="mb-0">Mediapool</h5>
+  </div>
+
+  {{ if .Mediapool }}
+  <div class="d-flex gap-2 mb-3 flex-shrink-0">
+    <input
+      type="text"
+      class="form-control form-control-sm"
+      id="mediaFilterText"
+      placeholder="Filter by filename..."
+      aria-label="Filter by filename"
+      oninput="filterMedia()"
+    />
+    <select
+      class="form-select form-select-sm w-auto"
+      id="mediaFilterType"
+      aria-label="Filter by type"
+      onchange="filterMedia()"
+    >
+      <option value="all">All</option>
+      <option value="video">Video</option>
+      <option value="image">Image</option>
+      <option value="audio">Audio</option>
+    </select>
+  </div>
+  <div class="media-grid">
     <!-- Assuming mediapool is dynamically populated -->
     {{ range .Mediapool }}
+      {{ $type := "other" }}
+      {{ if hasPrefix .Mimetype "video" }}{{ $type = "video" }}
+      {{ else if hasPrefix .Mimetype "image" }}{{ $type = "image" }}
+      {{ else if hasPrefix .Mimetype "audio" }}{{ $type = "audio" }}{{ end }}
+      {{ $thumb := .Thumbnail }}
+      {{ if not $thumb }}{{ $thumb = printf "/img/placeholder-%s.svg" $type }}{{ end }}
 
-      <div class="col-12 col-xl-6">
+      <div class="media-tile" data-media-type="{{ $type }}" data-media-name="{{ .Filename }}">
         <div class="media_thumbnail position-relative img-thumbnail w-100 h-100 ratio ratio-16x9"
-          style="background-image:url(' {{ .Thumbnail }} ');"
+          style="background-image:url('{{ $thumb }}');"
+          draggable="true"
+          data-media-filename="{{ .Filename }}"
           alt="Thumbnail">
           <div class="media_text position-absolute top-50 start-50 translate-middle text-bottom text-light bg-dark bg-opacity-75 p-2 rounded z-1">
             <p class="mb-0">{{ .Filename }}</p>
@@ -37,51 +78,68 @@
               {{ end }}
               {{ .Size }}
               <!-- formatBytes(media.size) -->
+              <span class="ms-1 small opacity-75">{{ .DateAdded }}</span>
             </div>
+          </div>
+          <div class="dropdown position-absolute bottom-0 end-0 z-3">
             <button
-              class="btn btn-secondary btn-sm position-absolute bottom-0 end-0 m-2 z-3"
+              class="btn btn-secondary media-menu-toggle"
               type="button"
+              draggable="false"
               data-bs-toggle="dropdown"
+              data-bs-boundary="viewport"
               aria-expanded="false">
               <i class="bi bi-three-dots"></i>
             </button>
-            <ul class="dropdown-menu z-3">
+            <ul class="dropdown-menu dropdown-menu-end">
               <li>
                 <button
                   class="dropdown-item"
-                  hx-post="/api/play/{{ .Filename }}"
-                  hx-swap="none"
-                  onclick="play()">
+                  hx-post="/api/play/{{ urlPath .Filename }}"
+                  hx-swap="none">
                   Play
                 </button>
               </li>
               <li>
                 <button
                   class="dropdown-item"
-                  hx-post="/api/load/{{ .Filename }}"
-                  hx-swap="none"
-                >
+                  hx-post="/api/load/{{ urlPath .Filename }}"
+                  hx-swap="none">
                   Load
                 </button>
               </li>
               <li>
                 <button
                   class="dropdown-item"
-                  hx-post="/api/cue/add/{{ .Filename }}"
+                  hx-post="/api/cue/add/{{ urlPath .Filename }}"
                   hx-target="#cuesheet"
-                  hx-swap="innerHTML"
-                >
+                  hx-swap="outerHTML">
                   Add
                 </button>
               </li>
               <li>
                 <button
                   class="dropdown-item"
-                  hx-delete="/api/media/{{ .Filename }}"
-                  hx-target="closest li"
-                  hx-swap="outerHTML swap:250ms"
-                >
+                  type="button"
+                  data-media-delete="{{ .Filename }}">
                   Delete
+                </button>
+              </li>
+              <li>
+                <button
+                  class="dropdown-item"
+                  hx-post="/api/media/{{ urlPath .Filename }}/refreshThumbnail"
+                  hx-swap="none">
+                  Refresh thumbnail
+                </button>
+              </li>
+              <li>
+                <button
+                  class="dropdown-item"
+                  hx-post="/api/media/{{ urlPath .Filename }}/analyse"
+                  hx-swap="none"
+                  title="Analyse audio to build the waveform for the trim timeline">
+                  Analyse
                 </button>
               </li>
             </ul>
@@ -91,5 +149,20 @@
 
     {{ end }}
   </div>
+  {{ else }}
+  <div class="mediapool-empty text-center p-4 border border-secondary rounded">
+    <i class="bi bi-cloud-arrow-up fs-1 d-block mb-3"></i>
+    <p class="h6 mb-3">No media yet</p>
+    <button
+      type="button"
+      class="btn btn-primary"
+      data-bs-toggle="modal"
+      data-bs-target="#uploadModal"
+    >
+      <i class="bi bi-cloud-upload-fill"></i>&nbsp;Upload
+    </button>
+    <p class="small text-muted mt-3 mb-0">or drop files here</p>
+  </div>
+  {{ end }}
 </div>
 {{ end }}

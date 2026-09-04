@@ -2,46 +2,228 @@ package routes
 
 import (
 	"fmt"
+	"math"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"CuTePi/gsp"
+	"CuTePi/config"
 	"CuTePi/ctp"
+	"CuTePi/gsp"
+	"CuTePi/logs"
+	"CuTePi/ws"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
+// RestartEnv marks a process spawned by /api/restart to take over this
+// server's port after the parent exits.
+const RestartEnv = "CUTEPI_RESTART_WAIT"
+
+// restartServer and shutdownServer implement POST /api/restart and
+// /api/shutdown. They are package-level so tests can swap in harmless
+// stand-ins (invoking the real ones would kill the test process).
+var (
+	restartServer  = restartProcess
+	shutdownServer = shutdownProcess
+)
+
+// shutdownProcess terminates this process after a short grace so the HTTP
+// response making the request can flush first. SIGTERM is handled in
+// main.go, which closes the DB and exits cleanly.
+func shutdownProcess(grace time.Duration) {
+	go func() {
+		time.Sleep(grace)
+		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}()
+}
+
+// restartProcess restarts this server. Under systemd the correct restart is
+// `systemctl restart <unit>` (the re-exec'd child would be an unmanaged orphan
+// holding the port). Outside systemd it spawns a detached copy that waits for
+// this process to exit (freeing the port) before starting.
+func restartProcess(grace time.Duration) error {
+	if unit := systemdUnit(); unit != "" {
+		cmd := exec.Command("systemctl", "restart", unit)
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd.Env = append(os.Environ(), RestartEnv+"=1")
+	cmd.Stdin = nil
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	shutdownProcess(grace)
+	return nil
+}
+
+// systemdUnit returns the name of the systemd unit running this process, or ""
+// when not running under a unit. systemd sets INVOCATION_ID for unit processes
+// and CUTEPI_SERVICE can be used to pin a non-default service name.
+func systemdUnit() string {
+	if os.Getenv("INVOCATION_ID") == "" {
+		return ""
+	}
+	if s, ok := os.LookupEnv("CUTEPI_SERVICE"); ok && s != "" {
+		return s
+	}
+	return "cutepi"
+}
+
 func Api(rg *gin.RouterGroup) {
+	rg.GET("/ws", func(c *gin.Context) {
+		ws.Handle(c.Writer, c.Request)
+	})
 	rg.GET("/", func(c *gin.Context) {
 		c.String(http.StatusOK, "CuTePi API avaliable")
 	})
+
+	// Full HTML render of the "Now Playing" widget. Used for the initial page
+	// render and by the change-detection poller (public/src/ui.js) only when
+	// GET /api/nowplaying/status reports a change.
+	rg.GET("/nowplaying", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "mediainfo.html", nowplayingData())
+	})
+
+	// Lightweight change-detection endpoint polled every 500ms by the Now
+	// Playing widget. Returns a monotonic server-side version counter that
+	// gsp bumps on real playback state changes and position ticks, plus a
+	// "changed" flag computed against the version the client last saw. The
+	// widget only re-renders (via GET /api/nowplaying) when changed is true,
+	// so idle/paused widgets stop being re-rendered on every poll. Per-client
+	// tracking lives entirely in the client; the server keeps no per-client
+	// state, so any number of concurrent clients work.
+	rg.GET("/nowplaying/status", func(c *gin.Context) {
+		var clientVersion uint64
+		if raw := c.Query("version"); raw != "" {
+			if v, err := strconv.ParseUint(raw, 10, 64); err == nil {
+				clientVersion = v
+			}
+		}
+		gsp.CurrentPosition()
+		version := gsp.StateVersion()
+		c.JSON(http.StatusOK, gin.H{
+			"changed": version != clientVersion,
+			"version": version,
+		})
+	})
+	rg.GET("/cuesheet", func(c *gin.Context) {
+		renderCuesheet(c)
+	})
+	rg.GET("/cuesheet/status", func(c *gin.Context) {
+		var clientVersion uint64
+		if raw := c.Query("version"); raw != "" {
+			if v, err := strconv.ParseUint(raw, 10, 64); err == nil {
+				clientVersion = v
+			}
+		}
+		version := ctp.CuesheetVersion()
+		c.JSON(http.StatusOK, gin.H{"changed": version != clientVersion, "version": version})
+	})
+
+	rg.GET("/qr", func(c *gin.Context) {
+		scheme := "http"
+		if c.Request.TLS != nil {
+			scheme = "https"
+		}
+		if proto := c.Request.Header.Get("X-Forwarded-Proto"); proto != "" {
+			scheme = proto
+		}
+		host := c.Request.Host
+		if host == "" {
+			host = fmt.Sprintf("localhost:%d", config.Port())
+		}
+		target := fmt.Sprintf("%s://%s/upload", scheme, host)
+		if override := c.Query("url"); override != "" {
+			target = override
+		}
+		png, err := qrcode.Encode(target, qrcode.Medium, 256)
+		if err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		c.Data(http.StatusOK, "image/png", png)
+	})
+
 	rg.POST("/play", func(c *gin.Context) {
-		fmt.Println("PLAY")
+		logs.Printf(logs.RTEPlay, "PLAY")
+		gsp.Play()
+		c.Status(http.StatusOK)
+	})
+	// Alias used by the spacebar keyboard shortcut (see public/src/ui.js /
+	// cuesheet.html's #spaceBar trigger).
+	rg.POST("/cue/play", func(c *gin.Context) {
+		logs.Printf(logs.RTEPlayAlias, "PLAY (spacebar)")
 		gsp.Play()
 		c.Status(http.StatusOK)
 	})
 	rg.POST("/pause", func(c *gin.Context) {
-		fmt.Println("PAUSE")
+		logs.Printf(logs.RTEPause, "PAUSE")
 		gsp.Pause()
 		c.Status(http.StatusOK)
 	})
 	rg.POST("/togglePause", func(c *gin.Context) {
-		fmt.Println("togglePause")
+		logs.Printf(logs.RTEToggle, "togglePause")
 		gsp.TogglePause()
 		c.Status(http.StatusOK)
 	})
+
+	// Seek: move the active clip to the given absolute position (seconds).
+	rg.POST("/seek", func(c *gin.Context) {
+		seconds, err := strconv.ParseFloat(c.PostForm("position"), 64)
+		if err != nil || math.IsNaN(seconds) {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "position must be a number of seconds"})
+			return
+		}
+		gsp.Seek(seconds)
+		c.Status(http.StatusOK)
+	})
+
+	// Loop: enable/disable loop-at-end for the current clip (also the default).
+	// Volume: set the per-cue master gain of the currently-playing cue, live.
+	// Persisted on the cue so it is remembered for next time.
+	rg.POST("/volume", func(c *gin.Context) {
+		v, err := strconv.ParseFloat(c.PostForm("volume"), 64)
+		if err != nil || math.IsNaN(v) {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "volume must be a number"})
+			return
+		}
+		applied := gsp.SetVolume(v)
+		if pos := gsp.CurrentCuePos(); pos > 0 {
+			_ = ctp.UpdateCue(strconv.Itoa(pos), "volume", strconv.FormatFloat(applied, 'f', -1, 64))
+		}
+		c.Status(http.StatusOK)
+	})
 	rg.POST("/fadeOut", func(c *gin.Context) {
-		fmt.Println("fadeOut")
-		gsp.FadeOut()
+		logs.Printf(logs.RTEFadeOut, "fadeOut")
+		gsp.Stop()
 		c.Status(http.StatusOK)
 	})
 	rg.POST("/panic", func(c *gin.Context) {
-		fmt.Println("!!PANIC!!")
+		logs.Printf(logs.RTEPanic, "!!PANIC!!")
 		gsp.Panic()
 		c.Status(http.StatusOK)
 	})
 	rg.POST("/clear", func(c *gin.Context) {
-		fmt.Println("Clear CueSheet")
+		logs.Printf(logs.RTEClear, "Clear CueSheet")
 		err := ctp.ClearCueSheet()
 		if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -49,88 +231,95 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet,err := ctp.GetCuesheet()
-		if err != nil {
-  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-  			"error": err.Error(),
-  		})
-  		return
-		}
-		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"cuesheet": cuesheet,
-		})
-	})
-	rg.POST("/next", func(c *gin.Context) {
-		fmt.Println("NEXT")
-		gsp.Next()
-		c.Status(http.StatusOK)
-	})
-	rg.POST("/prev", func(c *gin.Context) {
-		fmt.Println("PREV")
-		gsp.Prev()
-		c.Status(http.StatusOK)
+		renderCuesheet(c)
 	})
 	rg.POST("/stop", func(c *gin.Context) {
-		fmt.Println("STOP")
+		logs.Printf(logs.RTEStop, "STOP")
 		gsp.Stop()
 		c.Status(http.StatusOK)
 	})
 
-	rg.POST("/test/*pattern", func(c *gin.Context) {
-		pattern := c.Param("pattern")
-		if pattern != "" {
-			gsp.ShowTest(pattern)
-		} else {
-			gsp.ShowTest("smpte-rp-219")
+	// Fade & stop the active clip over the given duration (ms); no duration
+	// means "stop now". Mirrors the fade-to-black used when a subsequent cue
+	// triggers with its own fadeOut set.
+	rg.POST("/fade", func(c *gin.Context) {
+		durMs := 0
+		if raw := c.PostForm("duration"); raw != "" {
+			if ms, perr := strconv.Atoi(raw); perr == nil {
+				durMs = ms
+			}
 		}
-		fmt.Println("Show Default Test")
+		gsp.FadeAndStop(durMs)
+		c.Status(http.StatusOK)
+	})
+
+	rg.POST("/test/*pattern", func(c *gin.Context) {
+		pattern := strings.TrimPrefix(c.Param("pattern"), "/")
+		if pattern == "" {
+			pattern = "smpte-rp-219"
+		}
+		if err := gsp.ShowTest(pattern); err != nil {
+			logs.Printf(logs.RTETest, "show test failed pattern=%q error=%v", pattern, err)
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		logs.Printf(logs.RTETest, "Show test pattern=%q", pattern)
 		c.Status(http.StatusOK)
 	})
 
 	// Direct Play from Mediapool
 	rg.POST("/play/:filename", func(c *gin.Context) {
 		filename := c.Param("filename")
-		fmt.Println("Direct Play" + filename)
-		gsp.Load(filename)
+		logs.Printf(logs.RTEDirect, "Direct Play%s", filename)
+		if err := gsp.Load(filename); err != nil {
+			logs.Printf(logs.RTEDirect, "direct play failed filename=%q error=%v", filename, err)
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			return
+		}
 		gsp.Play()
 		c.Status(http.StatusOK)
 	})
 
-	rg.POST("/cue/add/:filename/*cuePos", func(c *gin.Context) {
+	// Load from Mediapool (loads the file into the pipeline without
+	// necessarily playing). Referenced by the MediaPool dropdown "Load"
+	// action.
+	rg.POST("/load/:filename", func(c *gin.Context) {
 		filename := c.Param("filename")
-		cuePos := c.Param("cuePos")
-		cuePos = strings.Trim(cuePos, "/")
-
-		if cuePos != "" {
-			fmt.Printf("Add at %v new Cue %v\n", cuePos, filename)
-		} else {
-			fmt.Printf("Add new Cue %v\n", filename)
-		}
-		err := ctp.AddCue(filename, cuePos)
-		if err != nil {
+		logs.Printf(logs.RTELoad, "Load%s", filename)
+		if err := gsp.Load(filename); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
 				"error": err.Error(),
 			})
 			return
 		}
-		cuesheet,err := ctp.GetCuesheet()
-		if err != nil {
-  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-  			"error": err.Error(),
-  		})
-  		return
-		}
-		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"Cuesheet": cuesheet,
-		})
+		c.Status(http.StatusOK)
 	})
+
+	addCue := func(c *gin.Context) {
+		filename := c.Param("filename")
+		cuePos := c.Param("cuePos")
+		cuePos = strings.Trim(cuePos, "/")
+
+		logs.Printf(logs.RTEAddCue, "add cue filename=%q position=%q", filename, cuePos)
+		err := ctp.AddCue(filename, cuePos)
+		if err != nil {
+			logs.Printf(logs.RTEAddCue, "add cue failed filename=%q position=%q error=%v", filename, cuePos, err)
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		renderCuesheet(c)
+	}
+	rg.POST("/cue/add/:filename", addCue)
+	rg.POST("/cue/add/:filename/*cuePos", addCue)
 
 	rg.DELETE("/media/:filename", func(c *gin.Context) {
 		filename := c.Param("filename")
-		fmt.Println("Delete" + filename)
+		logs.Printf(logs.RTEDelete, "Delete%s", filename)
 
 		if gsp.CurrentPlaying() == filename {
-			fmt.Println("Can't delete currently playing file")
+			logs.Printf(logs.RTEDeleteBusy, "Can't delete currently playing file")
 			c.Status(http.StatusConflict)
 			return
 		}
@@ -141,11 +330,112 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
+		os.Remove(filepath.Join(config.MediaLocation(), filename))
+		os.Remove(filepath.Join(config.ThumbnailLocation(), filename+".jpg"))
+
+		// Re-render the mediapool so the deleted tile is removed from the DOM.
+		// Without a body the hx-target/hx-swap on the delete dropdown item
+		// would remove the wrong element (the <li> the button lives in) or
+		// leave a stale tile.
+		mediapool, err := mediapoolView()
+		if err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		c.HTML(http.StatusOK, "mediapool.html", gin.H{
+			"Mediapool": mediapool,
+		})
+	})
+
+	// Flags a media item's thumbnail for regeneration; picked up by the
+	// background thumbnail worker.
+	rg.POST("/media/:filename/refreshThumbnail", func(c *gin.Context) {
+		filename := c.Param("filename")
+		if err := ctp.RequestThumbnailRefresh(filename); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+
+	// Requests (re)analysis of a media file's waveform (amplitude peaks used
+	// by the Cue Inspector trim timeline). Picked up by the background worker.
+	rg.POST("/media/:filename/analyse", func(c *gin.Context) {
+		filename := c.Param("filename")
+		if err := ctp.RequestWaveformAnalysis(filename); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+
+	rg.GET("/settings", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"port":         config.Port(),
+			"pollInterval": config.PollInterval(),
+			"loop":         gsp.Loop(),
+		})
+	})
+
+	rg.POST("/settings", func(c *gin.Context) {
+		var body struct {
+			Port         int   `json:"port" form:"port"`
+			PollInterval int   `json:"pollInterval" form:"pollInterval"`
+			Loop         *bool `json:"loop" form:"loop"`
+		}
+		if err := c.ShouldBind(&body); err != nil {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		if body.PollInterval > 0 {
+			if err := config.SetPollInterval(body.PollInterval); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if body.Port > 0 {
+			if err := config.SetPort(body.Port); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if body.Loop != nil {
+			gsp.SetLoop(*body.Loop)
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"port":         config.Port(),
+			"pollInterval": config.PollInterval(),
+			"loop":         gsp.Loop(),
+			"message":      "Port changes require a server restart to take effect.",
+		})
+	})
+
+	// Restart / Shutdown the server process itself. Both respond first (so
+	// the browser gets a clean 200) and act shortly after (grace), letting
+	// the response flush before the process exits.
+	rg.POST("/restart", func(c *gin.Context) {
+		logs.Printf(logs.RTERestart, "Server restart requested")
+		if err := restartServer(300 * time.Millisecond); err != nil {
+			logs.Printf(logs.RTERestart, "restart failed: %v", err)
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+	rg.POST("/shutdown", func(c *gin.Context) {
+		logs.Printf(logs.RTEShutdown, "Server shutdown requested")
+		shutdownServer(300 * time.Millisecond)
 		c.Status(http.StatusOK)
 	})
 
 	rg.POST("/cue/next", func(c *gin.Context) {
-		fmt.Println("Select Next Cue (down)")
+		logs.Printf(logs.RTECueNext, "Select Next Cue (down)")
 		err := ctp.NextCue()
 		if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -153,19 +443,10 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet,err := ctp.GetCuesheet()
-		if err != nil {
-  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-  			"error": err.Error(),
-  		})
-  		return
-		}
-		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"Cuesheet": cuesheet,
-		})
+		renderCuesheet(c)
 	})
 	rg.POST("/cue/prev", func(c *gin.Context) {
-		fmt.Println("Select Prev Cue (up)")
+		logs.Printf(logs.RTECuePrev, "Select Prev Cue (up)")
 		err := ctp.PrevCue()
 		if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -173,21 +454,218 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet,err := ctp.GetCuesheet()
+		renderCuesheet(c)
+	})
+
+	// Play a specific cue by position
+	rg.POST("/cue/:cuePos/play", func(c *gin.Context) {
+		cuePos := c.Param("cuePos")
+		logs.Printf(logs.RTECuePlay, "Play Cue%s", cuePos)
+		cue, err := ctp.GetCue(cuePos)
 		if err != nil {
-  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-  			"error": err.Error(),
-  		})
-  		return
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
 		}
-		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"Cuesheet": cuesheet,
+		// "Fade & Stop Others Over Time": when the incoming cue carries a
+		// fadeOut duration and another clip is currently up, fade that
+		// outgoing clip (audio + fade-to-black) over the duration, then stop
+		// it, then start this cue. A single active pipeline means the fade
+		// must complete before the new clip can display, so the new cue is
+		// queued until the fade finishes.
+		// ponytail: peer/list/all scope is stored per cue but single-pipeline
+		// playback makes the current file the only meaningful "other"; the
+		// scope column is accepted for a future multi-layer output.
+		if wasPlaying := gsp.CurrentPlaying() != ""; wasPlaying && cue.FadeOut > 0 {
+			go func() {
+				gsp.FadeAndStop(cue.FadeOut)
+				loadAndPlayCue(cue)
+			}()
+			c.Status(http.StatusOK)
+			return
+		}
+		if err := loadAndPlayCue(cue); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+
+	// Play the currently selected cue (what spacebar acts on). If nothing is
+	// selected, fall back to resuming whatever is loaded - also the previous
+	// spacebar behaviour.
+	rg.POST("/cue/selected/play", func(c *gin.Context) {
+		pos, err := ctp.SelectedCuePos()
+		if err != nil || pos == 0 {
+			gsp.Play()
+			c.Status(http.StatusOK)
+			return
+		}
+		cue, err := ctp.GetCue(strconv.Itoa(pos))
+		if err != nil {
+			gsp.Play()
+			c.Status(http.StatusOK)
+			return
+		}
+		if err := loadAndPlayCue(cue); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+
+	// Cue Inspector: renders the details (trim In/Out, Hold, playback) of the
+	// currently selected cue. Fetched on load and re-fetched by the client
+	// whenever the cuesheet re-renders, so it always mirrors server state. It
+	// is selection-dependent, so never let caches serve it for the wrong cue.
+	rg.GET("/cue/inspector", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Header("Pragma", "no-cache")
+		c.HTML(http.StatusOK, "cueinspector.html", inspectorData())
+	})
+
+	// Cue Inspector save: writes the trim In/Out times and the Hold toggle,
+	// then re-renders the inspector partial.
+	rg.PUT("/cue/inspector/:cuePos", func(c *gin.Context) {
+		cuePos := c.Param("cuePos")
+		in := strings.TrimSpace(c.PostForm("posStart"))
+		out := strings.TrimSpace(c.PostForm("posEnd"))
+		hold := c.PostForm("hold") != ""
+		if in == "" {
+			in = "0"
+		}
+		if out == "" {
+			out = "0"
+		}
+		inMS, inErr := ctp.ParseTime(in)
+		outMS, outErr := ctp.ParseTime(out)
+		if inErr != nil || outErr != nil || (inMS > 0 && outMS > 0 && outMS <= inMS) {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{
+				"error": "trim Out must be after trim In",
+			})
+			return
+		}
+		if err := ctp.UpdateCue(cuePos, "posStart", in); err != nil {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{
+				"error": "invalid trim In: " + err.Error(),
+			})
+			return
+		}
+		if err := ctp.UpdateCue(cuePos, "posEnd", out); err != nil {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{
+				"error": "invalid trim Out: " + err.Error(),
+			})
+			return
+		}
+		if err := ctp.UpdateCue(cuePos, "hold", strconv.FormatBool(hold)); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		loop := c.PostForm("loop") != ""
+		if err := ctp.UpdateCue(cuePos, "loop", strconv.FormatBool(loop)); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		autoFollow := c.PostForm("autoFollow") != ""
+		if err := ctp.UpdateCue(cuePos, "autoFollow", strconv.FormatBool(autoFollow)); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		if col := strings.TrimSpace(c.PostForm("color")); col != "" {
+			if err := ctp.UpdateCue(cuePos, "color", col); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if fa := strings.TrimSpace(c.PostForm("fadeAction")); fa != "" {
+			if err := ctp.UpdateCue(cuePos, "fadeAction", fa); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if fo := strings.TrimSpace(c.PostForm("fadeOut")); fo != "" {
+			if err := ctp.UpdateCue(cuePos, "fadeOut", fo); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if vol := strings.TrimSpace(c.PostForm("volume")); vol != "" {
+			if err := ctp.UpdateCue(cuePos, "volume", vol); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
+		cue, err := ctp.GetCue(cuePos)
+		if err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		c.HTML(http.StatusOK, "cueinspector.html", gin.H{
+			"Cue":           cue,
+			"Selected":      true,
+			"MediaDuration": cue.Duration,
+			"Palette":       cuePalette,
 		})
+	})
+
+	// Bulk reorder: client sends the full ordered list of cuePos values
+	// (as produced by a drag-and-drop). Server reindexes 1..N atomically.
+	rg.PUT("/cue/reorder", func(c *gin.Context) {
+		var body struct {
+			Order []int `json:"order"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "invalid reorder payload: " + err.Error()})
+			return
+		}
+		if err := ctp.ReorderCues(body.Order); err != nil {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		renderCuesheet(c)
+	})
+
+	// Move cue up
+
+	rg.POST("/cue/:cuePos/move/up", func(c *gin.Context) {
+		cuePos := c.Param("cuePos")
+		logs.Printf(logs.RTEUp, "Move Cue Up%s", cuePos)
+		err := ctp.MoveCueUp(cuePos)
+		if err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		renderCuesheet(c)
+	})
+
+	// Move cue down
+	rg.POST("/cue/:cuePos/move/down", func(c *gin.Context) {
+		cuePos := c.Param("cuePos")
+		logs.Printf(logs.RTEDown, "Move Cue Down%s", cuePos)
+		err := ctp.MoveCueDown(cuePos)
+		if err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		renderCuesheet(c)
 	})
 
 	rg.POST("/cue/:cuePos", func(c *gin.Context) {
 		cuePos := c.Param("cuePos")
-		fmt.Println("Selected" + cuePos)
+		logs.Printf(logs.RTEUse, "Selected%s", cuePos)
 		err := ctp.SetCue(cuePos)
 		if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -195,25 +673,23 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet,err := ctp.GetCuesheet()
-		if err != nil {
-  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-  			"error": err.Error(),
-  		})
-  		return
-		}
-		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"Cuesheet": cuesheet,
-		})
+		renderCuesheet(c)
 	})
 
 	rg.POST("/cue/:cuePos/edit/:col", func(c *gin.Context) {
 		cuePos := c.Param("cuePos")
 		col := c.Param("col")
-		fmt.Println("Edit" + col + "of CueNo" + cuePos)
-		val,err := ctp.GetCue(cuePos)
+		logs.Printf(logs.RTEEdit, "Edit%s of CueNo%s", col, cuePos)
+		cue, err := ctp.GetCue(cuePos)
 		if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+		val, err := ctp.CueColumnValue(cue, col)
+		if err != nil {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{
 				"error": err.Error(),
 			})
 			return
@@ -228,7 +704,7 @@ func Api(rg *gin.RouterGroup) {
 		cuePos := c.Param("cuePos")
 		col := c.Param("col")
 		val := c.PostForm("val")
-		fmt.Println("Update", cuePos, "Column", col, "Value", val)
+		logs.Printf(logs.RTEUpdate, "Update %v Column %v Value %v", cuePos, col, val)
 		err := ctp.UpdateCue(cuePos, col, val)
 		if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -236,28 +712,23 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		cuesheet,err := ctp.GetCuesheet()
-		if err != nil {
-  		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-  			"error": err.Error(),
-  		})
-  		return
-		}
-		c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-			"Cuesheet": cuesheet,
-		})
+		renderCuesheet(c)
 	})
 	rg.DELETE("/cue/:cuePos", func(c *gin.Context) {
 		cuePos := c.Param("cuePos")
-		fmt.Println("Remove Cue" + cuePos)
+		logs.Printf(logs.RTERemove, "Remove Cue%s", cuePos)
 		err := ctp.RemoveCue(cuePos)
 		if err != nil {
+			logs.Printf(logs.RTERemove, "remove cue failed position=%q error=%v", cuePos, err)
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
 				"error": err.Error(),
 			})
 			return
 		}
-		c.Status(http.StatusOK)
+		// Re-render the cuesheet so the deleted cue is removed from the DOM.
+		// Without a body, the hx-target/hx-swap on the delete button would
+		// wipe the cuesheet with an empty response.
+		renderCuesheet(c)
 	})
 
 }

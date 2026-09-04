@@ -1,0 +1,240 @@
+{{ define "cueinspector.html" }}
+<div id="cueinspector-body" class="cueinspector-body">
+  {{ if not .Selected }}
+  <p class="text-muted small mb-0">Select a cue to edit its trim In/Out and Hold settings.</p>
+  {{ else }}
+  {{ $dur := .MediaDuration }}
+  <div class="d-flex flex-wrap align-items-end gap-3">
+    <div>
+      <div class="small text-muted">Cue</div>
+      <div>
+        <span class="badge text-bg-warning">{{ .Cue.CueNum }}</span>
+        {{ .Cue.Title }}
+        <span class="text-muted small">Source: {{ .Cue.Filename }}</span>
+      </div>
+    </div>
+    <form id="inspector-form" class="d-flex flex-wrap align-items-end gap-3"
+      hx-put="/api/cue/inspector/{{ .Cue.CuePos }}" hx-target="#cueinspector-body" hx-swap="outerHTML">
+      <div>
+        <label class="form-label small mb-0" for="insp-in">Trim In (start)</label>
+        <input id="insp-in" name="posStart" class="form-control form-control-sm" value="{{ formatTime .Cue.PosStart }}" placeholder="hh:mm:ss.ms">
+      </div>
+      <div>
+        <label class="form-label small mb-0" for="insp-out">Trim Out (end)</label>
+        <input id="insp-out" name="posEnd" class="form-control form-control-sm" value="{{ formatTime .Cue.PosEnd }}" placeholder="hh:mm:ss.ms">
+      </div>
+      <div class="d-flex align-items-center pb-1">
+        <input class="form-check-input me-1" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
+        <label class="form-check-label small" for="insp-hold">Hold last frame</label>
+      </div>
+      <div class="d-flex align-items-center pb-1">
+        <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
+        <label class="form-check-label small" for="insp-loop">Loop</label>
+      </div>
+      <div class="d-flex align-items-center pb-1">
+        <input class="form-check-input me-1" type="checkbox" id="insp-autofollow" name="autoFollow" value="true" {{ if .Cue.AutoFollow }}checked{{ end }}>
+        <label class="form-check-label small" for="insp-autofollow">AutoFollow</label>
+      </div>
+      <div>
+        <label class="form-label small mb-0" for="insp-color">Colour</label>
+        <select id="insp-color" name="color" class="form-select form-select-sm" style="width:auto" aria-label="Cue colour">
+          <option value="">None</option>
+          {{ range $name, $hex := .Palette }}
+          <option value="{{ $hex }}" {{ if eq $.Cue.Color $hex }}selected{{ end }}>{{ $name }}</option>
+          {{ end }}
+        </select>
+      </div>
+      <div class="insp-volume">
+        <label class="form-label small mb-1" for="insp-volume">Volume</label>
+        <input id="insp-volume" name="volume" type="range" min="-60" max="12" step="1"
+          value="{{ .Cue.Volume }}" class="insp-volume-slider"
+          title="Per-cue master gain (dB); 0dB is the default"
+          data-volume-inspector aria-label="Volume (dB)">
+        <input id="insp-volume-db" type="number" class="form-control form-control-sm insp-volume-db"
+          value="{{ .Cue.Volume }}" min="-60" max="12" step="1" readonly tabindex="-1" aria-label="Volume dB value">
+      </div>
+      <div>
+        <label class="form-label small mb-0" for="insp-fadeaction">Fade-stop others</label>
+        <div class="d-flex gap-1">
+          <select id="insp-fadeaction" name="fadeAction" class="form-select form-select-sm" style="width:auto">
+            <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
+            <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
+            <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
+          </select>
+          <input id="insp-fadeout" name="fadeOut" class="form-control form-control-sm" style="width:6em"
+            value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
+        </div>
+      </div>
+      <button class="btn btn-sm btn-primary" type="submit">Save</button>
+    </form>
+    <button class="btn btn-sm btn-outline-success" type="button"
+      hx-post="/api/cue/{{ .Cue.CuePos }}/play" hx-swap="none" title="Play this cue" aria-label="Play this cue">
+      <i class="bi bi-play-fill"></i> Play
+    </button>
+  </div>
+
+  {{ if gt $dur 0.0 }}
+  <div class="trim-timeline mt-3" id="trim-timeline"
+    data-pos-start="{{ .Cue.PosStart }}"
+    data-pos-end="{{ .Cue.PosEnd }}"
+    data-duration="{{ $dur }}"
+    data-wave="{{ .Cue.Waveform }}"
+    title="Click to set trim In, drag the markers to adjust">
+    <canvas class="trim-waveform" id="trim-waveform" width="800" height="120"></canvas>
+    <div class="trim-shade" id="trim-shade-before" aria-hidden="true" style="left:0;width:0%"></div>
+    <div class="trim-shade" id="trim-shade-after" aria-hidden="true" style="right:0;width:0%"></div>
+    <div class="trim-marker" id="trim-marker-in" title="Trim In"></div>
+    <div class="trim-marker trim-marker-out" id="trim-marker-out" title="Trim Out"></div>
+    <span class="trim-time" id="trim-time-in"></span>
+    <span class="trim-time" id="trim-time-out"></span>
+  </div>
+  <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="trim-clear" title="Clear trim window">
+    Clear trim
+  </button>
+  {{ end }}
+  {{ end }}
+</div>
+
+<script>
+  (function () {
+    var timeline = document.getElementById("trim-timeline");
+    if (!timeline) return;
+    var inEl = document.getElementById("trim-marker-in");
+    var outEl = document.getElementById("trim-marker-out");
+    var shadeBefore = document.getElementById("trim-shade-before");
+    var shadeAfter = document.getElementById("trim-shade-after");
+    var timeIn = document.getElementById("trim-time-in");
+    var timeOut = document.getElementById("trim-time-out");
+    var posStart = parseFloat(timeline.dataset.posStart) / 1000; // seconds
+    var posEnd = parseFloat(timeline.dataset.posEnd) / 1000;
+    var duration = parseFloat(timeline.dataset.duration);
+    if (duration <= 0) return;
+    // A stored posEnd of 0 means "no trim out" (play to end of file), so show
+    // the out marker at the full duration; otherwise it would sit at 0% and be
+    // undraggable, hiding the audio.
+    if (!(posEnd > 0)) posEnd = duration;
+    var clearBtn = document.getElementById("trim-clear");
+
+    // Draw the waveform (amplitude peaks stored in the DB) centred on the
+    // vertical axis. The peaks are normalized 0..1; missing/empty gives a
+    // flat track.
+    var canvas = document.getElementById("trim-waveform");
+    function drawWave() {
+      if (!canvas) return;
+      var ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      var peaks = [];
+      try {
+        var raw = timeline.dataset.wave;
+        if (raw) peaks = JSON.parse(raw);
+      } catch (e) { peaks = []; }
+      if (!Array.isArray(peaks) || peaks.length === 0) return;
+      ctx.fillStyle = "#2fd6ff";
+      var n = peaks.length, w = canvas.width / n, mid = canvas.height / 2;
+      for (var i = 0; i < n; i++) {
+        var v = Math.max(0, Math.min(1, peaks[i])) * (mid - 2);
+        ctx.fillRect(i * w + 0.5, mid - v, w - 1, v * 2);
+      }
+    }
+    drawWave();
+
+    function fmtSec(s) {
+      s = Math.max(0, s);
+      var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+      var mm = m < 10 ? "0" + m : "" + m;
+      var ss = sec < 10 ? "0" + sec.toFixed(2) : sec.toFixed(2);
+      return (h > 0 ? h + ":" : "") + mm + ":" + ss;
+    }
+    // Drop-drag safe time string matching the hh:mm:ss.mmm format ParseTime
+    // expects. Falls back to mm:ss.mss when there are no hours.
+    function fmtClock(ms) {
+      ms = Math.max(0, Math.round(ms));
+      var h = Math.floor(ms / 3600000);
+      var m = Math.floor((ms % 3600000) / 60000);
+      var s = (ms % 60000) / 1000;
+      var hh = h > 0 ? h + ":" : "";
+      var mm = (h > 0 && m < 10 ? "0" : "") + m;
+      var ss = (s < 10 ? "0" : "") + s.toFixed(2);
+      return hh + mm + ":" + ss;
+    }
+    function pct(sec) { return (Math.max(0, Math.min(duration, sec)) / duration * 100); }
+    function update() {
+      inEl.style.left = pct(posStart) + "%";
+      outEl.style.left = pct(posEnd) + "%";
+      timeIn.style.left = pct(posStart) + "%";
+      timeOut.style.left = pct(posEnd) + "%";
+      timeIn.textContent = fmtSec(posStart);
+      timeOut.textContent = fmtSec(posEnd);
+      shadeBefore.style.width = pct(posStart) + "%";
+      shadeAfter.style.width = (100 - pct(posEnd)) + "%";
+      document.getElementById("insp-in").value = fmtClock(posStart * 1000);
+      document.getElementById("insp-out").value = fmtClock(posEnd * 1000);
+    }
+    function movingMarker(marker) {
+      return marker === inEl || marker === outEl;
+    }
+    // Drag the markers directly.
+    inEl.addEventListener("pointerdown", function (e) { e.preventDefault(); dragStart(e, "in"); });
+    outEl.addEventListener("pointerdown", function (e) { e.preventDefault(); dragStart(e, "out"); });
+
+    var activeDrag = null;
+    var dragged = false;
+    function dragStart(e, which) {
+      activeDrag = which;
+      dragged = false;
+      timeline.setPointerCapture(e.pointerId);
+    }
+    timeline.addEventListener("pointermove", function (e) {
+      if (!activeDrag) return;
+      var rect = timeline.getBoundingClientRect();
+      var frac = (e.clientX - rect.left) / rect.width;
+      if (activeDrag === "in") {
+        posStart = Math.max(0, Math.min(frac * duration, posEnd - 0.05));
+      } else {
+        posEnd = Math.min(duration, Math.max(frac * duration, posStart + 0.05));
+      }
+      dragged = true;
+      update();
+      e.preventDefault();
+    });
+    timeline.addEventListener("pointerup", function () {
+      if (dragged) {
+        // A press-drag-release also fires a trailing click on the track. That
+        // handler would re-set trim In to the drop position, making a trim-Out
+        // drag appear to move trim In too. Swallow the immediate click that
+        // follows a real drag; a plain click (no drag) falls through normally.
+        var onClick = function (e) {
+          document.removeEventListener("click", onClick, true);
+          e.stopPropagation();
+          e.preventDefault();
+        };
+        document.addEventListener("click", onClick, true);
+      }
+      activeDrag = null;
+    });
+    timeline.addEventListener("pointercancel", function () { activeDrag = null; });
+
+    // Click the track to set the trim IN point.
+    timeline.addEventListener("click", function (e) {
+      if (e.target === inEl || e.target === outEl) return;
+      var rect = timeline.getBoundingClientRect();
+      var frac = (e.clientX - rect.left) / rect.width;
+      posStart = Math.max(0, Math.min(frac * duration, posEnd - 0.05));
+      update();
+    });
+
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function () {
+        posStart = 0; posEnd = duration;
+        update();
+      });
+    }
+
+    // The trim timeline's markers and fields must push their values back into
+    // the form fields so a Save posts them. Marker drags already update the
+    // inputs; wire the standard save flow to leave them as-is.
+    update();
+  })();
+</script>
+
+{{ end }}
