@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -125,6 +126,40 @@ func TestGeneratePeaks(t *testing.T) {
 }
 
 var b [2]byte
+
+// TestVerifyPlayable is the runnable check for the import-time playability
+// probe: a real decodable audio file passes, a garbage/non-media file is
+// rejected. Requires ffmpeg (same gate as the GStreamer runtime tests).
+func TestVerifyPlayable(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available; skipping playability probe test")
+	}
+	dir := t.TempDir()
+
+	// A valid 1s WAV decodes cleanly.
+	const sampleRate = 8000
+	data := make([]byte, 0, sampleRate*2)
+	for s := 0; s < sampleRate; s++ {
+		binary.LittleEndian.PutUint16(b[:], uint16(int16(3000*sine(s, sampleRate, 440))))
+		data = append(data, b[:]...)
+	}
+	wavPath := filepath.Join(dir, "play.wav")
+	if err := os.WriteFile(wavPath, buildWav(data, sampleRate), 0o644); err != nil {
+		t.Fatalf("writing valid wav: %v", err)
+	}
+	if err := VerifyPlayable(wavPath); err != nil {
+		t.Fatalf("VerifyPlayable(valid wav) = %v, want nil", err)
+	}
+
+	// A corrupt "media" file must be rejected at import time.
+	badPath := filepath.Join(dir, "corrupt.mp4")
+	if err := os.WriteFile(badPath, []byte("definitely not a video file"), 0o644); err != nil {
+		t.Fatalf("writing corrupt file: %v", err)
+	}
+	if err := VerifyPlayable(badPath); err == nil {
+		t.Fatalf("VerifyPlayable(corrupt file) = nil, want an error")
+	}
+}
 
 func sine(s int, rate int, freq float64) float64 {
 	return math.Sin(2 * math.Pi * freq * float64(s%rate) / float64(rate))

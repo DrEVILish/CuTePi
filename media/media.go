@@ -50,8 +50,7 @@ type ffprobeOutput struct {
 	Format  ffprobeFormat   `json:"format"`
 }
 
-// Probe runs ffprobe on path and extracts duration, resolution, and codec.
-// It returns an error if ffprobe fails or if duration/codec can't be
+// Probe runs ffprobe on path and extracts duration, resolution, and codec.// It returns an error if ffprobe fails or if duration/codec can't be
 // determined - callers should treat that as a failed import per spec.
 func Probe(path string) (Metadata, error) {
 	cmd := exec.Command("ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path)
@@ -107,6 +106,18 @@ func Probe(path string) (Metadata, error) {
 	}
 
 	return meta, nil
+}
+
+// VerifyPlayable runs a short real decode of path and returns an error if the
+// file cannot be decoded/corrupt (the import-time playability probe). It
+// decodes just enough data to prove the pipeline could play, without writing
+// output (-f null discards it). Verified only for video/audio.
+func VerifyPlayable(path string) error {
+	cmd := exec.Command("ffmpeg", "-v", "error", "-i", path, "-t", "1", "-f", "null", "-")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("media: playability probe failed for %q: %w: %s", path, err, out)
+	}
+	return nil
 }
 
 func isImageFormat(formatName string) bool {

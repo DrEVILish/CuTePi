@@ -54,6 +54,17 @@ func handleYoutubeDownload(c *gin.Context) {
 		return
 	}
 
+	// Import-time playability probe: reject undecodable/corrupt downloads
+	// here rather than failing at cue time. Images are excluded (ffprobe +
+	// the thumbnail copy already prove them).
+	if meta.Kind == media.KindVideo || meta.Kind == media.KindAudio {
+		if err := media.VerifyPlayable(destPath); err != nil {
+			logs.Printf(logs.YDLFailed, "stage=playability filename=%q error=%v", filename, err)
+			c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	size, err := fileSize(destPath)
 	if err != nil {
 		logs.Printf(logs.YDLFailed, "stage=stat filename=%q error=%v", filename, err)

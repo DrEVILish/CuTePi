@@ -107,6 +107,16 @@ func saveUploadedFile(fh *multipart.FileHeader) error {
 		return err
 	}
 
+	// Import-time playability probe: decode a short window so undecodable /
+	// corrupt sources are rejected here rather than failing at cue time.
+	// Images are excluded - ffprobe (+ the thumbnail copy) already prove them.
+	if meta.Kind == media.KindVideo || meta.Kind == media.KindAudio {
+		if err := media.VerifyPlayable(destPath); err != nil {
+			os.Remove(destPath)
+			return err
+		}
+	}
+
 	title := strings.TrimSuffix(filename, filepath.Ext(filename))
 	if err := ctp.RegisterMedia(filename, size, meta, title); err != nil {
 		os.Remove(destPath)
