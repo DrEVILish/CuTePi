@@ -21,6 +21,7 @@ import (
 	"CuTePi/config"
 	"CuTePi/ctp"
 	"CuTePi/gsp"
+	"CuTePi/logs"
 	"CuTePi/media"
 )
 
@@ -57,6 +58,7 @@ func setupTestServer(t *testing.T) *gin.Engine {
 
 	Index(r.Group("/"))
 	Api(r.Group("/api"))
+	Logs(r.Group("/api"))
 	Upload(r.Group("/upload"))
 	Youtube(r.Group("/youtube"))
 	return r
@@ -126,6 +128,55 @@ func TestYoutubeRejectsMissingURL(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "no URL provided") {
 		t.Fatalf("expected missing URL error, got: %s", w.Body.String())
+	}
+}
+
+func TestLogViewerEndpoints(t *testing.T) {
+	r := setupTestServer(t)
+	prev := logs.CurrentLevel()
+	defer logs.SetLevel(prev)
+
+	// The index page ships the modal and its topbar button.
+	index := get(t, r, "/").Body.String()
+	for _, want := range []string{`id="logsModal"`, `id="logs-feed"`, `data-bs-target="#logsModal"`} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index page missing %q for the log viewer", want)
+		}
+	}
+
+	// GET /api/logs returns the current level and buffered entries as JSON.
+	logs := get(t, r, "/api/logs")
+	if logs.Code != http.StatusOK {
+		t.Fatalf("GET /api/logs = %d, want 200", logs.Code)
+	}
+	var body struct {
+		Level   string `json:"level"`
+		Entries []any  `json:"entries"`
+	}
+	if err := json.Unmarshal(logs.Body.Bytes(), &body); err != nil {
+		t.Fatalf("GET /api/logs is not JSON: %v", err)
+	}
+	if body.Level != "info" {
+		t.Fatalf("default log level = %q, want info", body.Level)
+	}
+
+	// POST /api/logs/level switches the recording level.
+	req := httptest.NewRequest(http.MethodPost, "/api/logs/level", strings.NewReader("level=warn"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/logs/level = %d, want 200", w.Code)
+	}
+	if lvl := get(t, r, "/api/logs"); !strings.Contains(lvl.Body.String(), `"level":"warn"`) {
+		t.Fatalf("level not persisted after switch: %s", lvl.Body.String())
+	}
+
+	// DELETE /api/logs clears the viewer buffer.
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, httptest.NewRequest(http.MethodDelete, "/api/logs", nil))
+	if w2.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/logs = %d, want 200", w2.Code)
 	}
 }
 

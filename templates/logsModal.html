@@ -1,0 +1,55 @@
+{{ define "logsModal.html" }}
+<div class="modal fade" id="logsModal" tabindex="-1" aria-labelledby="logsModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h1 class="modal-title fs-5" id="logsModalLabel">Logs</h1>
+        <div class="btn-group btn-group-sm ms-3">
+          <button type="button" class="btn btn-outline-secondary logs-level" data-level="debug">Debug</button>
+          <button type="button" class="btn btn-outline-secondary logs-level" data-level="info">Info</button>
+          <button type="button" class="btn btn-outline-secondary logs-level" data-level="warn">Warning</button>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="logs-clear" title="Clear the buffered log viewer records" aria-label="Clear buffered logs"><i class="bi bi-trash"></i></button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="logs-refresh" title="Refresh logs" aria-label="Refresh logs"><i class="bi bi-arrow-clockwise"></i></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <pre class="mb-0 logs-feed" id="logs-feed"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const feed = document.getElementById("logs-feed");
+  function refreshLogs() {
+    fetch("/api/logs")
+      .then(r => r.json())
+      .then(data => {
+        const levelBtn = document.querySelector(".logs-level[data-level='" + data.level + "']");
+        document.querySelectorAll(".logs-level").forEach(b => {
+          b.classList.toggle("active", b === levelBtn);
+        });
+        feed.textContent = data.entries.length
+          ? data.entries.map(e =>
+              e.time.replace("T", " ").slice(0, 19) + "  [" + e.level.padEnd(5) + "] [" + e.code + "] " + e.message + (e.audit ? "  <audit>" : "")
+            ).join("\n")
+          : "(no buffered logs)";
+      })
+      .catch(() => { feed.textContent = "failed to fetch /api/logs"; });
+  }
+  document.getElementById("logsModal").addEventListener("shown.bs.modal", refreshLogs);
+  document.getElementById("logs-refresh").addEventListener("click", refreshLogs);
+  document.getElementById("logs-clear").addEventListener("click", () => {
+    fetch("/api/logs", { method: "DELETE" }).then(refreshLogs);
+  });
+  document.querySelectorAll(".logs-level").forEach(b => {
+    b.addEventListener("click", () => {
+      const body = new URLSearchParams({ level: b.dataset.level });
+      fetch("/api/logs/level", { method: "POST", body }).then(refreshLogs);
+    });
+  });
+})();
+</script>
+{{ end }}

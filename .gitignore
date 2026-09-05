@@ -41,7 +41,9 @@ node_modules/
 package-lock.json
 
 # Logs
-logs
+/logs/*
+!/logs/*
+
 crash.log
 *.log
 npm-debug.log*

@@ -13,6 +13,7 @@ import (
 
 	"CuTePi/ctp"
 	"CuTePi/gsp"
+	"CuTePi/logs"
 )
 
 type MediapoolItem struct {
@@ -219,6 +220,7 @@ func loadAndPlayCue(cue ctp.Cue) error {
 	}
 	gsp.SetCuePos(cue.CuePos)
 	gsp.Play()
+	logs.Emit(logs.AuditEvent{Event: "cue_start", Pos: cue.CuePos, Title: cue.Title})
 	return nil
 }
 
@@ -278,7 +280,12 @@ func Index(rg *gin.RouterGroup) {
 	// wait its postWait, then play the next cue in sheet order (waiting the
 	// next cue's preWait too if it is itself auto-continuing). Loop always
 	// wins: gsp only fires the end hook once a finite loop count is exhausted.
-	gsp.SetCueEndHook(autoContinueFrom)
+	gsp.SetCueEndHook(func(pos int) {
+		if cue, err := ctp.GetCue(strconv.Itoa(pos)); err == nil {
+			logs.Emit(logs.AuditEvent{Event: "cue_end", Pos: pos, Title: cue.Title})
+		}
+		autoContinueFrom(pos)
+	})
 
 	rg.GET("/", func(c *gin.Context) {
 		mediapool, err := mediapoolView()
