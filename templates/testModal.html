@@ -1,0 +1,40 @@
+{{ define "testModal.html" }}
+
+<div class="modal fade" id="testModal" tabindex="-1" aria-labelledby="testModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h1 class="modal-title fs-5" id="testModalLabel">Show Test</h1>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-0">Test is loaded.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Keep</button>
+        <button
+          type="button"
+          class="btn btn-danger"
+          id="testHideBtn"
+          hx-post="/api/stop"
+          hx-swap="none"
+        >
+        >
+          Hide Test
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-test-open]");
+    if (!btn) return;
+    htmx.ajax("POST", "/api/test", { target: btn, swap: "none" }).then(function () {
+      bootstrap.Modal.getOrCreateInstance(document.getElementById("testModal")).show();
+    });
+  });
+</script>
+
+{{ end }}

@@ -3,27 +3,66 @@ package main
 import (
 	"fmt"
 	"html/template"
+	"log"
+	"net/url"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"CuTePi/config"
-	"CuTePi/routes"
 	"CuTePi/ctp"
+	"CuTePi/routes"
+	"CuTePi/worker"
 )
 
 func main() {
-  defer ctp.CloseDB();
-	// Load configuration
+	// A child spawned by /api/restart must not bind the port until the
+	// parent has exited and released it. Wait up to 20s for that.
+	if os.Getenv(routes.RestartEnv) != "" {
+		parent := os.Getppid()
+		deadline := time.Now().Add(20 * time.Second)
+		for syscall.Kill(parent, 0) == nil && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+		}
+		log.Printf("restart child: parent exited, starting up")
+	}
+
+	// Load configuration before anything that depends on it (DB path, media
+	// path, etc). ctp.InitDB must run after this, not via package init(),
+	// so a config-file-specified DB path is actually honored.
 	config.LoadConfig()
+
+	if err := ctp.InitDB(); err != nil {
+		log.Fatalf("CuTePi: failed to initialize database: %v", err)
+	}
+	defer ctp.CloseDB()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		ctp.CloseDB()
+		os.Exit(0)
+	}()
+
+	go worker.RunThumbnailWorker(2 * time.Second)
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)
 
 	extendedFuncs := map[string]any{
-		"contains":  strings.Contains,
-		"hasPrefix": strings.HasPrefix,
-		"hasSuffix": strings.HasSuffix,
+		"contains":    strings.Contains,
+		"hasPrefix":   strings.HasPrefix,
+		"hasSuffix":   strings.HasSuffix,
+		"formatTime":  ctp.FormatTime,
+		"urlPath":     url.PathEscape,
+		"typeIcon":    routes.TypeIcon,
+		"displayTime": routes.DisplayTime,
+		"progressPct": routes.ProgressPct,
 	}
 
 	// Load templates with FunctionMap

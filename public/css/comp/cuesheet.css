@@ -1,3 +1,207 @@
 td:hover {
   cursor: default;
 }
+
+#cuesheet {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Empty cuesheet: a single guidance row inside the always-rendered table,
+   so the table chrome + striped filler still fill the pane. */
+.cuesheet-empty td {
+  text-align: center;
+  padding: 4rem 0;
+  color: var(--ctp-muted);
+  border-style: hidden;
+}
+
+#cuesheet.dnd-dragover .cuesheet-empty td {
+  color: var(--ctp-accent-2) !important;
+  background: rgba(216, 92, 255, 0.08);
+}
+
+/* User-adjustable CueList column widths. Fixed table layout keeps the table
+   at 100% of its pane (no horizontal scroll) and makes explicit per-column
+   widths authoritative; widths are set inline by public/src/ui.js and
+   persist in localStorage. */
+#cuesheet table {
+  table-layout: fixed;
+  width: 100%;
+  margin-bottom: 0;
+}
+
+/* The media-type and Cue No columns are content-fixed: as wide as their
+   widest icon / header title, never resized or stretched by fixed layout. */
+#cuesheet th.col-type,
+#cuesheet td.cue-type {
+  width: 1.6em;
+  min-width: 1.6em;
+  max-width: 1.6em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: center;
+}
+#cuesheet th.col-cue-num,
+#cuesheet td.cue-num {
+  width: 3.5em;
+  min-width: 3.5em;
+  max-width: 3.5em;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Continue the table's alternating row rhythm through unused pane space. */
+.cuesheet-blank-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.025) 0,
+      rgba(255, 255, 255, 0.025) 30px,
+      rgba(255, 255, 255, 0.055) 30px,
+      rgba(255, 255, 255, 0.055) 60px
+    );
+}
+
+#cuesheet th {
+  position: relative;
+}
+
+#cuesheet thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--ctp-surface-2, #26163e);
+}
+
+/* Invisible drag handle on each header's right edge. */
+#cuesheet .col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+}
+#cuesheet .col-resize-handle:hover,
+#cuesheet .col-resize-handle.dragging {
+  background-color: var(--bs-purple, #a855f7);
+}
+
+/* Media-type icon column */
+.cue-type {
+  width: 2.2em;
+  text-align: center;
+  color: var(--ctp-muted, #b8a5d6);
+  font-size: 1.05rem;
+}
+
+/* Per-cue colour accent: a left border on the row + a swatch in the name cell.
+   --cue-accent is set inline on the row from the cue's color column. */
+.cue {
+  --cue-accent: transparent;
+}
+.cue:not(.table-warning) {
+  border-left: 3px solid var(--cue-accent, transparent);
+}
+.cue.table-warning {
+  border-left: 3px solid var(--cue-accent, var(--bs-warning, #ffc107));
+}
+.cue-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cue-colour-swatch {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 50%;
+  background: var(--cue-accent, transparent);
+  margin-right: 0.4em;
+  vertical-align: middle;
+}
+
+/* Per-cue progress bar (rendered as its own row under the playing cue) */
+.cue-progress td {
+  padding: 0.25rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+.cue-progress-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  touch-action: none;
+}
+.cue-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bs-purple, #a855f7), #e879f9);
+  transition: width 0.4s linear;
+}
+
+/* Right-click context menu for cue rows. Single fixed-position element,
+   shown at the cursor. */
+.cue-context-menu {
+  position: fixed;
+  z-index: 2000;
+  min-width: 210px;
+  padding: 0.35rem 0;
+  background: var(--ctp-surface-2, #26163e);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  font-size: 0.9rem;
+}
+.cue-context-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cue-context-item:hover {
+  background: rgba(216, 92, 255, 0.15);
+}
+.cue-context-item.cue-context-danger {
+  color: var(--bs-danger, #f87171);
+}
+.cue-context-divider {
+  height: 1px;
+  margin: 0.25rem 0;
+  background: rgba(255, 255, 255, 0.1);
+}
+.cue-context-fade input[type="text"] {
+  width: 4.5em;
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: inherit;
+  padding: 0.1rem 0.3rem;
+}
+.cue-context-fade select {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: inherit;
+}
+.cue-context-color input[type="color"] {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  width: 1.6em;
+  height: 1.6em;
+  border-radius: 4px;
+}

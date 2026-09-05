@@ -1,0 +1,42 @@
+{{ define "qrModal.html" }}
+
+<div class="modal fade" id="qrModal" tabindex="-1" aria-labelledby="qrModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h1 class="modal-title fs-5" id="qrModalLabel">Upload on phone</h1>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body text-center">
+        <p class="small text-muted mb-2">Scan to open <code>/upload</code> on this server</p>
+        <img id="qr-image" src="/api/qr" alt="QR code for upload URL" class="img-fluid border bg-white p-2" style="width: 256px; height: 256px;">
+        <div class="mt-2">
+          <code id="qr-url" class="small text-break"></code>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  var modal = document.getElementById('qrModal');
+  if (!modal) return;
+  modal.addEventListener('show.bs.modal', function() {
+    var urlEl = document.getElementById('qr-url');
+    var img = document.getElementById('qr-image');
+    if (urlEl) {
+      var target = location.protocol + '//' + location.host + '/upload';
+      urlEl.textContent = target;
+    }
+    if (img) {
+      // bust cache so the server regenerates with current Host header
+      img.src = '/api/qr?t=' + Date.now();
+    }
+  });
+})();
+</script>
+
+{{ end }}

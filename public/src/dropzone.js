@@ -54,7 +54,14 @@ dropzone.addEventListener('drop', (e)=>{
   }
 })
 
-const upload = document.getElementById("upload");
-upload.onclick = (e)=>{
-  fileList.innerHTML=""
-}
+// Also reflect files chosen via the OS picker (the standalone /upload page
+// relies on the picker; the modal does the same). Additive on top of the
+// drag-and-drop path above.
+fileInput.addEventListener("change", () => {
+  fileList.innerHTML = "";
+  for (const f of fileInput.files) {
+    const li = document.createElement("li");
+    li.appendChild(document.createTextNode(f.name));
+    fileList.appendChild(li);
+  }
+});

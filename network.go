@@ -2,6 +2,7 @@ package main
 
 import (
 	"CuTePi/config"
+	"CuTePi/logs"
 	"fmt"
 	"net"
 )
@@ -10,7 +11,7 @@ import (
 func printNetworkInfo() {
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		fmt.Println("Error fetching network interfaces:", err)
+		logs.Printf(logs.NETListErr, "Error fetching network interfaces: %v", err)
 		return
 	}
 

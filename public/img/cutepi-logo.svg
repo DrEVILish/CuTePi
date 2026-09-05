@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 88" role="img" aria-labelledby="title desc">
+  <title id="title">CuTePi</title>
+  <desc id="desc">CuTePi 80s corporate-style logo</desc>
+  <defs>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#14d9e8"/>
+      <stop offset="0.5" stop-color="#486cff"/>
+      <stop offset="1" stop-color="#ef4ca4"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-30%" width="140%" height="170%">
+      <feDropShadow dx="3" dy="4" stdDeviation="0" flood-color="#10162f" flood-opacity="0.8"/>
+    </filter>
+  </defs>
+
+  <g fill="none" stroke="url(#mark)" stroke-width="3">
+    <path d="M18 19H75L91 35H42L28 49H76L60 65H18L34 49L18 35Z"/>
+    <path d="M18 73H342" stroke-width="2"/>
+    <path d="M92 19H342M102 25H342M112 31H342" stroke-width="1" opacity="0.65"/>
+  </g>
+  <g filter="url(#shadow)">
+    <text x="201" y="61" text-anchor="middle" fill="#f7fbff" stroke="#172044" stroke-width="8" stroke-linejoin="round" paint-order="stroke" font-family="Arial Black, Impact, sans-serif" font-size="45" font-weight="900" letter-spacing="2">CuTePi</text>
+    <text x="201" y="61" text-anchor="middle" fill="url(#mark)" stroke="#ffffff" stroke-width="1" paint-order="stroke" font-family="Arial Black, Impact, sans-serif" font-size="45" font-weight="900" letter-spacing="2">CuTePi</text>
+  </g>
+  <circle cx="337" cy="19" r="4" fill="#ef4ca4"/>
+</svg>

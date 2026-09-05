@@ -1,0 +1,45 @@
+{{ define "deletemodal.html" }}
+
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h1 class="modal-title fs-5" id="deleteModalLabel">Delete media</h1>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to delete <strong id="deleteFilename"></strong>?</p>
+        <p class="text-muted small">This removes the file and deletes any cues that reference it.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Keep</button>
+        <button
+          type="button"
+          class="btn btn-danger"
+          id="deleteConfirmBtn"
+          hx-delete=""
+          hx-target="#mediapool"
+          hx-swap="outerHTML"
+        >
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-media-delete]");
+    if (!btn) return;
+    var filename = btn.getAttribute("data-media-delete");
+    document.getElementById("deleteFilename").textContent = filename;
+    var confirmBtn = document.getElementById("deleteConfirmBtn");
+    confirmBtn.setAttribute("hx-delete", "/api/media/" + encodeURIComponent(filename));
+    htmx.process(confirmBtn);
+    new bootstrap.Modal(document.getElementById("deleteModal")).show();
+  });
+</script>
+
+{{ end }}

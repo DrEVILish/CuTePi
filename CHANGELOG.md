@@ -3,6 +3,56 @@
 This file is append-only: entries are added as work lands, never removed or
 rewritten, so it stays a true history of the project.
 
+## 2026-09-04 — Product decisions round 2 (docs only, no code)
+
+Refinements from the second Q&A round; recorded in DESIGN.md (Product
+Decisions), TODO.md, README.md. No code changed.
+
+- **Platform**: headless Debian Trixie (pure server, no X/Wayland) → HDMI
+  video via KMS/DRM; HDMI audio ALSA-exclusive to CuTePi. Hardware-first
+  decode (v4l2 h264/hevc) with software fallback.
+- **Undecodable**: cue fails to start → immediate error to the user; import
+  includes an early playability probe to reject bad files.
+- **Trim**: stored as given, no normalization; `0` at either end =
+  untrimmed.
+- **Loop**: `loop` always wins over auto-continue; new `loop_count` (0 =
+  infinite, N times). Auto-continue advances in sheet order down, triggering
+  group actions when the next row is a group.
+- **Selection**: Media Pool tiles are not selectable; the sheet always has a
+  selected cue (Space acts on it).
+- **Interruption**: playlist/slideshow interruption is driven by whatever cue
+  is triggered and that trigger's own settings.
+- **Groups/slideshow**: images are visible cue rows inside the group with a
+  now-showing indicator; slideshow settings live on `cue_group`; folder icon
+  + distinct slideshow icon.
+- **Missing source**: startup-only scan; cues offer delete or re-link to a
+  replacement file.
+- **.CTP**: export + **import** (import modal chooses append-to-end or
+  overwrite); manifest includes the playback audit trail.
+- **Logs**: level selector switches the *recording* level (write less during
+  a show); structured audit trail (cue started/stopped, wall-clock) included
+  in exports.
+
+## 2026-09-04 — Product decisions recorded (docs only, no code)
+
+All open hardware/UX/product questions answered by the operator; recorded in
+DESIGN.md (Product Decisions) and scoped in TODO.md / README.md. No code
+changed.
+
+- **Platform**: Raspberry Pi 4/5, headless, video + audio out of the HDMI port;
+  any video codec must play.
+- **Trigger**: Space (focused UI, not editing) plays the selected cue.
+- **End behavior**: cues stop after playback; auto-continue is explicit and is
+  the only place `preWait`/`postWait` apply. Defaults `loop=off`, `hold=off`.
+- **Trim**: `posStart`/`posEnd` are timecodes into the source media.
+- **Cue groups**: nestable visual folders that can act as playlists; slideshow
+  mode plays a group's images shuffled/looped/faded (group settings).
+- **Dropped**: the "first-connected client may edit settings" restriction; all
+  operators may edit. System output is always 100% (no master volume).
+- **To build**: missing-source warnings (Media Pool + cues), `.CTP` show export
+  (ZIP: JSON manifest + referenced media), Web UI log viewer (levels + clear),
+  Space trigger, auto-continue/waits, cue groups, slideshow.
+
 ## 2026-09-04 — Waveform in the database
 
 ### Added

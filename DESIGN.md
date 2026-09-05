@@ -24,6 +24,75 @@ is the source of truth for app state (media library + cue list + settings).
   change-detection polling path remains the reconnect/fallback mechanism.
 - Trust model: trusted local network, no auth.
 
+## Product Decisions (2026-09-04 — operator answered the open hardware/UX questions)
+
+- **Platform**: Raspberry Pi 4 or 5, headless, video and audio out of the HDMI
+  port, running a **pure server distro (latest Debian Trixie)** — **no X11 /
+  Wayland desktop**, so playback drives the HDMI connector directly
+  (**KMS/DRM**), not through a windowed `autovideosink`.
+- **Audio**: HDMI embedded audio, **ALSA-exclusive to CuTePi** — CuTePi is the
+  only audio producer on the box.
+- **Codecs**: "any video file could be used." Decode **hardware-first
+  (v4l2 h264/hevc where available), software fallback** via GStreamer
+  autoplugging.
+- **Undecodable files**: if a cue cannot start (undecodable/corrupt source),
+  playback fails **immediately with an error surfaced to the user**. At
+  **import time**, try to establish playability as early as possible (a
+  decode probe) and reject early rather than discovering it at cue time.
+- **Cue trigger**: pressing **Space** while the control UI is focused and the
+  focus is **not** in a text/editing control plays the currently selected cue.
+  **Media Pool items are `aria-disabled`/not selectable — the sheet behaves as
+  if a cue is always selected** (single-select row is the one Space acts on).
+- **Playback end**: a cue **stops** after playback — cues are a list, not a
+  playlist; there is no implicit auto-advance. Auto-continue is an explicit,
+  per-cue setting.
+- **Waits**: `preWait` / `postWait` apply only when a cue is set to
+  **auto-continue** — time before the cue starts and time after it ends.
+- **Loop / Hold defaults**: `loop=off`, `hold=off` for newly created cues.
+  **`loop` always wins over auto-continue**, and looping cues have a **loop
+  counter** (`0` = infinite, `N` = play N times); an auto-continuing cue only
+  advances once a finite loop count is exhausted.
+- **Auto-continue chain**: continues **in sheet order downward**. If the next
+  row is a **cue group**, the group's action is triggered and the chain
+  continues accordingly.
+- **Interruption**: whether partway through a playlist/slideshow a triggered
+  cue interrupts depends on **what was triggered and that trigger's own
+  settings** — behaviour is driven per-cue/per-group, not globally.
+- **Trim** (`posStart` / `posEnd`): the timecode *into the original source
+  media* at which the cue starts and ends; `0` at either end = untrimmed at
+  that end. Values are **stored as given — no normalization** of an
+  out-at-full-duration back to `0`.
+- **Cue groups**: visual folders that hold cues, nestable inside other
+  folders; a "group of cues" can be triggered as a playlist. Rendered as
+  collapsible rows with indentation; drag-reorder works across folder
+  boundaries; global order remains the flat `cuePos`, folder membership is a
+  presentation layer.
+- **Slideshow**: a cue group containing images can enable slideshow mode from
+  the group's inspector — plays its images shuffled, looped, with fades, per
+  group settings (`duration-per-image`, `fade ms`, `shuffle`, `loop`, all on
+  `cue_group`). **Images are visible cue rows inside the group**, with an
+  indicator next to the image currently being displayed. New type-column
+  icon (folder icon; distinct icon for slideshow-enabled groups).
+- **Settings editing**: the "first-connected client may edit" restriction is
+  **dropped** — all operators may edit settings.
+- **Output level**: system output is always 100%; volume remains a per-cue
+  control only (no global/master volume).
+- **Missing source media**: the Media Pool shows a warning-triangle icon on
+  entries whose source file is gone; cues referencing a missing file show a
+  warning **offering both actions — delete the cue, or choose a replacement
+  file to re-link**. Detection runs once at **startup** (no periodic scan).
+- **Show export/import**: a `.CTP` file — a ZIP containing a JSON manifest of
+  all cue information (including the playback **audit trail**) plus the
+  relevant Media Pool content. **Import restores a show from a `.CTP` with a
+  choice in the modal: append to the end of the current cuesheet or overwrite
+  it.**
+- **Logs**: viewable from the Web UI with level filtering and a clear action.
+  Changing the level in the UI changes **what is recorded** (runtime level
+  switch — write less during a show), not just what is displayed. Structured
+  playback events (cue started/stopped at wall-clock time) are recorded as an
+  **audit trail** and included in the .CTP export.
+- **yt-dlp**: URL import is a core, imperative feature (not a convenience).
+
 ## Layout (current)
 
 ```
@@ -80,6 +149,11 @@ sniffing is done.
 - Drag-and-drop upload directly onto the pool; multi-file upload supported.
 - Drag from pool into CueList supported.
 - Scrollable, scrollbars always visible.
+- **Missing source** (decision 2026-09-04, not yet built): at **startup** a
+  scan flags media rows whose source file is absent from disk; the pool tile
+  shows a warning-triangle icon. Cues referencing a missing file show a
+  warning in the row/inspector offering **delete the cue** or **choose a
+  replacement file** (re-links `media_id`). No periodic scanning.
 
 ## Cue List (right pane)
 
@@ -97,9 +171,10 @@ sniffing is done.
   the Cue Inspector and stored in the existing `posStart`/`posEnd` columns. On
   play the pipeline seeks to `In` and auto-stops when it reaches `Out`;
   `In = Out = 0` plays the whole clip (no trim).
-- **Hold last frame** (implemented 2026-08-31): a per-cue toggle (new `hold` column,
-  default on) in the Cue Inspector. When set, a video cue's final frame stays
-  on screen after end-of-stream until Stop/Panic; image cues display as-is.
+- **Hold last frame** (implemented 2026-08-31): a per-cue toggle (`hold`
+  column, **default off per 2026-09-04**, previously default 1) in the Cue
+  Inspector. When set, a video cue's final frame stays on screen after
+  end-of-stream until Stop/Panic; image cues display as-is.
 - Reordered via drag-and-drop (mouse only, no keyboard reorder) and via
   move-up/down actions; persisted immediately to DB. Drag-and-drop reorder
   (implemented 2026-08-31): drag rows between rows or to the end with the existing
@@ -142,12 +217,12 @@ sniffing is done.
 - Port change requires restart — modal displays a message, does not restart
   the process itself.
 - Only reachable from TopBar (no keyboard shortcut).
-- Only the first-connected client may edit settings.
+- Editing restriction: the original spec's "only the first-connected client may
+  edit settings" requirement is **dropped (decided 2026-09-04)** — all operators
+  may edit. No session-id mechanism is needed.
 - Status (2026-08-31): implemented — `templates/settingsModal.html` wired to
   the TopBar Settings dropdown item, `GET/POST /api/settings` backed, tests in
-  `routes/routes_test.go`. The "first-connected client may edit" rule is NOT
-  enforced: no client/session-id mechanism exists in the codebase, so editing
-  is open to all clients (documented here, tracked open).
+  `routes/routes_test.go`.
 
 ## Data Model (SQLite)
 
@@ -156,14 +231,22 @@ design doc's conceptual `media` → **`mediapool`** and `cues` → **`cuesheet`*
 
 - `mediapool`: `media_id` (unique id), `filename` (unique; path derived from
   config), `mimetype`, `size`, `duration` (float seconds), `resolution`,
-  `codec`, `media_title`, `thumbnail_pending`, `date_added`. Sorted
+  `codec`, `media_title`, `thumbnail_pending`, `waveform` (JSON peaks),
+  `waveform_pending`, `date_added`. Sorted
   newest-first by default (`date_added DESC, media_id DESC`).
 - `cuesheet`: order number `cuePos` (unique, reindexed on reorder; also a
   reorderable row order, not a separate stable id), `cueNum` (unique label),
   references media by `media_id` (FK → `mediapool`, ON DELETE CASCADE), `title`,
-  and the editable times `preWait`, `cueDuration`, `postWait` plus trim points
-  `posStart`/`posEnd` (INTEGER milliseconds, `0` = untrimmed), `hold` (0/1,
-  default 1), and the `state` table's persisted selected cue position.
+  the editable times `preWait`, `cueDuration`, `postWait` and trim points
+  `posStart`/`posEnd` (INTEGER milliseconds, `0` = untrimmed at that end),
+  `hold` and `loop` (0/1, **both default 0 per 2026-09-04**), `loop_count`
+  (0 = infinite, default 0), `autoContinue` (0/1, with auto-continue), a
+  `cue_group_id` (FK, with Cue Groups), and the `state` table's persisted
+  selected cue position.
+- `cue_group` (planned, Cue Groups): nestable folders (`parent_group_id`)
+  grouping cues; slideshow settings are stored here (`dur_per_image`,
+  `fade_ms`, `shuffle`, `slideshow` enabled flag); groups can be triggered as
+  a playlist.
 - Configuration file: port and poll interval persist in
   `~/CTP/config/config.json`; the theme is browser-local presentation state.
 - Thumbnail/waveform generation queue: must be persistent across restarts
@@ -184,7 +267,26 @@ design doc's conceptual `media` → **`mediapool`** and `cues` → **`cuesheet`*
   end-of-stream (natural EOS or the trim Out reached), a looping clip seeks
   back to its in-point and plays on rather than stopping or clearing. The
   default for newly loaded clips is `config.Loop()` (a `loop` bool in
-  `config.json`), toggled live from the Now Playing widget.
+  `config.json`), toggled live from the Now Playing widget. **Default is
+  `off`** per 2026-09-04.
+- **Loop counter** (decision 2026-09-04, not yet built): a `loop_count` column
+  (0 = infinite, N = play N times). `loop` always wins over auto-continue — a
+  looping cue only auto-advances once a finite count is exhausted.
+- **Auto-continue & waits** (decision 2026-09-04, not yet built): a cue can be
+  flagged `autoContinue`. `preWait` and `postWait` only take effect for
+  auto-continuing cues — a pause before the cue starts and after it ends.
+  Auto-continue advances in sheet order downward; a cue-group row triggers the
+  group's action (playlist/slideshow) and the chain continues from there. A
+  non-auto-continuing cue always stops on EOS (no implicit advance); the list
+  is a cue list, never a playlist.
+- **Decoding / undecodable** (decision 2026-09-04, not yet built): pipelines
+  use GStreamer autoplugging resolved **hardware-first** (v4l2 h264/hevc where
+  available) with **software fallback**. If a cue cannot start because its
+  source is undecodable/corrupt, fail immediately and surface the error to the
+  user. Import includes an early playability probe (decode test) so bad files
+  are rejected at import time.
+- **Output** (decision 2026-09-04): video via KMS/DRM (headless Debian Trixie,
+  no display server); audio via HDMI embedded ALSA, exclusive to CuTePi.
 - **Volume** (implemented 2026-09-01): the audio playback chain is now
   `queue → audioconvert → audioresample → volume → autoaudiosink`. The manager
   retains the branch's `volume` element (last audio branch wins) and applies
@@ -230,6 +332,24 @@ design doc's conceptual `media` → **`mediapool`** and `cues` → **`cuesheet`*
 - Client-side split: playback/cuesheet/selection state is server-side; purely
   cosmetic UI chrome (column widths, panel collapse/width) stays in
   `localStorage`.
+
+## Show Export / Import (.CTP) (decided 2026-09-04, not yet built)
+
+- A `.CTP` file is a **ZIP** containing a **JSON manifest** of all cue
+  information (cuesheet incl. groups/order/selection, per-cue settings, and
+  the playback **audit trail**) plus the **referenced Media Pool content**.
+- **Export**: produces that ZIP for archiving or moving a show to another Pi.
+- **Import**: restores a show from a `.CTP` — the import modal offers
+  **append to the end of the current cuesheet** or **overwrite** (replaces the
+  current cuesheet).
+
+## Logs & Audit Trail (decided 2026-09-04, not yet built)
+
+- **Log viewer in the Web UI**: filter by level (debug/info/warn) and **clear**.
+  The level selector switches the **recording** level (runtime toggle), so a
+  show can run with fewer logs written.
+- **Audit trail**: structured playback events (cue started / stopped at
+  wall-clock time) are recorded separately and **included in .CTP exports**.
 
 ## Testing
 
@@ -513,8 +633,16 @@ covered in this pass - see Suggested Improvements below).
 
 ## Open Questions
 
-- None currently blocking; all major UX/behavior questions from the original
-  spec Q&A have been answered and are folded into the sections above.
+- 2026-09-04: the hardware/UX/product questions below were **answered** and are
+  recorded in "Product Decisions"; this section is now for anything still open.
+
+Remaining open:
+- Config `loop` default: `config.json`'s `loop` currently applies on every
+  clip load. Should it now only seed the value at cue registration (load
+  always honours the cue's own flag), or be removed entirely?
+- Pi validation ownership: whether a `./smoke-test.sh` (generate assets with
+  ffmpeg, exercise upload → pool → cue → play → trim → stop via curl against
+  the HDMI sink) should ship so hardware validation is one command.
 
 ## UI Pass (2026-08-28)
 

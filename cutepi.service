@@ -1,0 +1,36 @@
+[Unit]
+Description=CuTePi - Cue-based media playback controller
+Documentation=https://github.com/anomalyco/CuTePi
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+# Runtime prefix used by install.sh: binary + templates/ + public/ live here,
+# and WorkingDirectory must point at it because the app reads ./templates and
+# ./public relative to its cwd.
+WorkingDirectory=/opt/cutepi
+# Owned data tree: config/config.json + ctp.db, media/, thumbnails/ all fall
+# back to living under WORKING_DIR, so setting this one var relocates them all.
+Environment=WORKING_DIR=/opt/cutepi/data
+# Listen on all interfaces so the control UI is reachable over the network.
+Environment=PORT=3001
+# So the UI's Restart button runs `systemctl restart cutepi` under this unit.
+Environment=CUTEPI_SERVICE=cutepi
+
+Type=simple
+ExecStart=/opt/cutepi/cutepi
+# A crash is restarted (the app closes the DB cleanly on SIGTERM).
+Restart=on-failure
+RestartSec=3
+# Graceful shutdown: main.go handles SIGTERM by closing the DB.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# The UI's Restart button re-execs itself only when NOT running under systemd;
+# under a unit it calls `systemctl restart cutepi` instead. Give the unit a
+# name and reload/restart authority so that path works.
+# (No hardening directives: GStreamer needs wide filesystem, GPU, and session
+#  access on a headless Pi appliance.)
+
+[Install]
+WantedBy=multi-user.target

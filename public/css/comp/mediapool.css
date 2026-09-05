@@ -1,9 +1,73 @@
+.media_thumbnail{
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
 .media_text{
   opacity: 0;
   transition: opacity 0.4s;
   font-size: 0.7rem;
+  pointer-events: none;
 }
 
 .media_thumbnail:hover .media_text{
   opacity: 1;
+}
+
+/* The whole 3-dot menu box sits in the tile's bottom-right corner, clear of
+   the caption overlay. The toggle icon stays centred in its own box. */
+.media_thumbnail > .dropdown {
+  right: 0.4rem !important;
+  bottom: 0.4rem !important;
+  margin: 0 !important;
+}
+
+.media_thumbnail > .dropdown > .dropdown-menu {
+  right: 0;
+  left: auto;
+}
+
+.media-menu-toggle {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  line-height: 1;
+  border-radius: 0.35rem;
+}
+
+/* Fixed 2-column thumbnail gallery (per spec). Always exactly two columns
+   regardless of viewport width. The grid grows to fill the pane's remaining
+   height (below the header/filter); the pane owns scrolling so menus are not
+   clipped by an inner overflow container. */
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
+  scrollbar-gutter: stable;
+}
+
+/* The pane owns scrolling so a dropdown can escape the grid's bounds. */
+#mediapool-pane {
+  overflow-y: scroll;
+  overflow-x: visible;
+  scrollbar-gutter: stable;
+}
+
+/* Empty pool: center the upload placeholder vertically in the pane. */
+.mediapool-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }

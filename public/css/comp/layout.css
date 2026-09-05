@@ -1,0 +1,196 @@
+/* The app always fills exactly 100vh: the topbar takes its natural height
+   and the content row below it takes the rest, with no page-level scroll.
+   Only the individual panes (mediapool / cuesheet) scroll internally. */
+html,
+body.app-body {
+  height: 100vh;
+  margin: 0;
+  overflow: hidden;
+}
+
+body.app-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The standalone uploader is intentionally a normal scrolling page, unlike
+   the fixed-height control centre. */
+html:has(body.upload-body),
+body.upload-body {
+  height: auto;
+  min-height: 100vh;
+  overflow: auto;
+}
+
+body.upload-body {
+  display: block;
+}
+
+.app-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.navbar .container-fluid {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.navbar #mediainfo {
+  min-width: 0;
+  flex: 1 1 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navbar .container-fluid > .d-flex.gap-2 {
+  flex-wrap: wrap;
+}
+
+.app-content > .row {
+  height: 100%;
+}
+
+/* Main content row is a flex layout: media pool (resizable) | resizer |
+   cuesheet (fills the rest). */
+.app-main-row {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The inspector occupies the remaining fixed-height strip below the panes;
+   do not let the pane row's old 100% height push it below the viewport. */
+#cueinspector-panel {
+  flex: 0 0 auto;
+}
+
+/* Media pool panel: fixed base width (user-resizable via the handle), with
+   a clear defining border so the panes are visibly separated. */
+#mediapool-pane {
+  flex: 0 0 var(--mediapool-width, 320px);
+  min-width: 0;
+  border-right: 1px solid var(--bs-secondary-color, #6c757d);
+  background-color: rgba(0, 0, 0, 0.15);
+}
+
+/* Draggable splitter between the two panes. */
+#mediapool-resizer {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  transition: background-color 0.2s;
+}
+#mediapool-resizer:hover,
+#mediapool-resizer:active {
+  background-color: var(--bs-purple, #a855f7);
+}
+
+/* Collapse button hugs the RIGHT edge of the media pool pane (on the
+   border, where the splitter is), vertically centred (halfway up the pane),
+   so it reads as the "close" affordance for the panel and stays reachable
+   regardless of pool length. */
+#mediapool-collapse-btn {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translate(50%, -50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  margin: 0;
+  border-width: 2px;
+  border-radius: 0.25rem;
+  background-color: var(--bs-body-bg, #212529);
+}
+#mediapool-collapse-btn i {
+  font-size: 1.1rem;
+  color: var(--bs-danger, #dc3545);
+  font-weight: 700;
+}
+#mediapool-collapse-btn:hover {
+  background-color: var(--bs-danger, #dc3545);
+  border-color: var(--bs-danger, #dc3545);
+}
+#mediapool-collapse-btn:hover i {
+  color: #fff;
+}
+body.mediapool-collapsed #mediapool-collapse-btn {
+  display: none;
+}
+
+/* Collapsed media pool: hide the panel entirely (width 0, content clipped);
+   the cuesheet then fills the row. */
+body.mediapool-collapsed #mediapool-pane {
+  flex-basis: 0;
+  padding: 0;
+  overflow: hidden;
+}
+body.mediapool-collapsed #mediapool-resizer {
+  display: none;
+}
+
+/* Expand button floats at the left edge of the content area; hidden unless
+   the media pool is collapsed, so it is always possible to restore it. */
+#mediapool-expand-btn {
+  display: none;
+}
+.app-content {
+  position: relative;
+}
+body.mediapool-collapsed #mediapool-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  transform: translateY(-50%);
+  z-index: 10;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border-width: 2px;
+  border-color: var(--bs-success, #198754);
+  background-color: var(--bs-body-bg, #212529);
+}
+body.mediapool-collapsed #mediapool-expand-btn i {
+  font-size: 1.1rem;
+  color: var(--bs-success, #198754);
+  font-weight: 700;
+}
+body.mediapool-collapsed #mediapool-expand-btn:hover {
+  background-color: var(--bs-success, #198754);
+  border-color: var(--bs-success, #198754);
+}
+body.mediapool-collapsed #mediapool-expand-btn:hover i {
+  color: #fff;
+}
+
+.app-pane {
+  height: 100%;
+  overflow-y: scroll;
+}
+
+/* OS file drag-and-drop landing on the media pool pane. */
+.app-pane.dnd-dragover {
+  outline: 3px dashed var(--bs-purple, #a855f7);
+  outline-offset: -3px;
+  background-color: rgba(168, 85, 247, 0.08);
+}
+
+/* Drop-position indicator line shown while dragging a media pool item
+   over the cuesheet. */
+tr.cue-drop-indicator td {
+  height: 0;
+  padding: 0;
+  border-top: 3px solid var(--bs-purple, #a855f7);
+}
