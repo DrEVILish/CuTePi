@@ -14,23 +14,23 @@ Product-level answers (hardware, trigger, defaults, auto-continue, exports,
 logs, settings rule) are recorded in DESIGN.md → **Product Decisions**. These
 are the build items those decisions imply:
 
-- [ ] **Cue trigger (Space)** — pressing Space while the control UI is focused,
+- [x] **Cue trigger (Space)** — pressing Space while the control UI is focused,
       not in an editable field, plays the currently selected cue. Media Pool
       tiles are not selectable; the sheet behaves as if a cue is always
       selected. (owner: `us`, priority: **high**)
-- [ ] **Auto-continue + waits** — per-cue `autoContinue` flag; `preWait`/
+- [x] **Auto-continue + waits** — per-cue `autoContinue` flag; `preWait`/
       `postWait` drive a pause before-start / after-end only for
       auto-continuing cues. Advances in sheet order downward; a cue-group row
       triggers the group action and the chain continues. Non-auto cues always
       stop on EOS (cues are a list, never a playlist). (owner: `us`, priority:
       **high**)
-- [ ] **Loop counter** — `loop_count` column (0 = infinite, N = play N times);
+- [x] **Loop counter** — `loop_count` column (0 = infinite, N = play N times);
       loop always wins over auto-continue: a finite loop count is exhausted
       before an auto-continuing cue advances. (owner: `us`, priority: **high**)
-- [ ] **Default `loop=off`, `hold=off`** — new cues default both off (`loop_count`
+- [x] **Default `loop=off`, `hold=off`** — new cues default both off (`loop_count`
       0); the config `loop` default for loaded clips also off. (owner: `us`,
       priority: **high**)
-- [ ] **Import-time playability probe** — reject undecodable/corrupt files at
+- [x] **Import-time playability probe** — reject undecodable/corrupt files at
       import instead of failing at cue time; undecodable cue start = immediate
       error to the user. (owner: `us`, priority: **high**)
 - [ ] **Cue Groups** — visual folders grouping cues, nestable; rendered as
@@ -44,7 +44,7 @@ are the build items those decisions imply:
       currently displayed; new folder icon + distinct icon for slideshow
       groups in the type column. (moved from Deferred, owner: `us`, priority:
       medium)
-- [ ] **Missing-source detection** — one scan at startup; Media Pool entries
+- [x] **Missing-source detection** — one scan at startup; Media Pool entries
       with a missing source file get a warning-triangle icon; cues referencing
       a missing file show a warning offering delete-the-cue or choose-a-
       replacement-file (re-link). No periodic scan. (owner: `us`, priority:
@@ -53,7 +53,7 @@ are the build items those decisions imply:
       audit trail) + referenced Media Pool content; import restores a show with
       a modal choice of append-to-end or overwrite. (owner: `us`, priority:
       medium)
-- [ ] **Web UI log viewer** — view logs (debug/info/warn) with clear; the level
+- [x] **Web UI log viewer** — view logs (debug/info/warn) with clear; the level
       selector switches the *recording* level (runtime toggle), and a
       structured playback audit trail (cue started/stopped, wall-clock) feeds
       the manifest. (owner: `us`, priority: medium)
