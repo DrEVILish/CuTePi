@@ -43,6 +43,7 @@ type Cue struct {
 	PostWait       int     `db:"postWait"`
 	Hold           bool    `db:"hold"`
 	Loop           bool    `db:"loop"`
+	LoopCount      int     `db:"loop_count"` // 0 = infinite, N = play N times (when loop is on)
 	Color          string  `db:"color"`
 	Parent         int     `db:"parent"`
 	FadeOut        int     `db:"fadeOut"` // ms; fade & stop other cues over this time
@@ -327,12 +328,13 @@ func AddCue(filename string, cuePos string) (err error) {
 	if cuePos == "" {
 		var result sql.Result
 		result, err = db.Exec(`
-  		INSERT INTO cuesheet (cuePos, cueNum, media_id, title)
+  		INSERT INTO cuesheet (cuePos, cueNum, media_id, title, hold, loop, loop_count)
   		SELECT
   			(SELECT COALESCE(MAX(cuePos), 0) + 1 FROM cuesheet) AS cuePos,
   			(SELECT COALESCE(MAX(cueNum), 0) + 1 FROM cuesheet) AS cueNum,
   			mp.media_id,
-			:title AS title
+			:title AS title,
+			0, 0, 0
   		FROM
   			(SELECT media_id FROM mediapool WHERE filename = :filename) AS mp;
 		`, sql.Named("filename", filename), sql.Named("title", title))
@@ -382,12 +384,13 @@ func AddCue(filename string, cuePos string) (err error) {
 		// insert new cue at the new cuePos position
 		var result sql.Result
 		result, err = tx.Exec(`
-  		INSERT INTO cuesheet (cuePos, cueNum, media_id, title)
+  		INSERT INTO cuesheet (cuePos, cueNum, media_id, title, hold, loop, loop_count)
   		SELECT
   			:cuePos AS cuePos,
   			(SELECT COALESCE(MAX(cueNum), 0) + 1 FROM cuesheet) AS cueNum,
   			mp.media_id,
-			:title AS title
+			:title AS title,
+			0, 0, 0
   		FROM
   			(SELECT media_id FROM mediapool WHERE filename = :filename) AS mp;
 	`, sql.Named("cuePos", cuePosInt), sql.Named("filename", filename), sql.Named("title", title))
@@ -422,6 +425,7 @@ var editableCueColumns = map[string]bool{
 	"postWait":    true,
 	"hold":        true,
 	"loop":        true,
+	"loop_count":  true,
 	"color":       true,
 	"parent":      true,
 	"fadeOut":     true,
@@ -456,6 +460,8 @@ func CueColumnValue(cue Cue, col string) (string, error) {
 		return strconv.FormatBool(cue.Hold), nil
 	case "loop":
 		return strconv.FormatBool(cue.Loop), nil
+	case "loop_count":
+		return strconv.Itoa(cue.LoopCount), nil
 	case "color":
 		return cue.Color, nil
 	case "parent":
@@ -513,6 +519,12 @@ func UpdateCue(cuePos string, col string, val string) (err error) {
 		} else {
 			setVal = "0"
 		}
+	case "loop_count":
+		n, perr := strconv.Atoi(strings.TrimSpace(val))
+		if perr != nil || n < 0 {
+			return fmt.Errorf("invalid loop_count %q (want an integer >= 0)", val)
+		}
+		setVal = strconv.Itoa(n)
 	case "fadeAction":
 		switch strings.ToLower(strings.TrimSpace(val)) {
 		case "peers", "list", "all":

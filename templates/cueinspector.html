@@ -30,6 +30,11 @@
       <div class="d-flex align-items-center pb-1">
         <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
         <label class="form-check-label small" for="insp-loop">Loop</label>
+        <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
+          class="form-control form-control-sm ms-2" style="width:5em"
+          value="{{ .Cue.LoopCount }}"
+          title="Loop count: 0 = infinite, N = play N times"
+          aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
       </div>
       <div class="d-flex align-items-center pb-1">
         <input class="form-check-input me-1" type="checkbox" id="insp-autofollow" name="autoFollow" value="true" {{ if .Cue.AutoFollow }}checked{{ end }}>
@@ -96,6 +101,15 @@
 </div>
 
 <script>
+  (function () {
+    var loopCheck = document.getElementById("insp-loop");
+    var loopCount = document.getElementById("insp-loopcount");
+    if (loopCheck && loopCount) {
+      loopCheck.addEventListener("change", function () {
+        loopCount.disabled = !loopCheck.checked;
+      });
+    }
+  })();
   (function () {
     var timeline = document.getElementById("trim-timeline");
     if (!timeline) return;

@@ -740,6 +740,56 @@ func TestAutoFollowSelectAdvancesWhenFlagSet(t *testing.T) {
 	}
 }
 
+func TestLoopCountColumnAndDefaults(t *testing.T) {
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	_ = setSelectedCuePos(0)
+	mustRegisterMedia(t, "loop.mp4")
+	if err := AddCue("loop.mp4", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	cues, err := GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	if len(cues.Cues) != 1 {
+		t.Fatalf("expected 1 cue, got %d", len(cues.Cues))
+	}
+	cue := cues.Cues[0]
+	// New cues default loop off, hold off, infinite loop count 0.
+	if cue.Loop || cue.Hold || cue.LoopCount != 0 {
+		t.Fatalf("new cue defaults loop=%v hold=%v loop_count=%d, want off/off/0", cue.Loop, cue.Hold, cue.LoopCount)
+	}
+	pos := strconv.Itoa(cue.CuePos)
+
+	for col, val := range map[string]string{"loop": "true", "loop_count": "5"} {
+		if err := UpdateCue(pos, col, val); err != nil {
+			t.Fatalf("UpdateCue %s: %v", col, err)
+		}
+	}
+	c, err := GetCue(pos)
+	if err != nil {
+		t.Fatalf("GetCue: %v", err)
+	}
+	if !c.Loop || c.LoopCount != 5 {
+		t.Fatalf("loop=%v loop_count=%d, want true/5", c.Loop, c.LoopCount)
+	}
+	if err := UpdateCue(pos, "loop_count", "0"); err != nil {
+		t.Fatalf("UpdateCue loop_count to 0: %v", err)
+	}
+	c, err = GetCue(pos)
+	if err != nil {
+		t.Fatalf("GetCue: %v", err)
+	}
+	if c.LoopCount != 0 {
+		t.Fatalf("loop_count = %d, want 0", c.LoopCount)
+	}
+	if err := UpdateCue(pos, "loop_count", "-1"); err == nil {
+		t.Fatalf("UpdateCue loop_count -1 should be rejected")
+	}
+}
+
 func TestNewCueColumnsRoundTrip(t *testing.T) {
 	if err := ClearCueSheet(); err != nil {
 		t.Fatalf("ClearCueSheet: %v", err)

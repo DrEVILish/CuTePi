@@ -186,10 +186,12 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 // play route and the fade-then-play path.
 func loadAndPlayCue(cue ctp.Cue) error {
 	opts := gsp.LoadOpts{
-		InPoint:  float64(cue.PosStart) / 1000,
-		OutPoint: float64(cue.PosEnd) / 1000,
-		Hold:     cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")),
-		Volume:   cue.Volume,
+		InPoint:   float64(cue.PosStart) / 1000,
+		OutPoint:  float64(cue.PosEnd) / 1000,
+		Hold:      cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")),
+		Loop:      cue.Loop,
+		LoopCount: cue.LoopCount,
+		Volume:    cue.Volume,
 	}
 	if err := gsp.LoadWithOpts(cue.Filename, opts); err != nil {
 		return err

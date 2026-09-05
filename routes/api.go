@@ -573,6 +573,12 @@ func Api(rg *gin.RouterGroup) {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}
+		if lc := strings.TrimSpace(c.PostForm("loopCount")); lc != "" {
+			if err := ctp.UpdateCue(cuePos, "loop_count", lc); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
 		autoFollow := c.PostForm("autoFollow") != ""
 		if err := ctp.UpdateCue(cuePos, "autoFollow", strconv.FormatBool(autoFollow)); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
