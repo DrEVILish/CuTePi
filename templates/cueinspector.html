@@ -4,6 +4,26 @@
   <p class="text-muted small mb-0">Select a cue to edit its trim In/Out and Hold settings.</p>
   {{ else }}
   {{ $dur := .MediaDuration }}
+  {{ if .Cue.Missing }}
+  <div class="alert alert-warning py-2 px-3 d-flex align-items-center gap-2 flex-wrap">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <span class="me-2">Source file missing from disk. Re-link to another media item or delete this cue.</span>
+    <form class="d-inline-flex align-items-center gap-2"
+      hx-put="/api/cue/{{ .Cue.CuePos }}/replace" hx-target="#cueinspector-body" hx-swap="outerHTML">
+      <select name="filename" class="form-select form-select-sm w-auto" aria-label="Replacement media">
+        <option value="" selected>Replace with&hellip;</option>
+        {{ range .Pool }}
+        <option value="{{ .Filename }}">{{ .Filename }}</option>
+        {{ end }}
+      </select>
+      <button class="btn btn-sm btn-outline-warning" type="submit">Re-link</button>
+    </form>
+    <form class="d-inline-flex"
+      hx-delete="/api/cue/{{ .Cue.CuePos }}" hx-target="#cuesheet" hx-swap="outerHTML">
+      <button class="btn btn-sm btn-outline-danger" type="submit" title="Delete this cue">Delete cue</button>
+    </form>
+  </div>
+  {{ end }}
   <div class="d-flex flex-wrap align-items-end gap-3">
     <div>
       <div class="small text-muted">Cue</div>

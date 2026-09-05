@@ -48,6 +48,7 @@ func InitDB() error {
 			thumbnail_pending BOOLEAN NOT NULL DEFAULT 1,
 			waveform TEXT NOT NULL DEFAULT '',
 			waveform_pending BOOLEAN NOT NULL DEFAULT 0,
+			missing BOOLEAN NOT NULL DEFAULT 0,
 			date_added DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
 	`)
@@ -60,6 +61,7 @@ func InitDB() error {
 	mpNewCols := []struct{ name, ddl string }{
 		{"waveform", "TEXT NOT NULL DEFAULT ''"}, // NOT NULL so sqlx can scan into Go string
 		{"waveform_pending", "BOOLEAN NOT NULL DEFAULT 0"},
+		{"missing", "BOOLEAN NOT NULL DEFAULT 0"},
 	}
 	for _, nc := range mpNewCols {
 		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE mediapool ADD COLUMN %s %s;`, nc.name, nc.ddl))

@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"CuTePi/config"
 	"CuTePi/media"
 	"CuTePi/ws"
 )
@@ -26,6 +29,7 @@ type Media struct {
 	ThumbnailPending bool      `db:"thumbnail_pending"`
 	Waveform         string    `db:"waveform"` // JSON array of amplitude peaks (0..1), "" if unanalysed
 	WaveformPending  bool      `db:"waveform_pending"`
+	Missing          bool      `db:"missing"` // source file absent from disk (startup scan)
 	DateAdded        time.Time `db:"date_added"`
 }
 
@@ -306,6 +310,55 @@ func GetMediapool() (pool Mediapool, err error) {
 		return Mediapool{}, err
 	}
 	return Mediapool{medias}, nil
+}
+
+// MarkMissingFiles flags mediapool rows whose source file is no longer on
+// disk. Runs once at startup (see main.go): no periodic scan. A file that is
+// only temporarily absent is re-flagged as present on the next startup.
+func MarkMissingFiles() {
+	var filenames []string
+	if err := db.Select(&filenames, `SELECT filename FROM mediapool`); err != nil {
+		log.Printf("Error scanning media for missing files: %v", err)
+		return
+	}
+	for _, f := range filenames {
+		_, err := os.Stat(filepath.Join(config.MediaLocation(), f))
+		missing := err != nil
+		if _, uerr := db.Exec(`UPDATE mediapool SET missing = ? WHERE filename = ?`, boolInt(missing), f); uerr != nil {
+			log.Printf("Error flagging media %q missing=%v: %v", f, missing, uerr)
+		}
+	}
+	bumpMediaVersion()
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// ReplaceCueMedia re-links a cue to a different media item (used to repair a
+// cue whose original source file went missing). The cue's title and position
+// are kept; only media_id changes.
+func ReplaceCueMedia(cuePos, filename string) error {
+	cuePosInt, err := strconv.Atoi(cuePos)
+	if err != nil {
+		return err
+	}
+	res, err := db.Exec(`
+		UPDATE cuesheet SET media_id =
+			(SELECT media_id FROM mediapool WHERE filename = ?)
+		WHERE cuePos = ?;`, filename, cuePosInt)
+	if err != nil {
+		log.Printf("Error re-linking cue %s to %q: %v", cuePos, filename, err)
+		return err
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return fmt.Errorf("media %q not found", filename)
+	}
+	bumpCuesheetVersion()
+	return nil
 }
 
 func AddCue(filename string, cuePos string) (err error) {

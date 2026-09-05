@@ -3,6 +3,7 @@ package ctp
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -765,6 +766,65 @@ func TestLoopCountColumnAndDefaults(t *testing.T) {
 	}
 	if err := UpdateCue(pos, "loop_count", "-1"); err == nil {
 		t.Fatalf("UpdateCue loop_count -1 should be rejected")
+	}
+}
+
+func TestMarkMissingFilesAndRelink(t *testing.T) {
+	dir := t.TempDir()
+	config.SetDirsForTesting(dir)
+	if err := os.WriteFile(filepath.Join(dir, "exists.mp4"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("writing fixture media: %v", err)
+	}
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	_ = setSelectedCuePos(0)
+	mustRegisterMedia(t, "exists.mp4")
+	mustRegisterMedia(t, "gone.mp4")
+
+	MarkMissingFiles()
+	pool, err := GetMediapool()
+	if err != nil {
+		t.Fatalf("GetMediapool: %v", err)
+	}
+	missing := map[string]bool{}
+	for _, m := range pool.Medias {
+		missing[m.Filename] = m.Missing
+	}
+	if missing["exists.mp4"] {
+		t.Fatalf("exists.mp4 flagged missing, want present")
+	}
+	if !missing["gone.mp4"] {
+		t.Fatalf("gone.mp4 not flagged missing, want missing")
+	}
+
+	if err := AddCue("gone.mp4", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	sheet, err := GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	if len(sheet.Cues) != 1 {
+		t.Fatalf("expected 1 cue, got %d", len(sheet.Cues))
+	}
+	pos := strconv.Itoa(sheet.Cues[0].CuePos)
+
+	if err := ReplaceCueMedia(pos, "exists.mp4"); err != nil {
+		t.Fatalf("ReplaceCueMedia: %v", err)
+	}
+	cue, err := GetCue(pos)
+	if err != nil {
+		t.Fatalf("GetCue: %v", err)
+	}
+	if cue.Filename != "exists.mp4" {
+		t.Fatalf("relinked cue filename = %q, want exists.mp4", cue.Filename)
+	}
+	if cue.Title != "gone.mp4" {
+		t.Fatalf("relink must keep the old title, got %q", cue.Title)
+	}
+	if err := ReplaceCueMedia(pos, "no-such.mp4"); err == nil {
+		t.Fatalf("re-linking to an unknown filename should fail")
 	}
 }
 

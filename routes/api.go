@@ -623,6 +623,22 @@ func Api(rg *gin.RouterGroup) {
 		})
 	})
 
+	// Re-link a cue to a different media item. Used to repair a cue whose
+	// original source file went missing (the inspector's warning box).
+	rg.PUT("/cue/:cuePos/replace", func(c *gin.Context) {
+		cuePos := c.Param("cuePos")
+		filename := strings.TrimSpace(c.PostForm("filename"))
+		if filename == "" {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "a replacement media file is required"})
+			return
+		}
+		if err := ctp.ReplaceCueMedia(cuePos, filename); err != nil {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		c.HTML(http.StatusOK, "cueinspector.html", inspectorData())
+	})
+
 	// Bulk reorder: client sends the full ordered list of cuePos values
 	// (as produced by a drag-and-drop). Server reindexes 1..N atomically.
 	rg.PUT("/cue/reorder", func(c *gin.Context) {

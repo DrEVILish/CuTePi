@@ -18,10 +18,11 @@
     </thead>
     <tbody>
       {{ range .Cuesheet.Cues }}
-      <tr class="cue {{ if .Selected }}table-warning{{ end }}" {{ if .Color }}style="--cue-accent: {{ .Color }}"{{ end }} data-cue-pos="{{ .CuePos }}" data-cue-auto-continue="{{ .AutoContinue }}" data-cue-color="{{ .Color }}" data-cue-fade-action="{{ .FadeAction }}" data-cue-fade-out="{{ .FadeOut }}" draggable="true"
+      <tr class="cue {{ if .Selected }}table-warning{{ end }}" {{ if .Color }}style="--cue-accent: {{ .Color }}"{{ end }} data-cue-pos="{{ .CuePos }}" data-cue-auto-continue="{{ .AutoContinue }}" data-cue-color="{{ .Color }}" data-cue-fade-action="{{ .FadeAction }}" data-cue-fade-out="{{ .FadeOut }}" data-cue-missing="{{ .Missing }}" draggable="true"
         {{ if not .Selected }}hx-trigger="click" hx-post="/api/cue/{{ .CuePos }}" hx-target="#cuesheet" hx-swap="outerHTML"{{ end }}>
         <td class="cue-type" title="{{ .Mimetype }}">
           <i class="bi {{ typeIcon .MediaType }}"></i>
+          {{ if .Missing }}<i class="bi bi-exclamation-triangle-fill text-warning" title="Source file missing from disk"></i>{{ end }}
         </td>
         <td class="cue-num">
           <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/cueNum" hx-swap="outerHTML">{{ .CueNum }}</span>

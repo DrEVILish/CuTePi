@@ -41,6 +41,10 @@ func main() {
 	}
 	defer ctp.CloseDB()
 
+	// One-time scan flags media whose source files are missing on disk; cues
+	// and pool tiles then surface a warning (see the Missing flag).
+	ctp.MarkMissingFiles()
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {

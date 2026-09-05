@@ -21,6 +21,7 @@ type MediapoolItem struct {
 	Mimetype  string
 	Thumbnail string
 	DateAdded string
+	Missing   bool
 }
 
 func formatSize(bytes int) string {
@@ -72,6 +73,7 @@ func mediapoolView() ([]MediapoolItem, error) {
 			Mimetype:  m.Mimetype,
 			Thumbnail: thumbnail,
 			DateAdded: m.DateAdded.Local().Format("2006-01-02 15:04"),
+			Missing:   m.Missing,
 		})
 	}
 	return mediapool, nil
@@ -102,18 +104,35 @@ var cuePalette = map[string]string{
 func inspectorData() gin.H {
 	pos, err := ctp.SelectedCuePos()
 	if err != nil || pos == 0 {
-		return gin.H{"Cue": ctp.Cue{}, "Selected": false, "MediaDuration": 0, "Palette": cuePalette}
+		return gin.H{"Cue": ctp.Cue{}, "Selected": false, "MediaDuration": 0, "Palette": cuePalette, "Pool": replacementPool()}
 	}
 	cue, err := ctp.GetCue(strconv.Itoa(pos))
 	if err != nil {
-		return gin.H{"Cue": ctp.Cue{}, "Selected": false, "MediaDuration": 0, "Palette": cuePalette}
+		return gin.H{"Cue": ctp.Cue{}, "Selected": false, "MediaDuration": 0, "Palette": cuePalette, "Pool": replacementPool()}
 	}
 	return gin.H{
 		"Cue":           cue,
 		"Selected":      true,
 		"MediaDuration": cue.Duration,
 		"Palette":       cuePalette,
+		"Pool":          replacementPool(),
 	}
+}
+
+// replacementPool is the media pool subset whose source files exist on disk,
+// offered as re-link targets for cues whose source has gone missing.
+func replacementPool() []MediapoolItem {
+	items, err := mediapoolView()
+	if err != nil {
+		return nil
+	}
+	ok := make([]MediapoolItem, 0, len(items))
+	for _, it := range items {
+		if !it.Missing {
+			ok = append(ok, it)
+		}
+	}
+	return ok
 }
 
 // typeIcon maps the cached MediaType kind to a Bootstrap icon class used for

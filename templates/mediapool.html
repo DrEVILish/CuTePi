@@ -66,6 +66,10 @@
           draggable="true"
           data-media-filename="{{ .Filename }}"
           alt="Thumbnail">
+          {{ if .Missing }}
+          <i class="bi bi-exclamation-triangle-fill text-warning position-absolute top-0 start-0 m-1 z-3 fs-5"
+            title="Source file missing from disk" aria-label="Source file missing from disk"></i>
+          {{ end }}
           <div class="media_text position-absolute top-50 start-50 translate-middle text-bottom text-light bg-dark bg-opacity-75 p-2 rounded z-1">
             <p class="mb-0">{{ .Filename }}</p>
             <div class="position-absolute bottom-0 start-0 m-2">
