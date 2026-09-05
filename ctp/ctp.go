@@ -48,8 +48,8 @@ type Cue struct {
 	Parent         int     `db:"parent"`
 	FadeOut        int     `db:"fadeOut"` // ms; fade & stop other cues over this time
 	FadeAction     string  `db:"fadeAction"`
-	AutoFollow     bool    `db:"autoFollow"`
-	Volume         float64 `db:"volume"` // per-cue master gain in dB; 0 = 0dB
+AutoContinue    bool    `db:"autoContinue"`
+	Volume          float64 `db:"volume"` // per-cue master gain in dB; 0 = 0dB
 	PreWaitFmt     string
 	CueDurationFmt string
 	PostWaitFmt    string
@@ -210,26 +210,21 @@ func NextCue() (err error) {
 	return setSelectedCuePos(next)
 }
 
-// AutoFollowSelect advances the selection to the next existing cue after the
-// cue that just finished (position endingPos), but only if that cue's
-// autoFollow flag is set. It's the app-layer side of the AutoFollow feature,
-// called from the gsp end-of-cue hook. If no later cue exists the selection
-// is left as-is.
-func AutoFollowSelect(endingPos int) {
-	cue, err := GetCue(strconv.Itoa(endingPos))
-	if err != nil || !cue.AutoFollow {
-		return
-	}
+// AutoFollowSelect is retired: auto-continue now plays the next cue (see
+// routes.autoContinueFrom), so only the query for that next cue remains.
+// NextCuePos returns the next existing cue position strictly after endingPos
+// in sheet order, or 0 (and nil) when endingPos is the last cue.
+func NextCuePos(endingPos int) (int, error) {
 	var next int
-	err = db.Get(&next, `SELECT cuePos FROM cuesheet WHERE cuePos > ? ORDER BY cuePos ASC LIMIT 1;`, endingPos)
+	err := db.Get(&next, `SELECT cuePos FROM cuesheet WHERE cuePos > ? ORDER BY cuePos ASC LIMIT 1;`, endingPos)
 	if err == sql.ErrNoRows {
-		return
+		return 0, nil
 	}
 	if err != nil {
-		log.Printf("Error getting next cue for autofollow: %v", err)
-		return
+		log.Printf("Error getting the next cue position: %v", err)
+		return 0, err
 	}
-	_ = setSelectedCuePos(next)
+	return next, nil
 }
 
 // PrevCue moves the selection to the previous existing cue position before
@@ -430,7 +425,7 @@ var editableCueColumns = map[string]bool{
 	"parent":      true,
 	"fadeOut":     true,
 	"fadeAction":  true,
-	"autoFollow":  true,
+"autoContinue": true,
 	"volume":      true,
 }
 
@@ -470,8 +465,8 @@ func CueColumnValue(cue Cue, col string) (string, error) {
 		return FormatTime(cue.FadeOut), nil
 	case "fadeAction":
 		return cue.FadeAction, nil
-	case "autoFollow":
-		return strconv.FormatBool(cue.AutoFollow), nil
+	case "autoContinue":
+		return strconv.FormatBool(cue.AutoContinue), nil
 	case "volume":
 		return strconv.FormatFloat(cue.Volume, 'f', -1, 64), nil
 	default:
@@ -509,7 +504,7 @@ func UpdateCue(cuePos string, col string, val string) (err error) {
 			return fmt.Errorf("invalid time value for %s: %w", col, perr)
 		}
 		setVal = strconv.Itoa(ms)
-	case "hold", "loop", "autoFollow":
+	case "hold", "loop", "autoContinue":
 		b, berr := parseBool(val)
 		if berr != nil {
 			return fmt.Errorf("invalid %s value: %w", col, berr)

@@ -2,4 +2,8 @@
 
 ERROR
 
+{{ with .error }}
+<pre class="m-3">{{ . }}</pre>
+{{ end }}
+
 {{ template "footer.html" }}

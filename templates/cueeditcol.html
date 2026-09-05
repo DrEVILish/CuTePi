@@ -5,10 +5,13 @@
   hx-trigger="updateValue"
   hx-put="/api/cue/{{ .cuePos }}/edit/{{ .col }}"
   hx-target="#cuesheet"
-  hx-swap="innerHTML"
+  hx-swap="outerHTML"
 >
   <input
+    autofocus
+    class="form-control form-control-sm"
     onblur="htmx.trigger('#updateValue', 'updateValue')"
+    onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }"
     name="val"
     value="{{ .val }}"
   />

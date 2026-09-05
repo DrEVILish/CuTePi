@@ -3,10 +3,31 @@
 <html>
   <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ .title }} Control Centre - CuTePi</title>
 
     <link rel="stylesheet" href="/css/index.css">
     <link rel="stylesheet" href="/css/bootstrap@5.3.3.css">
     <link rel="stylesheet" href="/css/bootstrap-icons@1.11.3.css">
+    <script>
+      (function () {
+        var theme = "blue-future";
+        try { theme = localStorage.getItem("cutepi.theme") || theme; } catch (_) {}
+        if (["lcars", "qlab", "blue-future", "custom"].indexOf(theme) === -1) theme = "blue-future";
+        document.documentElement.dataset.theme = theme;
+        if (theme === "custom") {
+          try {
+            var tokens = JSON.parse(localStorage.getItem("cutepi.customTheme"));
+            if (tokens && typeof tokens === "object") {
+              var decls = Object.keys(tokens).map(function (k) { return "  " + k + ": " + tokens[k] + ";"; }).join("\n");
+              var css = document.createElement("style");
+              css.id = "cutepi-custom-theme";
+              css.textContent = ":root[data-theme=custom] {\n" + decls + "\n}";
+              document.head.appendChild(css);
+            }
+          } catch (e) {}
+        }
+      }());
+    </script>
   </head>
 {{ end }}

@@ -1,11 +1,21 @@
 {{ define "topbar.html" }}
 
-<nav class="navbar navbar-dark bg-dark sticky-top">
+<nav class="navbar navbar-dark bg-dark">
   <div class="container-fluid d-flex justify-content-between align-items-center">
-    <h1 class="navbar-brand mb-0 h1">CuTePi</h1>
+    <a class="navbar-brand mb-0" href="/" aria-label="CuTePi control centre">
+      <img class="cutepi-logo" src="/img/cutepi-logo.svg" alt="CuTePi">
+    </a>
     <div class="btn-group">
-      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#uploadModal">Upload</button>
-      <button class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#ytdlModal">
+      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#uploadModal" title="Upload" aria-label="Upload">
+        <i class="bi bi-cloud-upload-fill"></i>
+      </button>
+      <a class="btn btn-outline-primary" href="/upload" title="Open the upload page" aria-label="Open the upload page">
+        <i class="bi bi-box-arrow-up-right"></i>
+      </a>
+      <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#qrModal" title="Show QR for mobile upload" aria-label="Show QR for mobile upload">
+        <i class="bi bi-qr-code"></i>
+      </button>
+      <button class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#ytdlModal" title="Download from URL" aria-label="Download from URL">
         <i class="bi bi-youtube"></i>
       </button>
     </div>

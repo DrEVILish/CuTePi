@@ -37,8 +37,8 @@
           aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
       </div>
       <div class="d-flex align-items-center pb-1">
-        <input class="form-check-input me-1" type="checkbox" id="insp-autofollow" name="autoFollow" value="true" {{ if .Cue.AutoFollow }}checked{{ end }}>
-        <label class="form-check-label small" for="insp-autofollow">AutoFollow</label>
+        <input class="form-check-input me-1" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
+        <label class="form-check-label small" for="insp-autocontinue">Auto-continue</label>
       </div>
       <div>
         <label class="form-label small mb-0" for="insp-color">Colour</label>

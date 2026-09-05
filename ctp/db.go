@@ -92,7 +92,7 @@ func InitDB() error {
 			parent INTEGER NOT NULL DEFAULT 0,
 			fadeOut INTEGER NOT NULL DEFAULT 0,
 			fadeAction TEXT NOT NULL DEFAULT 'peers',
-			autoFollow INTEGER NOT NULL DEFAULT 0,
+			autoContinue INTEGER NOT NULL DEFAULT 0,
 			volume REAL NOT NULL DEFAULT 0, -- per-cue master gain in dB; 0 = 0dB
 			FOREIGN KEY (media_id)
 				REFERENCES mediapool (media_id)
@@ -102,6 +102,19 @@ func InitDB() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("ctp: creating cuesheet table: %w", err)
+	}
+
+	// Migration: the historical autoFollow flag became autoContinue (it now
+	// auto-plays the next cue rather than only advancing the selection). Keep
+	// its values by renaming the column instead of re-adding with a default.
+	var hasAutoFollow int
+	if err := db.Get(&hasAutoFollow, `SELECT COUNT(*) FROM pragma_table_info('cuesheet') WHERE name = 'autoFollow'`); err != nil {
+		return fmt.Errorf("ctp: reading cuesheet columns: %w", err)
+	}
+	if hasAutoFollow > 0 {
+		if _, err := db.Exec(`ALTER TABLE cuesheet RENAME COLUMN autoFollow TO autoContinue;`); err != nil {
+			return fmt.Errorf("ctp: renaming autoFollow to autoContinue: %w", err)
+		}
 	}
 
 	// Migration: add newer cuesheet columns if they don't exist (for DBs
@@ -117,7 +130,7 @@ func InitDB() error {
 		{"parent", "INTEGER NOT NULL DEFAULT 0"},
 		{"fadeOut", "INTEGER NOT NULL DEFAULT 0"},
 		{"fadeAction", "TEXT NOT NULL DEFAULT 'peers'"},
-		{"autoFollow", "INTEGER NOT NULL DEFAULT 0"},
+		{"autoContinue", "INTEGER NOT NULL DEFAULT 0"},
 		{"volume", "REAL NOT NULL DEFAULT 0"},
 	}
 	for _, nc := range newCols {
@@ -200,7 +213,7 @@ func migrateLegacyCuesheetDefault(d *sqlx.DB) error {
 			parent INTEGER NOT NULL DEFAULT 0,
 			fadeOut INTEGER NOT NULL DEFAULT 0,
 			fadeAction TEXT NOT NULL DEFAULT 'peers',
-			autoFollow INTEGER NOT NULL DEFAULT 0,
+			autoContinue INTEGER NOT NULL DEFAULT 0,
 			volume REAL NOT NULL DEFAULT 0,
 			FOREIGN KEY (media_id) REFERENCES mediapool (media_id)
 				ON UPDATE CASCADE ON DELETE CASCADE
@@ -208,10 +221,10 @@ func migrateLegacyCuesheetDefault(d *sqlx.DB) error {
 		INSERT INTO cuesheet_new
 			(cue_id, cuePos, cueNum, media_id, title, posStart, posEnd,
 			 preWait, cueDuration, postWait, hold, loop, color, parent,
-			 fadeOut, fadeAction, autoFollow, volume)
+			 fadeOut, fadeAction, autoContinue, volume)
 		SELECT cue_id, cuePos, cueNum, media_id, title, posStart, posEnd,
 			 preWait, cueDuration, postWait, hold, loop, color, parent,
-			 fadeOut, fadeAction, autoFollow, volume
+			 fadeOut, fadeAction, autoContinue, volume
 		FROM cuesheet;
 		DROP TABLE cuesheet;
 		ALTER TABLE cuesheet_new RENAME TO cuesheet;

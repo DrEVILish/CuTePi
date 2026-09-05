@@ -12,9 +12,8 @@
       </div>
       <form
         id="youtube-dl"
-        hx-encoding="multipart/form-data"
         hx-post="/youtube"
-        hx-swap="innerHTML"
+        hx-swap="outerHTML"
         hx-target="#mediapool"
       >
         <div class="modal-body">
@@ -24,12 +23,14 @@
             id="url"
             type="url"
             name="url"
+            required
+            autocomplete="url"
             placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
           />
-          <span id="info"></span>
+          <span id="info" class="small" role="status" aria-live="polite"></span>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-danger" id="download">Download</button>
+          <button class="btn btn-danger" id="download" type="submit">Download</button>
         </div>
       </form>
     </div>

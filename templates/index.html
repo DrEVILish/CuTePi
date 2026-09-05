@@ -1,22 +1,49 @@
 {{ template "header.html" }}
 
 
-<body data-bs-theme="dark">
+<body data-bs-theme="dark" class="app-body">
     {{ template "topbar.html" }}
 
-    <div class="container-fluid mt-3">
-      <div class="row gx-3">
-        <div class="col-md-3 d-flex flex-column overflow-auto" style="max-height: 90svh;">
+    <div class="container-fluid app-content">
+      <button
+        type="button"
+        class="btn btn-outline-secondary btn-sm"
+        id="mediapool-expand-btn"
+        title="Expand the media pool"
+        aria-label="Expand the media pool"
+      >
+        <i class="bi bi-chevron-double-right"></i>
+      </button>
+      <div class="app-main-row">
+        <div class="app-pane d-flex flex-column" id="mediapool-pane">
           {{ template "mediapool.html" . }}
         </div>
-        <div class="col-md-9 overflow-auto" style="max-height: 90svh;">
-          {{ template "cuesheet.html" }}
+        <div id="mediapool-resizer" title="Resize the media pool (drag)" aria-label="Resize the media pool"></div>
+        <div class="app-pane" id="cuesheet-pane">
+          {{ template "cuesheet.html" . }}
+        </div>
+      </div>
+      <div class="inspector-panel mt-2" id="cueinspector-panel">
+        <div class="d-flex align-items-center gap-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="inspector-toggle"
+            title="Toggle the cue inspector" aria-label="Toggle the cue inspector"
+            data-bs-toggle="collapse" data-bs-target="#cueinspector-collapse" aria-expanded="true" aria-controls="cueinspector-collapse">
+            <i class="bi bi-sliders"></i> Cue Inspector
+          </button>
+          <span class="text-muted small">Trim In/Out, hold and playback for the selected cue</span>
+        </div>
+        <div class="collapse show mt-2" id="cueinspector-collapse">
+          {{ template "cueinspector.html" .Inspector }}
         </div>
       </div>
     </div>
 
     {{ template "uploadModal.html" }}
     {{ template "ytdlModal.html" }}
+    {{ template "deletemodal.html" }}
+    {{ template "settingsModal.html" }}
+    {{ template "testModal.html" }}
+    {{ template "qrModal.html" }}
 
 
 {{ template "footer.html" }}

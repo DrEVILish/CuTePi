@@ -2,10 +2,12 @@ package routes
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -201,6 +203,45 @@ func loadAndPlayCue(cue ctp.Cue) error {
 	return nil
 }
 
+// autoContinueFrom implements per-cue auto-continue: a cue flagged
+// autoContinue plays the next cue in sheet order after it ends. The ending
+// cue's postWait and the next cue's preWait pause the chain (waits are only
+// meaningful between auto-continuing cues). The whole advance is skipped if
+// the operator does anything else during waits, so a triggered cue can never
+// interrupt a newer decision.
+func autoContinueFrom(endingPos int) {
+	cue, err := ctp.GetCue(strconv.Itoa(endingPos))
+	if err != nil || !cue.AutoContinue {
+		return
+	}
+	next, err := ctp.NextCuePos(endingPos)
+	if err != nil || next == 0 {
+		return
+	}
+	nextCue, err := ctp.GetCue(strconv.Itoa(next))
+	if err != nil {
+		return
+	}
+	delay := time.Duration(cue.PostWait) * time.Millisecond
+	if nextCue.AutoContinue {
+		delay += time.Duration(nextCue.PreWait) * time.Millisecond
+	}
+	go func() {
+		time.Sleep(delay)
+		// ponytail: cuePos identity guards against operator intervention during
+		// waits; per-cue generation counters would be needed to disambiguate
+		// "same cue replayed" from "still that original cue".
+		if gsp.CurrentCuePos() != endingPos {
+			return
+		}
+		if err := loadAndPlayCue(nextCue); err != nil {
+			log.Printf("auto-continue: loading next cue %d failed: %v", next, err)
+			return
+		}
+		_ = ctp.SetCue(strconv.Itoa(next))
+	}()
+}
+
 // renderCuesheet fetches the cuesheet, tags the currently-playing cue, and
 // renders the partial. Shared by every action that returns the cuesheet HTML.
 func renderCuesheet(c *gin.Context) {
@@ -214,10 +255,11 @@ func renderCuesheet(c *gin.Context) {
 }
 
 func Index(rg *gin.RouterGroup) {
-	// AutoFollow: when a cue reaches its end (and its autoFollow flag is set),
-	// advance the server-side selection to the next cue. Registered once at
-	// startup, before any route serves traffic.
-	gsp.SetCueEndHook(func(pos int) { ctp.AutoFollowSelect(pos) })
+	// Auto-continue: when a cue with the autoContinue flag reaches its end,
+	// wait its postWait, then play the next cue in sheet order (waiting the
+	// next cue's preWait too if it is itself auto-continuing). Loop always
+	// wins: gsp only fires the end hook once a finite loop count is exhausted.
+	gsp.SetCueEndHook(autoContinueFrom)
 
 	rg.GET("/", func(c *gin.Context) {
 		mediapool, err := mediapoolView()

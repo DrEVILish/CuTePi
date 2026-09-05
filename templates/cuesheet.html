@@ -2,63 +2,65 @@
 
 <div id="cuesheet">
   <h2>Cuesheet</h2>
-  <div id="ArrowDown" hx-trigger="ArrowDown" hx-post="/api/cue/next" hx-target="#cuesheet" hx-swap="innerHTML"></div>
-  <div id="ArrowUp" hx-trigger="ArrowUp" hx-post="/api/cue/prev" hx-target="#cuesheet" hx-swap="innerHTML"></div>
-  <div id="spaceBar" hx-trigger="spaceBar" hx-post="/api/cue/play" hx-target="#cuesheet" hx-swap="innerHTML"></div>
+  <div id="ArrowDown" hx-trigger="ArrowDown" hx-post="/api/cue/next" hx-target="#cuesheet" hx-swap="outerHTML"></div>
+  <div id="ArrowUp" hx-trigger="ArrowUp" hx-post="/api/cue/prev" hx-target="#cuesheet" hx-swap="outerHTML"></div>
+  <div id="spaceBar" hx-trigger="spaceBar" hx-post="/api/cue/selected/play" hx-swap="none"></div>
   <table class="table table-dark table-striped table-sm align-middle">
     <thead>
       <tr>
-        <th scope="col"></th>
-        <th scope="col">Position</th>
-        <th scope="col">Number</th>
-        <th scope="col">Name</th>
-        <th scope="col">Pre-Wait</th>
-        <th scope="col">Duration</th>
-        <th scope="col">Post-Wait</th>
-        <th scope="col">Post-Action</th>
-        <th scope="col">Buttons</th>
+        <th scope="col" class="col-type" title="Media type"><span class="sr-only">Type</span></th>
+        <th scope="col" class="col-cue-num" title="Cue number">Cue No</th>
+        <th scope="col" data-column-resize="cueName">Cue Name<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
+        <th scope="col" data-column-resize="preWait">Cue Pre-Wait<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
+        <th scope="col" data-column-resize="cueDur">Cue Duration<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
+        <th scope="col" data-column-resize="postWait">Cue Post-Wait<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
       </tr>
     </thead>
     <tbody>
-      <!-- Loop over cues -->
-      {{ range .Cuesheet }}
-      <!-- Example cue row when selected -->
-      {{ if .Selected }}
-      <tr class="cue table-warning">
-      {{ else }}
-      <tr class="cue" hx-trigger="click" hx-get="/api/cue/{{ .CuePos }}" hx-target="#cuesheet">
-      {{ end }}
-        <th scope="row"></th>
-        <td>{{ .CuePos }}</td>
-        <td>
+      {{ range .Cuesheet.Cues }}
+      <tr class="cue {{ if .Selected }}table-warning{{ end }}" {{ if .Color }}style="--cue-accent: {{ .Color }}"{{ end }} data-cue-pos="{{ .CuePos }}" data-cue-auto-continue="{{ .AutoContinue }}" data-cue-color="{{ .Color }}" data-cue-fade-action="{{ .FadeAction }}" data-cue-fade-out="{{ .FadeOut }}" draggable="true"
+        {{ if not .Selected }}hx-trigger="click" hx-post="/api/cue/{{ .CuePos }}" hx-target="#cuesheet" hx-swap="outerHTML"{{ end }}>
+        <td class="cue-type" title="{{ .Mimetype }}">
+          <i class="bi {{ typeIcon .MediaType }}"></i>
+        </td>
+        <td class="cue-num">
           <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/cueNum" hx-swap="outerHTML">{{ .CueNum }}</span>
         </td>
-        <td>
+        <td class="cue-name">
+          <span class="cue-colour-swatch" {{ if not .Color }}style="display:none"{{ end }} aria-hidden="true"></span>
           <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/title" hx-swap="outerHTML">{{ .Title }}</span>
         </td>
         <td>
-          <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/posStart" hx-swap="outerHTML">00:00</span> // {{ .PosStart }}
+          <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/preWait" hx-swap="outerHTML">{{ .PreWaitFmt }}</span>
         </td>
         <td>
-          <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/duration" hx-swap="outerHTML">00:30</span> // {{ .Duration }}
+          <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/cueDuration" hx-swap="outerHTML">{{ .CueDurationFmt }}</span>
         </td>
         <td>
-          <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/posEnd" hx-swap="outerHTML">00:30</span> // {{ .PosEnd }}
+          <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/postWait" hx-swap="outerHTML">{{ .PostWaitFmt }}</span>
         </td>
-        <td>Follow</td>
-        <td>
-          <button
-            class="btn btn-close btn-close-white btn-sm"
-            hx-delete="/api/cue/{{ .CuePos }}"
-            hx-target="#cuesheet"
-            hx-swap="innerHTML"
-            aria-label="Close"
-          ></button>
+      </tr>
+      {{ if .Playing }}
+      <tr class="cue-progress" data-cue-pos="{{ .CuePos }}">
+        <td colspan="6">
+          <div class="cue-progress-bar" data-pos="{{ .PlayPos }}" data-dur="{{ .PlayDur }}" role="progressbar" tabindex="0"
+               title="{{ displayTime .PlayPos }} of {{ displayTime .PlayDur }}">
+            <div class="cue-progress-fill" style="width: {{ progressPct .PlayPos .PlayDur }}%"></div>
+          </div>
+        </td>
+      </tr>
+      {{ end }}
+      {{ end }}
+      {{ if not .Cuesheet.Cues }}
+      <tr class="cuesheet-empty">
+        <td colspan="6">
+          <p class="mb-0">Drag a cue from the Mediapool here.<br><span class="small">Or use a media item's menu to add it.</span></p>
         </td>
       </tr>
       {{ end }}
     </tbody>
   </table>
+  <div class="cuesheet-blank-rows" aria-hidden="true"></div>
 </div>
 
 {{ end }}

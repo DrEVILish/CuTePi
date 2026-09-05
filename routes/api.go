@@ -579,8 +579,8 @@ func Api(rg *gin.RouterGroup) {
 				return
 			}
 		}
-		autoFollow := c.PostForm("autoFollow") != ""
-		if err := ctp.UpdateCue(cuePos, "autoFollow", strconv.FormatBool(autoFollow)); err != nil {
+		autoCont := c.PostForm("autoContinue") != ""
+		if err := ctp.UpdateCue(cuePos, "autoContinue", strconv.FormatBool(autoCont)); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}

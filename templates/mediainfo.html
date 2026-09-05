@@ -1,8 +1,49 @@
 {{ define "mediainfo.html" }}
 
-<div class="text-center text-light mx-auto">
+<div id="mediainfo" class="text-center text-light mx-auto">
   <h5 class="mb-0">Now Playing</h5>
-  <small>00:01:23 / 00:04:56</small>
+  {{ if .Filename }}
+    <small>{{ .Filename }} &middot; {{ .Position }} / {{ .Duration }}</small>
+    <div class="d-flex align-items-center justify-content-center gap-2 mt-1">
+      <input
+        type="range"
+        class="ctp-slider ctp-scrubber"
+        id="nowplaying-scrubber"
+        value="{{ .PositionRaw }}"
+        min="0"
+        max="{{ .DurationRaw }}"
+        step="0.05"
+        aria-label="Seek within the clip">
+    </div>
+  {{ else }}
+    <small class="text-muted">Nothing playing</small>
+  {{ end }}
 </div>
+
+<script>
+  (function () {
+    var root = document.getElementById("nowplaying-scrubber");
+    if (!root) return;
+
+    function post(url, data) {
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "HX-Request": "true" },
+        body: data,
+      });
+    }
+
+    var scrubTimer = null;
+    root.addEventListener("input", function () {
+      var pos = parseFloat(root.value) || 0;
+      // Send the seek after a short debounce so dragging doesn't flood the
+      // server; the poller skips re-renders while the thumb is :active.
+      clearTimeout(scrubTimer);
+      scrubTimer = setTimeout(function () {
+        post("/api/seek", "position=" + pos);
+      }, 120);
+    });
+  })();
+</script>
 
 {{ end }}

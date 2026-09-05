@@ -682,61 +682,39 @@ func TestCueOrderAndSelectionStayConsistentAfterChanges(t *testing.T) {
 	}
 }
 
-func TestAutoFollowSelectAdvancesWhenFlagSet(t *testing.T) {
+func TestNextCuePos(t *testing.T) {
 	if err := ClearCueSheet(); err != nil {
 		t.Fatalf("ClearCueSheet: %v", err)
 	}
 	_ = setSelectedCuePos(0)
-	mustRegisterMedia(t, "af-a.mp4")
-	mustRegisterMedia(t, "af-b.mp4")
-	if err := AddCue("af-a.mp4", ""); err != nil {
-		t.Fatalf("AddCue a: %v", err)
-	}
-	if err := AddCue("af-b.mp4", ""); err != nil {
-		t.Fatalf("AddCue b: %v", err)
+	mustRegisterMedia(t, "nc-a.mp4")
+	mustRegisterMedia(t, "nc-b.mp4")
+	mustRegisterMedia(t, "nc-c.mp4")
+	for _, f := range []string{"nc-a.mp4", "nc-b.mp4", "nc-c.mp4"} {
+		if err := AddCue(f, ""); err != nil {
+			t.Fatalf("AddCue %s: %v", f, err)
+		}
 	}
 	cues, err := GetCuesheet()
 	if err != nil {
 		t.Fatalf("GetCuesheet: %v", err)
 	}
-	if len(cues.Cues) < 2 {
-		t.Fatalf("expected 2 cues, got %d", len(cues.Cues))
+	if len(cues.Cues) != 3 {
+		t.Fatalf("expected 3 cues, got %d", len(cues.Cues))
 	}
-	posA := cues.Cues[0].CuePos
-	posB := cues.Cues[1].CuePos
+	posA, posB, posC := cues.Cues[0].CuePos, cues.Cues[1].CuePos, cues.Cues[2].CuePos
 
-	if err := UpdateCue(strconv.Itoa(posA), "autoFollow", "true"); err != nil {
-		t.Fatalf("UpdateCue autoFollow: %v", err)
+	next, err := NextCuePos(posA)
+	if err != nil || next != posB {
+		t.Fatalf("NextCuePos(%d) = %d, %v; want %d", posA, next, err, posB)
 	}
-	// AutoFollow is only set on cue A; B has it off.
-	cueB, err := GetCue(strconv.Itoa(posB))
-	if err != nil {
-		t.Fatalf("GetCue B: %v", err)
+	next, err = NextCuePos(posB)
+	if err != nil || next != posC {
+		t.Fatalf("NextCuePos(%d) = %d, %v; want %d", posB, next, err, posC)
 	}
-	if err := UpdateCue(strconv.Itoa(posB), "autoFollow", "false"); err != nil {
-		t.Fatalf("UpdateCue B autoFollow: %v", err)
-	}
-	_ = cueB
-
-	_ = setSelectedCuePos(posA)
-	// A has autoFollow -> fix: verify that ending at posA selects posB.
-	AutoFollowSelect(posA)
-	got, err := SelectedCuePos()
-	if err != nil {
-		t.Fatalf("SelectedCuePos: %v", err)
-	}
-	if got != posB {
-		t.Fatalf("AutoFollowSelect(posA) = %d, want posB %d", got, posB)
-	}
-
-	// Cue B has autoFollow off -> ending at posB must NOT move selection.
-	AutoFollowSelect(posB)
-	got, err = SelectedCuePos()
-	if err != nil {
-		t.Fatalf("SelectedCuePos: %v", err)
-	}
-	if got != posB {
-		t.Fatalf("AutoFollowSelect(posB) should leave selection at %d, got %d", posB, got)
+	next, err = NextCuePos(posC)
+	if err != nil || next != 0 {
+		t.Fatalf("NextCuePos(last) = %d, %v; want 0 (no next)", next, err)
 	}
 }
 
@@ -810,7 +788,7 @@ func TestNewCueColumnsRoundTrip(t *testing.T) {
 
 	cases := map[string][2]string{
 		"loop":       {"true", "true"},
-		"autoFollow": {"true", "true"},
+		"autoContinue": {"true", "true"},
 		"color":      {"#ff00aa", "#ff00aa"},
 		"fadeAction": {"all", "all"},
 		"fadeOut":    {"2.5", "2.5"}, // 2.5 s stored as ms
@@ -829,9 +807,9 @@ func TestNewCueColumnsRoundTrip(t *testing.T) {
 			if !c.Loop {
 				t.Fatalf("loop not stored")
 			}
-		case "autoFollow":
-			if !c.AutoFollow {
-				t.Fatalf("autoFollow not stored")
+		case "autoContinue":
+			if !c.AutoContinue {
+				t.Fatalf("autoContinue not stored")
 			}
 		case "color":
 			if c.Color != vals[1] {
