@@ -43,8 +43,10 @@ All decisions from the second Q&A round are now built. Commits, newest first:
   the cuePos identity guard; `spaceBar`/`ArrowUp`/`ArrowDown` triggers.
 - `29dc239` housekeeping.
 
-Still open in DESIGN.md: Q18 (config `loop` default seeding) and Q19
-(smoke-test script) — documented, not blocking.
+Still open in DESIGN.md: Q18 (config `loop` default seeding) resolved 2026-09-06
+(see Design Notes — cue loads already always use the cue's own flag; config is
+only the direct-load default). Q19 (smoke-test script) still open — documented,
+not blocking.
 
 ## 2026-09-04 — Product decisions round 2 (docs only, no code)
 

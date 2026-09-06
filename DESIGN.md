@@ -647,12 +647,18 @@ covered in this pass - see Suggested Improvements below).
   recorded in "Product Decisions"; this section is now for anything still open.
 
 Remaining open:
-- Config `loop` default: `config.json`'s `loop` currently applies on every
-  clip load. Should it now only seed the value at cue registration (load
-  always honours the cue's own flag), or be removed entirely?
 - Pi validation ownership: whether a `./smoke-test.sh` (generate assets with
   ffmpeg, exercise upload → pool → cue → play → trim → stop via curl against
   the HDMI sink) should ship so hardware validation is one command.
+
+Resolved:
+- **Config `loop` default (2026-09-06):** cue loads already always honour the
+  cue's own flag — `loadAndPlayCue` passes `Loop: cue.Loop` straight into
+  `LoadWithOpts`. `config.Loop()` is only consulted for *direct* pool-loads
+  (`gsp.Load`) and as the reported/inspected default when no pipeline is
+  loaded (the Settings Loop toggle persists it). New cues default loop off
+  (registration does not seed). Keep it as the direct-load default; not
+  removed, no registration seeding.
 
 ## UI Pass (2026-08-28)
 
