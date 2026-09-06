@@ -33,23 +33,29 @@ are the build items those decisions imply:
 - [x] **Import-time playability probe** — reject undecodable/corrupt files at
       import instead of failing at cue time; undecodable cue start = immediate
       error to the user. (owner: `us`, priority: **high**)
-- [ ] **Cue Groups** — visual folders grouping cues, nestable; rendered as
+- [x] **Cue Groups** — visual folders grouping cues, nestable; rendered as
       collapsible rows with indentation, drag-reorder across folder boundaries;
       global order stays flat `cuePos` (folder membership is a presentation
       layer); a group can act as a playlist. New `cue_group` table (incl.
-      `parent_group_id`). (moved from Deferred, owner: `us`, priority: **high**)
-- [ ] **Slideshow** — a cue group's images are visible cue rows inside the
+      `parent_group_id`). (moved from Deferred, owner: `us`, priority: **high**) —
+      implemented 2026-09-05: membership rides `cuesheet.parent`; group headers
+      render as contiguous clusters; empty groups trail for discoverability; dnd
+      drop onto a header assigns membership.
+- [x] **Slideshow** — a cue group's images are visible cue rows inside the
       group; the group inspector toggles slideshow mode (shuffle, loop, fade,
       duration-per-image stored on `cue_group`); an indicator marks the image
       currently displayed; new folder icon + distinct icon for slideshow
       groups in the type column. (moved from Deferred, owner: `us`, priority:
-      medium)
+      medium) — implemented 2026-09-05: `POST /api/group/:id/play` runs a
+      goroutine cycling member images (shuffle/loop/fade/duration, cuePos
+      identity guard); the Playing image's progress row marks it; header icon
+      flips to images when slideshow is on.
 - [x] **Missing-source detection** — one scan at startup; Media Pool entries
       with a missing source file get a warning-triangle icon; cues referencing
       a missing file show a warning offering delete-the-cue or choose-a-
       replacement-file (re-link). No periodic scan. (owner: `us`, priority:
       medium)
-- [ ] **.CTP export + import** — ZIP of a JSON manifest (all cue info incl.
+- [x] **.CTP export + import** — ZIP of a JSON manifest (all cue info incl.
       audit trail) + referenced Media Pool content; import restores a show with
       a modal choice of append-to-end or overwrite. (owner: `us`, priority:
       medium)
@@ -60,8 +66,8 @@ are the build items those decisions imply:
 
 ## Deferred (large schema-level features, queued for a follow-up pass)
 
-- [ ] **Multi-image slideshow** — moved to active (2026-09-04), see above.
-      (owner: `us`, priority: low)
+- [x] **Multi-image slideshow** — moved to active (2026-09-04), implemented
+      2026-09-05, see above. (owner: `us`, priority: low)
 
 ## Build / Setup (blockers first)
 

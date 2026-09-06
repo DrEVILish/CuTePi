@@ -126,23 +126,24 @@ smoke test (`gsp`).
 
 Implemented: Cue Inspector, trim, Hold, cue reorder, QR upload, WebSocket sync,
 persisted selection, restart/shutdown controls, dead-code cleanup, waveform-in-
-DB, and service-managed operation (a systemd unit installed by `install.sh`).
+DB, service-managed operation (a systemd unit installed by `install.sh`), and
+the full 2026-09-04 feature set: **Space** cue trigger, **auto-continue** with
+`preWait`/`postWait` timing plus the **loop counter**, **defaults** (loop/hold
+off), **Cue Groups** (nestable collapsible folders that act as playlists;
+membership rides the flat `cuePos` order), **slideshow** cue groups (visible
+image rows, shuffled/looped/faded on per-group settings, with a now-showing
+indicator), **missing-source** warnings (startup scan; cues offer delete or
+re-link), **.CTP export + import** (ZIP of a JSON manifest incl. audit trail +
+referenced media; import appends or overwrites), an **import-time playability
+probe**, and the **Web UI log viewer** (level-selectable recording, clear,
+audit trail).
 
-In scope (decided 2026-09-04, not yet built): **Space** cue trigger (Media Pool
-tiles are not selectable), **auto-continue** with `preWait`/`postWait` timing
-plus a **loop counter** (0 = infinite, loop wins over auto-continue),
-**Cue Groups** (nestable collapsible folders that can act as playlists),
-**slideshow** cue groups (visible image rows, shuffled/looped/faded, with a
-now-showing indicator), **missing-source** warnings (startup scan; cues offer
-delete or re-link), **.CTP export + import** (ZIP of a JSON manifest incl.
-audit trail + referenced media; import appends or overwrites), an **import-time
-playability probe**, and a **Web UI log viewer** (level-selectable *recording*,
-clear, audit trail).
+Outstanding (see TODO.md): none from the 2026-09-04 scope — all built.
 
 Hardware target: Raspberry Pi 4/5, headless Debian Trixie (no display server —
 HDMI video via KMS/DRM, HDMI embedded audio exclusive to CuTePi), hardware-
-first decode with software fallback. Remaining work is the above features plus
-hardware validation on the Pi.
+first decode with software fallback. Remaining work is hardware validation on
+the Pi (plus the two DESIGN.md open questions, Q18/Q19).
 
 **Not planned** (explicitly out of scope): HyperDeck / Companion
 feature-compatibility and DeckLink SDI output.

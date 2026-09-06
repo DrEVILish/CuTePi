@@ -3,6 +3,49 @@
 This file is append-only: entries are added as work lands, never removed or
 rewritten, so it stays a true history of the project.
 
+## 2026-09-06 — 2026-09-04 feature set delivered (9 commits)
+
+All decisions from the second Q&A round are now built. Commits, newest first:
+
+- `d631b56` **Cue groups + slideshow** — `cue_group` table (name,
+  `parent_group_id`, collapse, and slideshow settings `slideshow`/`shuffle`/
+  `loop`/`fade_ms`/`duration_ms`); membership rides the existing
+  `cuesheet.parent` column, so folder membership is a pure presentation layer
+  over the flat `cuePos` order. Group CRUD routes (`/api/group`, incl.
+  collapse + inspector), `POST /api/cue/:cuePos/group` membership, and dnd
+  drop-on-group-header. The cuesheet renders contiguous group-header clusters
+  (folder icon, chevron collapse, play + inspector + delete buttons); empty
+  groups render trailing so they stay discoverable. Slideshow play
+  (`POST /api/group/:id/play`) runs a goroutine cycling member images in sheet
+  order (Fisher–Yates shuffle, loop, per-image hold default 5s, optional fade-
+  out between images), aborted the moment anything else plays/stops (cuePos
+  identity guard); the playing image's progress row is the now-showing
+  indicator.
+- `752595c` **.CTP show export/import** — export zips `cutepi.json` (manifest
+  v1: version, exportedAt, selected cue, all cues, audit trail) + present
+  media files; import validates all referenced media (in-archive or local
+  pool) *before* mutating, dedupes titles/cueNums, and appends or overwrites.
+- `7ebacc3` TODO.md reflects completed features.
+- `9bdfb83` **Web UI log viewer + audit trail** — `logs` ring buffer (1000)
+  with debug/info/warn runtime switching and an append-only structured audit
+  (`cue_start`/`cue_end`, AUD-E500); `/api/logs` GET/POST-level/DELETE;
+  terminal-style modal. First commit of the `logs` package (stray `.gitignore`
+  `logs` rule was hiding it).
+- `cb55bbc` **Import-time playability probe** — `media.VerifyPlayable`
+  (`ffmpeg -v error -t 1`) on single-file upload and yt-dlp import; images are
+  exempted (probe+thumbnail suffice).
+- `c2aedbf` **Missing-source detection** — startup scan flags lost media; pool
+  tiles get a warning triangle; cues offer delete or re-link.
+- `f6f8700` **Loop counter + defaults** — `loop_count` (0 = infinite), loop
+  wins over auto-continue; new cues default `loop`/`hold`/`loop_count` off/0.
+- `520f34f` **Auto-continue + waits** — per-cue `autoContinue`; `preWait`/
+  `postWait` only pause for auto-continuing cues; advances in sheet order with
+  the cuePos identity guard; `spaceBar`/`ArrowUp`/`ArrowDown` triggers.
+- `29dc239` housekeeping.
+
+Still open in DESIGN.md: Q18 (config `loop` default seeding) and Q19
+(smoke-test script) — documented, not blocking.
+
 ## 2026-09-04 — Product decisions round 2 (docs only, no code)
 
 Refinements from the second Q&A round; recorded in DESIGN.md (Product

@@ -149,11 +149,11 @@ sniffing is done.
 - Drag-and-drop upload directly onto the pool; multi-file upload supported.
 - Drag from pool into CueList supported.
 - Scrollable, scrollbars always visible.
-- **Missing source** (decision 2026-09-04, not yet built): at **startup** a
-  scan flags media rows whose source file is absent from disk; the pool tile
-  shows a warning-triangle icon. Cues referencing a missing file show a
-  warning in the row/inspector offering **delete the cue** or **choose a
-  replacement file** (re-links `media_id`). No periodic scanning.
+- **Missing source** (implemented 2026-09-05): at **startup** a scan flags
+  media rows whose source file is absent from disk; the pool tile shows a
+  warning-triangle icon. Cues referencing a missing file show a warning in the
+  row/inspector offering **delete the cue** or **choose a replacement file**
+  (re-links `media_id`). No periodic scanning.
 
 ## Cue List (right pane)
 
@@ -240,13 +240,16 @@ design doc's conceptual `media` → **`mediapool`** and `cues` → **`cuesheet`*
   the editable times `preWait`, `cueDuration`, `postWait` and trim points
   `posStart`/`posEnd` (INTEGER milliseconds, `0` = untrimmed at that end),
   `hold` and `loop` (0/1, **both default 0 per 2026-09-04**), `loop_count`
-  (0 = infinite, default 0), `autoContinue` (0/1, with auto-continue), a
-  `cue_group_id` (FK, with Cue Groups), and the `state` table's persisted
-  selected cue position.
-- `cue_group` (planned, Cue Groups): nestable folders (`parent_group_id`)
-  grouping cues; slideshow settings are stored here (`dur_per_image`,
-  `fade_ms`, `shuffle`, `slideshow` enabled flag); groups can be triggered as
-  a playlist.
+  (0 = infinite, default 0), `autoContinue` (0/1, with auto-continue), and
+  `parent` (`cue_group.group_id`, 0 = top level) holding a cue's group
+  membership, and the `state` table's persisted selected cue position.
+- `cue_group` (implemented 2026-09-05): nestable folders (`parent_group_id`)
+  grouping cues **via `cuesheet.parent` = `group_id`** (folder membership is a
+  presentation layer over the flat `cuePos` order — no cue re-impact);
+  slideshow settings live here (`duration_ms`, `fade_ms`, `shuffle`, `loop`,
+  `slideshow` enabled flag, `collapse`); groups can be triggered as a playlist
+  or slideshow. Empty groups render as trailing header rows so they stay
+  discoverable and deletable.
 - Configuration file: port and poll interval persist in
   `~/CTP/config/config.json`; the theme is browser-local presentation state.
 - Thumbnail/waveform generation queue: must be persistent across restarts
@@ -269,22 +272,22 @@ design doc's conceptual `media` → **`mediapool`** and `cues` → **`cuesheet`*
   default for newly loaded clips is `config.Loop()` (a `loop` bool in
   `config.json`), toggled live from the Now Playing widget. **Default is
   `off`** per 2026-09-04.
-- **Loop counter** (decision 2026-09-04, not yet built): a `loop_count` column
+- **Loop counter** (implemented 2026-09-04): a `loop_count` column
   (0 = infinite, N = play N times). `loop` always wins over auto-continue — a
   looping cue only auto-advances once a finite count is exhausted.
-- **Auto-continue & waits** (decision 2026-09-04, not yet built): a cue can be
+- **Auto-continue & waits** (implemented 2026-09-04): a cue can be
   flagged `autoContinue`. `preWait` and `postWait` only take effect for
   auto-continuing cues — a pause before the cue starts and after it ends.
   Auto-continue advances in sheet order downward; a cue-group row triggers the
   group's action (playlist/slideshow) and the chain continues from there. A
   non-auto-continuing cue always stops on EOS (no implicit advance); the list
   is a cue list, never a playlist.
-- **Decoding / undecodable** (decision 2026-09-04, not yet built): pipelines
+- **Decoding / undecodable** (implemented 2026-09-05): pipelines
   use GStreamer autoplugging resolved **hardware-first** (v4l2 h264/hevc where
   available) with **software fallback**. If a cue cannot start because its
   source is undecodable/corrupt, fail immediately and surface the error to the
-  user. Import includes an early playability probe (decode test) so bad files
-  are rejected at import time.
+  user. Import includes an early playability probe (decode test, `ffmpeg -v
+  error -t 1`) so bad files are rejected at import time.
 - **Output** (decision 2026-09-04): video via KMS/DRM (headless Debian Trixie,
   no display server); audio via HDMI embedded ALSA, exclusive to CuTePi.
 - **Volume** (implemented 2026-09-01): the audio playback chain is now
@@ -333,23 +336,30 @@ design doc's conceptual `media` → **`mediapool`** and `cues` → **`cuesheet`*
   cosmetic UI chrome (column widths, panel collapse/width) stays in
   `localStorage`.
 
-## Show Export / Import (.CTP) (decided 2026-09-04, not yet built)
+## Show Export / Import (.CTP) (implemented 2026-09-05)
 
-- A `.CTP` file is a **ZIP** containing a **JSON manifest** of all cue
-  information (cuesheet incl. groups/order/selection, per-cue settings, and
-  the playback **audit trail**) plus the **referenced Media Pool content**.
-- **Export**: produces that ZIP for archiving or moving a show to another Pi.
-- **Import**: restores a show from a `.CTP` — the import modal offers
-  **append to the end of the current cuesheet** or **overwrite** (replaces the
-  current cuesheet).
+- A `.CTP` file is a **ZIP** containing a **JSON manifest** (`cutepi.json`:
+  `app`/`version`/`exportedAt`, cuesheet incl. order/selection, per-cue
+  settings, and the playback **audit trail**) plus the **referenced Media Pool
+  content** (files present on disk; `media/<filename>`).
+- **Export** (`GET /api/show/export`): produces that ZIP for archiving or
+  moving a show to another Pi.
+- **Import** (`POST /api/show/import` via the show modal): restores a show
+  from a `.CTP` with **append to the end of the current cuesheet** or
+  **overwrite** (replaces the current cuesheet). All referenced media is
+  validated as available (inside the .CTP or already in the local pool)
+  **before** any mutation; cue titles and `cueNum` labels are deduped on
+  import.
 
-## Logs & Audit Trail (decided 2026-09-04, not yet built)
+## Logs & Audit Trail (implemented 2026-09-05)
 
-- **Log viewer in the Web UI**: filter by level (debug/info/warn) and **clear**.
-  The level selector switches the **recording** level (runtime toggle), so a
-  show can run with fewer logs written.
-- **Audit trail**: structured playback events (cue started / stopped at
-  wall-clock time) are recorded separately and **included in .CTP exports**.
+- **Log viewer in the Web UI** (`GET /api/logs`, terminal-style modal):
+  filter/record by level (debug/info/warn) and a clear action. The level
+  selector switches the **recording** level (runtime toggle), so a show can
+  run with fewer logs written.
+- **Audit trail** (`logs.Emit("cue_start"|"cue_end")`): structured playback
+  events (pos/title at wall-clock time) are recorded in an append-only ring
+  and **included in .CTP exports**. Clearing the log never clears the audit.
 
 ## Testing
 
