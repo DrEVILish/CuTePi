@@ -890,3 +890,75 @@ func TestNewCueColumnsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestExportImportCues(t *testing.T) {
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	_ = setSelectedCuePos(0)
+	mustRegisterMedia(t, "exp-a.mp4")
+	mustRegisterMedia(t, "exp-b.mp4")
+	for _, f := range []string{"exp-a.mp4", "exp-b.mp4"} {
+		if err := AddCue(f, ""); err != nil {
+			t.Fatalf("AddCue(%q): %v", f, err)
+		}
+	}
+	// Set some worth-persisting settings.
+	if err := UpdateCue("1", "hold", "1"); err != nil {
+		t.Fatalf("UpdateCue hold: %v", err)
+	}
+	if err := UpdateCue("2", "volume", "0.6"); err != nil {
+		t.Fatalf("UpdateCue volume: %v", err)
+	}
+	_ = SetCue("1")
+
+	cues, selected, err := ExportCues()
+	if err != nil {
+		t.Fatalf("ExportCues: %v", err)
+	}
+	if len(cues) != 2 || selected != 1 {
+		t.Fatalf("ExportCues: len=%d selected=%d", len(cues), selected)
+	}
+	if !cues[0].Hold || cues[0].Title != "exp-a.mp4" {
+		t.Fatalf("cue 0 wrong: %+v", cues[0])
+	}
+	if cues[1].Volume != 0.6 {
+		t.Fatalf("cue 1 wrong: %+v", cues[1])
+	}
+
+	// Import: append adds two more cues after the two.
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	for _, c := range cues {
+		if _, err := AddCueFull(c); err != nil {
+			t.Fatalf("AddCueFull: %v", err)
+		}
+	}
+	count, err := CueCount()
+	if err != nil || count != 2 {
+		t.Fatalf("CueCount after import = %v, %v", count, err)
+	}
+	cues2, _, _ := ExportCues()
+	if len(cues2) != 2 || cues2[0].Hold != true || cues2[1].Volume != 0.6 {
+		t.Fatalf("round-trip settings lost: %+v", cues2)
+	}
+}
+
+func TestMediaRegistered(t *testing.T) {
+	ok, err := MediaRegistered("nonexistent-file.mp4")
+	if err != nil {
+		t.Fatalf("MediaRegistered: %v", err)
+	}
+	if ok {
+		t.Fatal("MediaRegistered returned true for an unregistered file")
+	}
+	mustRegisterMedia(t, "registered-test.mp4")
+	ok, err = MediaRegistered("registered-test.mp4")
+	if err != nil {
+		t.Fatalf("MediaRegistered: %v", err)
+	}
+	if !ok {
+		t.Fatal("MediaRegistered returned false after registration")
+	}
+}

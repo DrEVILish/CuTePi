@@ -82,6 +82,7 @@ func main() {
 		routes.Public(r)
 		routes.Index(index)
 		routes.Api(api)
+		routes.Show(api)
 		routes.Logs(api)
 		routes.Install(install)
 		routes.Upload(upload)

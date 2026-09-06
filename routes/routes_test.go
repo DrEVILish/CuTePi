@@ -1,15 +1,19 @@
 package routes
 
 import (
+	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"html/template"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -58,6 +62,7 @@ func setupTestServer(t *testing.T) *gin.Engine {
 
 	Index(r.Group("/"))
 	Api(r.Group("/api"))
+	Show(r.Group("/api"))
 	Logs(r.Group("/api"))
 	Upload(r.Group("/upload"))
 	Youtube(r.Group("/youtube"))
@@ -1294,4 +1299,167 @@ func TestCuePlaybackColumnsAndFadeAPI(t *testing.T) {
 	if w3 := post(t, r, "/api/fade"); w3.Code != 200 {
 		t.Fatalf("POST /api/fade = %d, want 200", w3.Code)
 	}
+}
+
+// TestShowExportImportRoundtrip is the runnable check for .CTP export/import:
+// a show (media + cues + settings + selection) exported from one server
+// restores identically on a fresh one via append, then via overwrite.
+func TestShowExportImportRoundtrip(t *testing.T) {
+	r := setupTestServer(t)
+
+	// Register a real (tiny WAV) media file on disk so the export embeds it.
+	wav := buildTinyWav(1.0)
+	wavPath := filepath.Join(config.MediaLocation(), "roundtrip.wav")
+	if err := os.WriteFile(wavPath, wav, 0o644); err != nil {
+		t.Fatalf("writing media fixture: %v", err)
+	}
+	if err := ctp.RegisterMedia("roundtrip.wav", int64(len(wav)), media.Metadata{
+		Mimetype: "audio/wav", Duration: 1.0, Codec: "pcm_s16le",
+	}, "roundtrip.wav"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if err := ctp.AddCue("roundtrip.wav", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	// Give the cue settings worth preserving.
+	if err := ctp.UpdateCue("1", "color", "#ff0055"); err != nil {
+		t.Fatalf("UpdateCue(color): %v", err)
+	}
+	_ = ctp.SetCue("1")
+
+	// Export.
+	exp := get(t, r, "/api/show/export")
+	if exp.Code != 200 {
+		t.Fatalf("GET /api/show/export = %d, want 200: %s", exp.Code, exp.Body.String())
+	}
+	data := exp.Body.Bytes()
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("export is not a zip: %v", err)
+	}
+	var manifest showManifest
+	foundMedia := false
+	for _, f := range zr.File {
+		switch f.Name {
+		case "cutepi.json":
+			rc, _ := f.Open()
+			if err := json.NewDecoder(rc).Decode(&manifest); err != nil {
+				t.Fatalf("decoding cutepi.json: %v", err)
+			}
+			rc.Close()
+		case "media/roundtrip.wav":
+			foundMedia = true
+		}
+	}
+	if manifest.App != "CuTePi" || manifest.Version != manifestVersion {
+		t.Fatalf("unexpected manifest header: %+v", manifest)
+	}
+	if len(manifest.Cues) != 1 || manifest.Cues[0].Title != "roundtrip.wav" || manifest.Cues[0].Color != "#ff0055" {
+		t.Fatalf("manifest cues wrong: %+v", manifest.Cues)
+	}
+	if manifest.SelectedCuePos != 1 {
+		t.Fatalf("manifest selected cue = %d, want 1", manifest.SelectedCuePos)
+	}
+	if !foundMedia {
+		t.Fatal("export did not embed media/roundtrip.wav")
+	}
+
+	// Import into a fresh server (fresh in-memory DB and wav dir).
+	r2 := setupTestServer(t)
+
+	// A pre-existing cue on the fresh sheet, so "append" has something to
+	// follow: the imported cue must land after it, keeping its settings.
+	if err := ctp.RegisterMedia("existing.wav", 100, media.Metadata{
+		Mimetype: "audio/wav", Duration: 1.0, Codec: "pcm_s16le",
+	}, "existing.wav"); err != nil {
+		t.Fatalf("RegisterMedia(existing): %v", err)
+	}
+	if err := ctp.AddCue("existing.wav", ""); err != nil {
+		t.Fatalf("AddCue(existing): %v", err)
+	}
+
+	postFile := func(mode string) {
+		t.Helper()
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		fw, _ := mw.CreateFormFile("file", "show.ctp")
+		fw.Write(data)
+		mw.WriteField("mode", mode)
+		mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/api/show/import", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		w := httptest.NewRecorder()
+		r2.ServeHTTP(w, req)
+		if w.Code != http.StatusSeeOther && w.Code != http.StatusOK {
+			t.Fatalf("import(%s) = %d, want redirect: %s", mode, w.Code, w.Body.String())
+		}
+	}
+
+	// Append: the imported cue (title roundtrip.wav) lands after the
+	// pre-existing one, keeping its settings.
+	postFile("append")
+	cues, err := ctp.GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet after append: %v", err)
+	}
+	if len(cues.Cues) != 2 {
+		t.Fatalf("append import: want 2 cues, got %d", len(cues.Cues))
+	}
+	if cues.Cues[0].Title != "existing.wav" || cues.Cues[1].Title != "roundtrip.wav" {
+		t.Fatalf("append import order wrong: %+v", []string{cues.Cues[0].Title, cues.Cues[1].Title})
+	}
+	if cues.Cues[1].Color != "#ff0055" {
+		t.Fatalf("append import lost cue settings: %+v", cues.Cues[1])
+	}
+
+	// Overwrite: back to exactly the one exported cue.
+	postFile("overwrite")
+	cues, err = ctp.GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet after overwrite: %v", err)
+	}
+	if len(cues.Cues) != 1 || cues.Cues[0].Title != "roundtrip.wav" || cues.Cues[0].Selected != true {
+		t.Fatalf("overwrite import wrong: %+v", cues.Cues)
+	}
+
+	// Re-export from the fresh server: media must be present again.
+	exp2 := get(t, r2, "/api/show/export")
+	if exp2.Code != 200 {
+		t.Fatalf("re-export = %d: %s", exp2.Code, exp2.Body.String())
+	}
+	zr2, _ := zip.NewReader(bytes.NewReader(exp2.Body.Bytes()), int64(exp2.Body.Len()))
+	anyMedia := false
+	for _, f := range zr2.File {
+		if strings.HasPrefix(f.Name, "media/") {
+			anyMedia = true
+		}
+	}
+	if !anyMedia {
+		t.Fatal("re-export after import did not embed the imported media")
+	}
+}
+
+// buildTinyWav builds a minimal valid WAV (1s of 440 Hz at 8 kHz mono 16-bit)
+// so media.Probe and the re-import succeed using real ffprobe.
+func buildTinyWav(seconds int) []byte {
+	const sampleRate = 8000
+	var buf bytes.Buffer
+	buf.WriteString("RIFF")
+	binary.Write(&buf, binary.LittleEndian, uint32(36+2*seconds*sampleRate))
+	buf.WriteString("WAVE")
+	buf.WriteString("fmt ")
+	binary.Write(&buf, binary.LittleEndian, uint32(16))
+	binary.Write(&buf, binary.LittleEndian, uint16(1))
+	binary.Write(&buf, binary.LittleEndian, uint16(1))
+	binary.Write(&buf, binary.LittleEndian, uint32(sampleRate))
+	binary.Write(&buf, binary.LittleEndian, uint32(sampleRate*2))
+	binary.Write(&buf, binary.LittleEndian, uint16(2))
+	binary.Write(&buf, binary.LittleEndian, uint16(16))
+	buf.WriteString("data")
+	binary.Write(&buf, binary.LittleEndian, uint32(2*seconds*sampleRate))
+	for s := 0; s < seconds*sampleRate; s++ {
+		v := int16(3000 * math.Sin(2*math.Pi*440*float64(s%sampleRate)/float64(sampleRate)))
+		binary.Write(&buf, binary.LittleEndian, v)
+	}
+	return buf.Bytes()
 }
