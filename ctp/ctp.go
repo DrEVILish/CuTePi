@@ -65,7 +65,8 @@ AutoContinue    bool    `db:"autoContinue"`
 }
 
 type Cuesheet struct {
-	Cues []Cue
+	Cues   []Cue
+	Groups []Group // cue groups (folder membership is a presentation layer)
 }
 
 type Mediapool struct {
@@ -294,7 +295,8 @@ func GetCuesheet() (cuesheet Cuesheet, err error) {
 		cues[i].PostWaitFmt = FormatTime(cues[i].PostWait)
 		cues[i].MediaType = mediaTypeFromMimetype(cues[i].Mimetype)
 	}
-	return Cuesheet{cues}, nil
+	groups, _ := Groups()
+	return Cuesheet{cues, groups}, nil
 }
 
 func GetMediapool() (pool Mediapool, err error) {

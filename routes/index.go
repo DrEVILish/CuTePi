@@ -272,7 +272,7 @@ func renderCuesheet(c *gin.Context) {
 		return
 	}
 	enrichCuesheetWithPlayback(&cuesheet)
-	c.HTML(http.StatusOK, "cuesheet.html", gin.H{"Cuesheet": cuesheet})
+	c.HTML(http.StatusOK, "cuesheet.html", gin.H{"Cuesheet": cuesheet, "Rows": buildSheetRows(&cuesheet)})
 }
 
 func Index(rg *gin.RouterGroup) {
@@ -308,6 +308,7 @@ func Index(rg *gin.RouterGroup) {
 		data := nowplayingData()
 		data["Mediapool"] = mediapool
 		data["Cuesheet"] = cuesheet
+		data["Rows"] = buildSheetRows(&cuesheet)
 		data["Inspector"] = inspectorData()
 		data["title"] = "CuTePi"
 		c.HTML(http.StatusOK, "index.html", data)

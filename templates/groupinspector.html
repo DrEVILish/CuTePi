@@ -1,0 +1,76 @@
+{{ define "groupinspector.html" }}
+<div class="groupinspector-body" data-group-id="{{ .Group.GroupID }}">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h6 class="mb-0"><i class="bi {{ if .Group.Slideshow }}bi-images{{ else }}bi-folder-fill{{ end }} me-1"></i>Group</h6>
+    <span class="text-muted small">{{ .MemberCount }} cue{{ if ne .MemberCount 1 }}s{{ end }}</span>
+  </div>
+
+  {{ if .Group.Slideshow }}
+  <div class="alert alert-info py-2 px-3 small">
+    <i class="bi bi-play-circle me-1"></i>
+    Slideshow: its cues cycle automatically with the settings below. Press <em>Play</em> on the sheet to start it.
+  </div>
+  {{ end }}
+
+  <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML" class="vstack gap-2">
+    <div class="row g-2">
+      <div class="col">
+        <label class="form-label small mb-0" for="group-name">Name</label>
+        <input id="group-name" name="name" class="form-control form-control-sm" value="{{ .Group.Name }}">
+      </div>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <div class="form-check form-check-inline">
+        <input class="form-check-input" type="checkbox" id="group-slideshow" name="slideshow" value="true" {{ if .Group.Slideshow }}checked{{ end }}>
+        <label class="form-check-label small" for="group-slideshow">Slideshow</label>
+      </div>
+      <div class="form-check form-check-inline" id="group-slideshow-opts">
+        <input class="form-check-input" type="checkbox" id="group-shuffle" name="shuffle" value="true" {{ if .Group.Shuffle }}checked{{ end }} {{ if not .Group.Slideshow }}disabled{{ end }}>
+        <label class="form-check-label small" for="group-shuffle">Shuffle</label>
+      </div>
+      <div class="form-check form-check-inline">
+        <input class="form-check-input" type="checkbox" id="group-loop" name="loop" value="true" {{ if .Group.Loop }}checked{{ end }} {{ if not .Group.Slideshow }}disabled{{ end }}>
+        <label class="form-check-label small" for="group-loop">Loop</label>
+      </div>
+    </div>
+    <div class="row g-2 {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
+      <div class="col">
+        <label class="form-label small mb-0" for="group-duration">Hold each image (s)</label>
+        <input id="group-duration" name="durationMs" type="number" min="0" step="100" class="form-control form-control-sm"
+          value="{{ if .Group.DurationMS }}{{ div .Group.DurationMS 1000 }}{{ end }}" placeholder="5">
+      </div>
+      <div class="col">
+        <label class="form-label small mb-0" for="group-fade">Fade between (s)</label>
+        <input id="group-fade" name="fadeMs" type="number" min="0" step="100" class="form-control form-control-sm"
+          value="{{ if .Group.FadeMS }}{{ div .Group.FadeMS 1000 }}{{ end }}" placeholder="0">
+      </div>
+    </div>
+    <div class="d-flex justify-content-between align-items-center">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="group-collapse" name="collapse" value="true" {{ if .Group.Collapse }}checked{{ end }}>
+        <label class="form-check-label small" for="group-collapse">Collapsed</label>
+      </div>
+      <button class="btn btn-sm btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+
+  <script>
+    (function () {
+      var box = document.querySelector(".groupinspector-body[data-group-id='{{ .Group.GroupID }}']");
+      if (!box) return;
+      var slideshow = box.querySelector("#group-slideshow");
+      function syncOpts() {
+        var on = slideshow.checked;
+        box.querySelectorAll("#group-shuffle, #group-loop").forEach(function (el) {
+          el.disabled = !on;
+        });
+        var timings = box.querySelector("#group-slideshow-timings");
+        if (timings) timings.classList.toggle("row-disabled", !on);
+        box.querySelectorAll("#group-slideshow-timings input").forEach(function (el) { el.disabled = !on; });
+      }
+      slideshow.addEventListener("change", syncOpts);
+      syncOpts();
+    })();
+  </script>
+</div>
+{{ end }}

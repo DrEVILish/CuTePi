@@ -205,3 +205,34 @@ td:hover {
   height: 1.6em;
   border-radius: 4px;
 }
+
+/* Cue-group header rows: a visual folder containing contiguous member cues.
+   Dropping a cue row onto the header assigns membership (see dnd.js). */
+.cue-group-header {
+  background: rgba(216, 92, 255, 0.07) !important;
+  cursor: pointer;
+}
+.cue-group-header td {
+  vertical-align: middle;
+}
+.cue-group-header .cue-group-name {
+  font-weight: 600;
+}
+.cue-group-header .cue-group-toggle {
+  display: inline-flex;
+  margin-right: 0.25rem;
+  padding: 0 0.25rem;
+}
+.cue-group-header.dnd-drop-target {
+  background: rgba(216, 92, 255, 0.22) !important;
+  outline: 1px dashed var(--ctp-accent-2, #d85cff);
+}
+#cuesheet tr.cue.cue-in-group td:nth-child(2),
+#cuesheet tr.cue.cue-in-group td:nth-child(3),
+#cuesheet tr.cue.cue-in-group td:nth-child(4) {
+  padding-left: 1.4rem;
+}
+.row-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}

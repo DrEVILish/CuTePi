@@ -67,6 +67,7 @@ func main() {
 		"typeIcon":    routes.TypeIcon,
 		"displayTime": routes.DisplayTime,
 		"progressPct": routes.ProgressPct,
+		"div":         func(a, b int) int { return a / b },
 	}
 
 	// Load templates with FunctionMap
@@ -82,6 +83,7 @@ func main() {
 		routes.Public(r)
 		routes.Index(index)
 		routes.Api(api)
+		routes.Groups(api)
 		routes.Show(api)
 		routes.Logs(api)
 		routes.Install(install)

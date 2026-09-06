@@ -160,7 +160,7 @@
       }
       cuesheet.classList.remove("dnd-dragover");
 
-      const rows = Array.from(tbody.querySelectorAll("tr.cue"));
+      const rows = Array.from(tbody.querySelectorAll("tr.cue, tr.cue-group-header"));
       const indicator = ensureDropIndicator();
       let target = null;
       for (const row of rows) {
@@ -184,6 +184,38 @@
       if (!cuesheet) return;
       e.preventDefault();
       cuesheet.classList.remove("dnd-dragover");
+
+      // Dropping a cue row directly onto a group header assigns membership and
+      // moves it to that group's end (highest priority action on a header).
+      const header = e.target.closest("tr.cue-group-header");
+      if (header) {
+        let reorderPos = null;
+        try {
+          reorderPos = e.dataTransfer.getData("application/x-cutepi-reorder") || e.dataTransfer.getData("text/x-cutepi-reorder");
+        } catch (err) {}
+        const plain = e.dataTransfer.getData("text/plain");
+        if (reorderPos && /^\d+$/.test(reorderPos)) {
+          removeDropIndicator();
+          const form = new FormData();
+          form.append("groupId", header.dataset.groupId);
+          fetch("/api/cue/" + reorderPos + "/group", { method: "POST", body: form })
+            .then((res) => {
+              if (!res.ok) throw new Error("server returned " + res.status);
+              return res.text();
+            })
+            .then((html) => replaceById("cuesheet", html))
+            .catch((err) => console.error("CuTePi: group membership failed", err));
+          return;
+        }
+        if (plain && plain.includes(".")) {
+          // Media drop on a header: add as a cue at the group's first position.
+          removeDropIndicator();
+          addCueAt(plain, header.nextElementSibling && header.nextElementSibling.dataset.cuePos || "");
+          return;
+        }
+        removeDropIndicator();
+        return;
+      }
 
       // Check for cue reorder first (distinct mime type, higher priority than media add)
       let reorderPos = null;

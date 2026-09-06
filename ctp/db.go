@@ -172,6 +172,41 @@ func InitDB() error {
 		return fmt.Errorf("ctp: creating state table: %w", err)
 	}
 
+	// Cue groups: visual folders holding cues (cuesheet.parent = group_id).
+	// Slideshow settings live on the group so image groups can play shuffled /
+	// looped / faded with a duration-per-image. Folder membership is a
+	// presentation layer on top of the flat cuePos order.
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS cue_group (
+			group_id         INTEGER PRIMARY KEY NOT NULL,
+			name             TEXT NOT NULL,
+			parent_group_id  INTEGER NOT NULL DEFAULT 0,
+			collapse         BOOLEAN NOT NULL DEFAULT 0,
+			slideshow        BOOLEAN NOT NULL DEFAULT 0,
+			shuffle          BOOLEAN NOT NULL DEFAULT 0,
+			loop             BOOLEAN NOT NULL DEFAULT 0,
+			fade_ms          INTEGER NOT NULL DEFAULT 0,
+			duration_ms      INTEGER NOT NULL DEFAULT 0
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("ctp: creating cue_group table: %w", err)
+	}
+	newGroupCols := []struct{ name, ddl string }{
+		{"collapse", "BOOLEAN NOT NULL DEFAULT 0"},
+		{"slideshow", "BOOLEAN NOT NULL DEFAULT 0"},
+		{"shuffle", "BOOLEAN NOT NULL DEFAULT 0"},
+		{"loop", "BOOLEAN NOT NULL DEFAULT 0"},
+		{"fade_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"duration_ms", "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, nc := range newGroupCols {
+		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE cue_group ADD COLUMN %s %s;`, nc.name, nc.ddl))
+		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("ctp: adding %s column on cue_group: %w", nc.name, err)
+		}
+	}
+
 	return nil
 }
 

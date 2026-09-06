@@ -57,11 +57,13 @@ func setupTestServer(t *testing.T) *gin.Engine {
 		"typeIcon":    TypeIcon,
 		"displayTime": DisplayTime,
 		"progressPct": ProgressPct,
+		"div":         func(a, b int) int { return a / b },
 	}
 	r.SetHTMLTemplate(template.Must(template.New("").Funcs(extendedFuncs).ParseGlob("../templates/*")))
 
 	Index(r.Group("/"))
 	Api(r.Group("/api"))
+	Groups(r.Group("/api"))
 	Show(r.Group("/api"))
 	Logs(r.Group("/api"))
 	Upload(r.Group("/upload"))
@@ -80,6 +82,39 @@ func post(t *testing.T, r *gin.Engine, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("POST", path, nil))
+	return w
+}
+
+func postForm(t *testing.T, r *gin.Engine, path string, kv ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	return formRequest(t, r, "POST", path, kv)
+}
+
+func putForm(t *testing.T, r *gin.Engine, path string, kv ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	return formRequest(t, r, "PUT", path, kv)
+}
+
+func formRequest(t *testing.T, r *gin.Engine, method, path string, kv []string) *httptest.ResponseRecorder {
+	t.Helper()
+	if len(kv)%2 != 0 {
+		t.Fatalf("formRequest: odd key/value pairs")
+	}
+	form := url.Values{}
+	for i := 0; i < len(kv); i += 2 {
+		form.Set(kv[i], kv[i+1])
+	}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(method, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func del(t *testing.T, r *gin.Engine, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("DELETE", path, nil))
 	return w
 }
 
@@ -334,6 +369,111 @@ func TestCueActionsDoNotBubbleIntoRowSelection(t *testing.T) {
 	}
 	if !strings.Contains(body, `data-cue-pos="1"`) {
 		t.Fatalf("expected the cue row with its selectable data attr, got:\n%s", body)
+	}
+}
+
+func TestGroupRoutesCreateAssignUpdateDelete(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("group-route.mp4", 100, media.Metadata{
+		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
+	}, "group-route.mp4"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if err := ctp.AddCue("group-route.mp4", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+
+	// Add a group via the route.
+	w := postForm(t, r, "/api/group/add", "name", "Route Group", "parentGroupID", "0")
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/group/add = %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "cue-group-header") {
+		t.Fatalf("expected group header row, got:\n%s", w.Body.String())
+	}
+
+	// Inspector renders slideshow settings for the group.
+	g, err := ctp.GetGroup(1)
+	if err != nil {
+		t.Fatalf("GetGroup: %v", err)
+	}
+	w = get(t, r, "/api/group/1/inspector")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `name="slideshow"`) ||
+		!strings.Contains(w.Body.String(), g.Name) {
+		t.Fatalf("inspector missing settings, got: %d\n%s", w.Code, w.Body.String())
+	}
+
+	// Assign the cue to the group (moves it under the header).
+	w = postForm(t, r, "/api/cue/1/group", "groupId", "1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/1/group = %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `data-cue-group="1"`) {
+		t.Fatalf("cue should render inside the group, got:\n%s", w.Body.String())
+	}
+
+	// Turn on slideshow settings.
+	w = putForm(t, r, "/api/group/1", "name", "Route Group", "slideshow", "true", "shuffle", "true", "loop", "true", "fadeMs", "500", "durationMs", "3000")
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT /api/group/1 = %d: %s", w.Code, w.Body.String())
+	}
+	g, err = ctp.GetGroup(1)
+	if err != nil {
+		t.Fatalf("GetGroup: %v", err)
+	}
+	if !g.Slideshow || !g.Shuffle || !g.Loop || g.FadeMS != 500 || g.DurationMS != 3000 {
+		t.Fatalf("group settings not applied: %+v", g)
+	}
+
+	// Collapse hides member rows.
+	w = post(t, r, "/api/group/1/collapse")
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST collapse = %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `data-cue-group="1"`) {
+		t.Fatalf("collapsed group should hide members, got:\n%s", w.Body.String())
+	}
+
+	// Deleting the group releases the cue.
+	w = del(t, r, "/api/group/1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/group/1 = %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "cue-group-header") {
+		t.Fatalf("group should be gone, got:\n%s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `data-cue-pos="1"`) {
+		t.Fatalf("released cue should still render, got:\n%s", w.Body.String())
+	}
+}
+
+func TestGroupPlayNonSlideshowPlaysFirstMember(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("gplay-route.mp4", 100, media.Metadata{
+		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
+	}, "gplay-route.mp4"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if _, err := ctp.CreateGroup("Play Group", 0); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	cues, err := ctp.GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	if len(cues.Cues) != 0 {
+		t.Fatalf("cuesheet should be empty before adding, got %+v", cues.Cues)
+	}
+	if err := ctp.AddCue("gplay-route.mp4", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	cues, _ = ctp.GetCuesheet()
+	if err := ctp.SetCueGroup(strconv.Itoa(cues.Cues[0].CuePos), 1); err != nil {
+		t.Fatalf("SetCueGroup: %v", err)
+	}
+	w := post(t, r, "/api/group/1/play")
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST play = %d: %s", w.Code, w.Body.String())
 	}
 }
 
