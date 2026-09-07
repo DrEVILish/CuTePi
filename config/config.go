@@ -52,14 +52,6 @@ func expandHome(path, homePath string) string {
 	return path
 }
 
-func homeDir() string {
-	homePath := os.Getenv("HOME")
-	if homePath == "" {
-		homePath = os.Getenv("USERPROFILE")
-	}
-	return homePath
-}
-
 // resolveDefaults computes the default Config from environment variables
 // and the user's home directory. It's a pure function (no package-level
 // state) so the path-derivation rules - in particular that ConfigFilePath/
@@ -105,7 +97,14 @@ func resolveDefaults(getenv func(string) string, homePath string) Config {
 }
 
 func init() {
-	conf = resolveDefaults(os.Getenv, homeDir())
+	// os.UserHomeDir: $HOME on unix, USERPROFILE on Windows. An error means
+	// no home is set - resolveDefaults handles the empty string (paths then
+	// come from the env overrides / working dir).
+	homePath, err := os.UserHomeDir()
+	if err != nil {
+		homePath = ""
+	}
+	conf = resolveDefaults(os.Getenv, homePath)
 }
 
 // ensureDirs creates the working, config, media, and thumbnail directories
