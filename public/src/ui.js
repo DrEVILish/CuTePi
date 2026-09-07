@@ -563,7 +563,9 @@ function patternOptions() {
   });
   window.addEventListener("blur", hideMenu);
 
-  // Dispatch menu actions.
+  // Dispatch menu actions. Single handler: a duplicate registration here
+  // made the autofollow toggle run twice per click (net zero - the operator's
+  // on/off switch silently did nothing).
   document.addEventListener("click", (e) => {
     if (!menuEl || menuEl.hidden) return;
     const pos = menuEl.dataset.cuePos;
@@ -576,10 +578,34 @@ function patternOptions() {
           .then((res) => {
             if (!res.ok) showToast("Play cue failed (server returned " + res.status + ")");
           });
+      } else if (action === "loop") {
+        const newVal = menuEl.dataset.cueLoop === "true" ? "false" : "true";
+        menuEl.dataset.cueLoop = newVal;
+        putCol(pos, "loop", newVal);
       } else if (action === "autofollow") {
         const newVal = menuEl.dataset.cueAutoContinue === "true" ? "false" : "true";
         menuEl.dataset.cueAutoContinue = newVal;
         putCol(pos, "autoContinue", newVal);
+      } else if (action === "delete") {
+        fetch("/api/cue/" + encodeURIComponent(pos), {method: "DELETE"})
+          .then((res) => {
+            if (!res.ok) throw new Error("server returned " + res.status);
+            return res.text();
+          })
+          .then((html) => {
+            const wrapper = document.createElement("div");
+            wrapper.innerHTML = html.trim();
+            const replacement = wrapper.firstElementChild;
+            const current = document.getElementById("cuesheet");
+            if (replacement && replacement.id === "cuesheet" && current) {
+              current.replaceWith(replacement);
+              if (window.htmx) htmx.process(replacement);
+            }
+          })
+          .catch((err) => {
+            console.error("CuTePi: delete cue failed", err);
+            showToast("Delete cue failed: " + err.message);
+          });
       }
       return;
     }
@@ -633,55 +659,6 @@ function patternOptions() {
     const v = parseFloat(s);
     return isNaN(v) || v < 0 ? -1 : v;
   }
-
-  document.addEventListener("click", (e) => {
-    if (menuEl && !menuEl.contains(e.target)) hideMenu();
-  });
-  window.addEventListener("blur", hideMenu);
-
-  // Dispatch menu actions.
-  document.addEventListener("click", (e) => {
-    if (!menuEl || menuEl.hidden) return;
-    const pos = menuEl.dataset.cuePos;
-    const item = e.target.closest("[data-cue-action]");
-    const fadeAction = menuEl.dataset ? menuEl.dataset.cueFadeAction : "peers";
-    const action = item ? item.dataset.cueAction : null;
-    if (action === "play") {
-      fetch("/api/cue/" + encodeURIComponent(pos) + "/play", {method: "POST"});
-      hideMenu();
-    } else if (action === "loop") {
-      const newVal = menuEl.dataset.cueLoop === "true" ? "false" : "true";
-      menuEl.dataset.cueLoop = newVal;
-      putCol(pos, "loop", newVal);
-      hideMenu();
-    } else if (action === "autofollow") {
-      const newVal = menuEl.dataset.cueAutoContinue === "true" ? "false" : "true";
-      menuEl.dataset.cueAutoContinue = newVal;
-      putCol(pos, "autoContinue", newVal);
-      hideMenu();
-    } else if (action === "delete") {
-      fetch("/api/cue/" + encodeURIComponent(pos), {method: "DELETE"})
-        .then((res) => {
-          if (!res.ok) throw new Error("server returned " + res.status);
-          return res.text();
-        })
-        .then((html) => {
-          const wrapper = document.createElement("div");
-          wrapper.innerHTML = html.trim();
-          const replacement = wrapper.firstElementChild;
-          const current = document.getElementById("cuesheet");
-          if (replacement && replacement.id === "cuesheet" && current) {
-            current.replaceWith(replacement);
-            if (window.htmx) htmx.process(replacement);
-          }
-        })
-        .catch((err) => {
-          console.error("CuTePi: delete cue failed", err);
-          showToast("Delete cue failed: " + err.message);
-        });
-      hideMenu();
-    }
-  });
 })();
 
 // --- Now Playing: change-detection polling ---
