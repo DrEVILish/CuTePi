@@ -22,11 +22,20 @@ func InitDB() error {
 	// unless explicitly turned on per-connection - without this, deleting a
 	// media row referenced by a cue leaves an orphaned cuesheet row whose
 	// LEFT JOIN produces NULLs that crash the cuesheet scan entirely.
+	//
+	// WAL + busy_timeout are driver-level DSN pragmas (per-connection, so the
+	// DSN is the only place they reliably apply). The app itself serialises
+	// on one pooled connection (SetMaxOpenConns below), but external readers
+	// do not: e.g. inspecting the show DB with the sqlite3 CLI mid-show, or
+	// any second process holding a write transaction, previously caused
+	// immediate SQLITE_BUSY errors and truncated/rolled-back reads. WAL lets
+	// readers proceed against the pre-write snapshot and busy_timeout makes
+	// writers wait (5s) instead of failing instantly.
 	dsn := dbLocation
 	if strings.Contains(dsn, "?") {
-		dsn += "&_foreign_keys=on"
+		dsn += "&_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000"
 	} else {
-		dsn += "?_foreign_keys=on"
+		dsn += "?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000"
 	}
 	db, err = sqlx.Open("sqlite3", dsn)
 	if err != nil {
