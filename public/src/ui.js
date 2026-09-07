@@ -684,6 +684,7 @@ function patternOptions() {
 
   let pollMs = 500;
   let lastSeen = 0;
+  let fallback = null;
 
   fetch("/api/settings")
     .then((res) => res.json())
@@ -693,12 +694,18 @@ function patternOptions() {
       }
     })
     .catch(() => {})
-    .finally(refreshAndSchedule);
+    .finally(() => setFallback(true)); // poll until the socket proves itself
 
-  async function refreshAndSchedule() {
-    await refresh();
-    setTimeout(refreshAndSchedule, pollMs);
+  // HTTP polling is the WS-disconnected fallback ONLY: while the socket is
+  // up, every server signal (cutepi-sync) pulls once, version-guarded. The
+  // server pushes one sync per displayed second while playing (gsp ticker),
+  // so the progress clock advances without any timer-driven requests.
+  function setFallback(on) {
+    if (on && !fallback) fallback = setInterval(refresh, pollMs);
+    if (!on && fallback) { clearInterval(fallback); fallback = null; }
   }
+  document.addEventListener("cutepi-ws", (e) => setFallback(!e.detail.connected));
+
   async function refresh() {
     try {
       const status = await fetch(
@@ -709,7 +716,7 @@ function patternOptions() {
       lastSeen = body.version;
       if (!body.changed) return;
       // While the user is actively dragging the scrubber, don't replace the
-      // widget (the swap would reset the thumb mid-drag). The next poll tick
+      // widget (the swap would reset the thumb mid-drag). The next signal
       // catches up once the drag ends.
       const scrubber = document.querySelector("#nowplaying-scrubber");
       if (scrubber && scrubber.matches(":active")) return;
@@ -717,7 +724,7 @@ function patternOptions() {
       const el = document.getElementById("mediainfo");
       if (el) el.outerHTML = await res.text();
     } catch (e) {
-      // Transient network/server error; the next poll tick will retry.
+      // Transient network/server error; the fallback timer retries.
     }
   }
   // WebSocket "sync" wakes this poller immediately (single writer for the
@@ -777,11 +784,10 @@ document.addEventListener("input", (e) => {
   }
 });
 
-// --- Cuesheet: change-detection polling for multi-browser sync ---
-// Server is source of truth (selection + order persisted in DB). This poller
-// keeps every open control tab in sync within ~1s without WebSockets: it
-// polls GET /api/cuesheet/status and re-renders the cuesheet (and via the
-// afterSwap hook, the inspector) only when the version changes.
+// --- Cuesheet: change-detection poller (WS-disconnected fallback) ---
+// Server is source of truth (selection + order persisted in DB). While the
+// WebSocket is up, signals drive this; the timer here is the fallback that
+// keeps every open control tab in sync within ~1s when the socket is down.
 (function () {
   if (!document.getElementById("cuesheet")) return;
   const POLL_MS = 800;
@@ -811,15 +817,25 @@ document.addEventListener("input", (e) => {
       // transient
     }
   }
-  setInterval(refresh, POLL_MS);
+  // HTTP polling is the WS-disconnected fallback ONLY (see the Now Playing
+  // poller); while connected, every server signal pulls once, version-guarded.
+  let fallback = null;
+  function setFallback(on) {
+    if (on && !fallback) fallback = setInterval(refresh, POLL_MS);
+    if (!on && fallback) { clearInterval(fallback); fallback = null; }
+  }
+  setFallback(true); // poll until the socket proves itself
+  document.addEventListener("cutepi-ws", (e) => setFallback(!e.detail.connected));
   // WebSocket "sync" wakes this poller immediately (single writer: the
   // poller is the only thing that swaps the cuesheet, so a WS-triggered
   // swap and a poll tick can no longer race each other's re-render).
   document.addEventListener("cutepi-sync", refresh);
 })();
 
-// Prefer server push for cross-browser updates. The existing pollers remain
-// active as the reconnect/fallback path when WebSockets are unavailable.
+// Prefer server push: while the socket is up the server signals every
+// change (including one sync per displayed second while playing) and the
+// version-guarded pollers pull exactly then. The pollers' HTTP timers run
+// only as the fallback while the socket is disconnected.
 (function () {
   if (!window.WebSocket || !document.getElementById("cuesheet")) return;
   let socket;
@@ -848,7 +864,12 @@ document.addEventListener("input", (e) => {
       // the next tick - and the double re-render flickered).
       document.dispatchEvent(new Event("cutepi-sync"));
     };
+    socket.onopen = () => {
+      document.dispatchEvent(new CustomEvent("cutepi-ws", {detail: {connected: true}}));
+    };
     socket.onclose = () => {
+      // Fallback pollers resume while the socket is down; reconnect in 2s.
+      document.dispatchEvent(new CustomEvent("cutepi-ws", {detail: {connected: false}}));
       clearTimeout(retry);
       retry = setTimeout(connect, 2000);
     };

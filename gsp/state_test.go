@@ -337,3 +337,42 @@ func TestSwapKeepsHandlesOnActivePipeline(t *testing.T) {
 	}
 	Stop()
 }
+
+// The position ticker is the WS push path for progress updates: it must
+// bump the version (and so broadcast a sync) once per displayed second
+// WHILE PLAYING, and stay silent while paused/stopped/idle - that silence
+// is what lets clients drop HTTP polling entirely. Requires real GStreamer.
+func TestPositionTickerBumpsOnlyWhilePlaying(t *testing.T) {
+	if _, err := exec.LookPath("gst-launch-1.0"); err != nil {
+		t.Skip("gst-launch-1.0 not available; skipping position-ticker test")
+	}
+	dir := t.TempDir()
+	config.SetConfigFilePath(dir + "/config.json")
+	config.SetDirsForTesting(dir)
+	if err := os.WriteFile(filepath.Join(dir, "tick.wav"), tinyWav(3), 0o644); err != nil {
+		t.Skipf("no writable media fixture dir: %v", err)
+	}
+
+	if err := LoadWithOpts("tick.wav", LoadOpts{}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	v0 := StateVersion()
+	time.Sleep(2300 * time.Millisecond) // >= 2 whole seconds of playback
+	if v := StateVersion(); v <= v0 {
+		t.Errorf("playing: version did not advance with the ticker (v0=%d v=%d)", v0, v)
+	}
+
+	Pause()
+	v1 := StateVersion()
+	time.Sleep(2300 * time.Millisecond)
+	if v := StateVersion(); v != v1 {
+		t.Errorf("paused: version advanced without playback (v1=%d v=%d)", v1, v)
+	}
+
+	Stop()
+	v2 := StateVersion()
+	time.Sleep(2300 * time.Millisecond)
+	if v := StateVersion(); v != v2 {
+		t.Errorf("stopped: version advanced without playback (v2=%d v=%d)", v2, v)
+	}
+}

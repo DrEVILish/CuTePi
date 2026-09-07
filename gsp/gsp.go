@@ -45,6 +45,21 @@ var (
 func gstInit() {
 	initOnce.Do(func() {
 		gst.Init(nil)
+		// Position ticker: while a clip is playing, push one sync per
+		// displayed second over the WebSocket so connected clients advance
+		// their progress clock WITHOUT HTTP polling (the pollers are now the
+		// WS-disconnected fallback only). CurrentPosition bumps the version
+		// when the displayed second changes and stays silent while paused/
+		// stopped/idle, so the broadcast only fires on a real change.
+		go func() {
+			for range time.Tick(time.Second) {
+				before := StateVersion()
+				CurrentPosition()
+				if StateVersion() != before {
+					go ws.Broadcast()
+				}
+			}
+		}()
 	})
 }
 
