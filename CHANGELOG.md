@@ -48,6 +48,30 @@ Still open in DESIGN.md: none — Q18 (config `loop` default seeding) resolved
 direct-load default); Q19 (`./smoke-test.sh`) resolved 2026-09-07 — ships with
 the stop fix below.
 
+## 2026-09-07 — Ponytail audit: dead-weight removals (5 commits)
+
+Whole-repo over-engineering audit (correctness explicitly out of scope):
+every function cross-grepped against Go/templates/JS, every template and
+asset traced to a consumer. Tree came back lean — ~30 lines of dead
+weight total, no removable dependencies. Applied with per-item
+regression verification:
+
+- `a79d83c` **Media.Codec/MediaTitle cut** — populated into SQLite, read by
+  nothing. Fields, upsert params and columns removed (real DROP COLUMN
+  migration — sqlx SELECT * requires it), test updated; smoke test +
+  suites green; rendered pool has zero codec/title references.
+- `1a68fb0` **AddCue paths merged** — two near-identical INSERT-SELECT
+  blocks (append vs positioned) share one transactional path; the bump
+  loop is a no-op for appends. All insert scenarios covered by tests.
+- `45ed1b3` **fileSize inlined** — one-caller 5-line wrapper around
+  os.Stat().Size().
+- `e124a59` **homeDir() → os.UserHomeDir** — stdlib does it (same env
+  vars, incl. Windows).
+- `6e457e0` **logs leftovers** — never-assigned AuditEvent.WallClock,
+  test-only NETInfoList code, stale E207/E208 comment.
+- Cosmetic, not applied: gorilla/websocket + go-qrcode mislabeled
+  `// indirect` in go.mod (zero effect).
+
 ## 2026-09-07 — Lifecycle + input polish (4 commits)
 
 - `85e0b19` **main: bind failures are fatal** — `r.Run` ignored its error;
