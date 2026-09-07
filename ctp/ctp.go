@@ -52,8 +52,8 @@ type Cue struct {
 	Parent         int     `db:"parent"`
 	FadeOut        int     `db:"fadeOut"` // ms; fade & stop other cues over this time
 	FadeAction     string  `db:"fadeAction"`
-AutoContinue    bool    `db:"autoContinue"`
-	Volume          float64 `db:"volume"` // per-cue master gain in dB; 0 = 0dB
+	AutoContinue   bool    `db:"autoContinue"`
+	Volume         float64 `db:"volume"` // per-cue master gain in dB; 0 = 0dB
 	PreWaitFmt     string
 	CueDurationFmt string
 	PostWaitFmt    string
@@ -456,7 +456,8 @@ func AddCue(filename string, cuePos string) (err error) {
 			return err
 		}
 		bumpCuesheetVersion()
-		return nil
+		// The insert may land inside a group's span; re-align membership.
+		return normalizeGroupMembership(cuePosInt)
 	}
 	bumpCuesheetVersion()
 	return nil
@@ -466,22 +467,22 @@ func AddCue(filename string, cuePos string) (err error) {
 // UpdateCue, since column names cannot be parameterized as bind values and
 // col otherwise comes straight from a URL path segment.
 var editableCueColumns = map[string]bool{
-	"cueNum":      true,
-	"title":       true,
-	"posStart":    true,
-	"posEnd":      true,
-	"preWait":     true,
-	"cueDuration": true,
-	"postWait":    true,
-	"hold":        true,
-	"loop":        true,
-	"loop_count":  true,
-	"color":       true,
-	"parent":      true,
-	"fadeOut":     true,
-	"fadeAction":  true,
-"autoContinue": true,
-	"volume":      true,
+	"cueNum":       true,
+	"title":        true,
+	"posStart":     true,
+	"posEnd":       true,
+	"preWait":      true,
+	"cueDuration":  true,
+	"postWait":     true,
+	"hold":         true,
+	"loop":         true,
+	"loop_count":   true,
+	"color":        true,
+	"parent":       true,
+	"fadeOut":      true,
+	"fadeAction":   true,
+	"autoContinue": true,
+	"volume":       true,
 }
 
 // CueColumnValue returns the current string value of one of the
@@ -699,7 +700,17 @@ func ReorderCues(order []int) error {
 		return err
 	}
 	bumpCuesheetVersion()
-	return nil
+	// The client's new order may land cues inside or away from a group's
+	// span; re-align membership so every group stays one contiguous run. The
+	// moved cues get first-class placement treatment; bystanders only the
+	// structural pass.
+	var moved []int
+	for i, oldPos := range order {
+		if oldPos != i+1 {
+			moved = append(moved, i+1) // NEW position of the moved cue
+		}
+	}
+	return normalizeGroupMembership(moved...)
 }
 
 func RemoveCue(cuePos string) (err error) {
@@ -785,7 +796,10 @@ func moveCue(cuePosInt, neighbor int) error {
 		return err
 	}
 	bumpCuesheetVersion()
-	return nil
+	// A swap across a group boundary can strand either swapped cue inside or
+	// outside a group's span; re-align membership (join when placed inside a
+	// group's span, leave when separated from its own).
+	return normalizeGroupMembership(cuePosInt, neighbor)
 }
 
 // MoveCueUp moves the cue at cuePos up by one (swaps with the cue above).

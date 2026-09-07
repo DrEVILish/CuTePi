@@ -165,3 +165,163 @@ func TestCueGroupsRenderFlatOrder(t *testing.T) {
 func itoa(i int) string {
 	return strconv.Itoa(i)
 }
+
+// TestGroupMembershipStaysContiguous is the runnable check for the
+// contiguity invariant: any position mutation re-aligns membership so every
+// group renders as ONE contiguous run — a cue placed into a group's span
+// joins it, a member dragged away from the group leaves it, a lone member
+// survives, a mid-group insert joins and a boundary insert stays top-level.
+func TestGroupMembershipStaysContiguous(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	_ = setSelectedCuePos(0)
+	mustRegisterMedia(t, "contig.mp4")
+
+	gid, err := CreateGroup("Contig", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	titles := []string{"contig.mp4", "contig.mp4 (2)", "contig.mp4 (3)", "contig.mp4 (4)"}
+	for range titles {
+		if err := AddCue("contig.mp4", ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	parentByTitle := func() map[string]int {
+		t.Helper()
+		sheet, err := GetCuesheet()
+		if err != nil {
+			t.Fatalf("GetCuesheet: %v", err)
+		}
+		m := map[string]int{}
+		for _, cue := range sheet.Cues {
+			m[cue.Title] = cue.Parent
+		}
+		return m
+	}
+	posByTitle := func() map[string]int {
+		t.Helper()
+		sheet, err := GetCuesheet()
+		if err != nil {
+			t.Fatalf("GetCuesheet: %v", err)
+		}
+		m := map[string]int{}
+		for _, cue := range sheet.Cues {
+			m[cue.Title] = cue.CuePos
+		}
+		return m
+	}
+
+	if err := SetCueGroup(itoa(posByTitle()[titles[0]]), gid); err != nil {
+		t.Fatalf("SetCueGroup A: %v", err)
+	}
+	if err := SetCueGroup(itoa(posByTitle()[titles[1]]), gid); err != nil {
+		t.Fatalf("SetCueGroup B: %v", err)
+	}
+	// Sheet: A(gid), B(gid), C, D top-level.
+
+	// Move the top-level cue up into the group's span: it joins.
+	if err := MoveCueUp(itoa(posByTitle()[titles[2]])); err != nil {
+		t.Fatalf("MoveCueUp: %v", err)
+	}
+	if p := parentByTitle()[titles[2]]; p != gid {
+		t.Errorf("cue moved between members: parent = %d, want %d", p, gid)
+	}
+
+	// Insert at the sheet head (before the group's run): stays top-level.
+	if err := AddCue("contig.mp4", "1"); err != nil {
+		t.Fatalf("AddCue at sheet head: %v", err)
+	}
+	if p := parentByTitle()["contig.mp4 (5)"]; p != 0 {
+		t.Errorf("cue added before the group: parent = %d, want 0", p)
+	}
+
+	// Insert between two members of the run (the second member's slot): the
+	// new cue joins.
+	sheet, err := GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	gidSlots := []int{}
+	for _, cue := range sheet.Cues {
+		if cue.Parent == gid {
+			gidSlots = append(gidSlots, cue.CuePos)
+		}
+	}
+	if len(gidSlots) < 2 {
+		t.Fatalf("need 2+ group members for the mid-insert check, have %d", len(gidSlots))
+	}
+	if err := AddCue("contig.mp4", itoa(gidSlots[1])); err != nil {
+		t.Fatalf("AddCue mid-group: %v", err)
+	}
+	if p := parentByTitle()["contig.mp4 (6)"]; p != gid {
+		t.Errorf("cue added mid-group: parent = %d, want %d", p, gid)
+	}
+
+	// A group's lone member survives a no-op reorder untouched.
+	gid2, err := CreateGroup("Lone", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if err := SetCueGroup(itoa(posByTitle()[titles[3]]), gid2); err != nil {
+		t.Fatalf("SetCueGroup D: %v", err)
+	}
+	sheet, err = GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	order := make([]int, 0, len(sheet.Cues))
+	for _, cue := range sheet.Cues {
+		order = append(order, cue.CuePos)
+	}
+	if err := ReorderCues(order); err != nil {
+		t.Fatalf("ReorderCues: %v", err)
+	}
+	if p := parentByTitle()[titles[3]]; p != gid2 {
+		t.Errorf("lone group member: parent = %d, want %d (must not dissolve)", p, gid2)
+	}
+
+	// Drag the head member of the group's run to the sheet head: it is now
+	// separated from the rest of its group, so it leaves (the group keeps its
+	// remaining members as one contiguous run). Note the top-level cue that
+	// sat before the group must NOT get absorbed into the gap.
+	sheet, _ = GetCuesheet()
+	var runHeadPos int
+	var runHeadTitle string
+	for _, cue := range sheet.Cues {
+		if cue.Parent == gid {
+			runHeadPos, runHeadTitle = cue.CuePos, cue.Title
+			break
+		}
+	}
+	membersBefore := 0
+	for _, p := range parentByTitle() {
+		if p == gid {
+			membersBefore++
+		}
+	}
+	var leaveOrder []int
+	leaveOrder = append(leaveOrder, runHeadPos)
+	for _, cue := range sheet.Cues {
+		if cue.CuePos != runHeadPos {
+			leaveOrder = append(leaveOrder, cue.CuePos)
+		}
+	}
+	if err := ReorderCues(leaveOrder); err != nil {
+		t.Fatalf("ReorderCues: %v", err)
+	}
+	if p := parentByTitle()[runHeadTitle]; p != 0 {
+		t.Errorf("member dragged to the sheet head (%q): parent = %d, want 0 (left the group)", runHeadTitle, p)
+	}
+	remaining := 0
+	for title, p := range parentByTitle() {
+		if title != runHeadTitle && p == gid {
+			remaining++
+		}
+	}
+	if remaining != membersBefore-1 {
+		t.Errorf("remaining group members: %d, want %d (group must stay intact)", remaining, membersBefore-1)
+	}
+}
