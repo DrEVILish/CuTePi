@@ -59,6 +59,41 @@ the stop fix below.
   EOS/error already did, but stop kept it, so deleting the just-stopped media
   returned 409 and the media-delete guard blocked a legitimate flow.
 
+## 2026-09-07 — Design-review fixes (4 commits)
+
+From a design review pass; one commit per issue, detailed logs in each.
+
+- `4df7f1a` **Stop disarms the cue chain** — `gsp.Stop()` now resets `cuePos`
+  along with `currentFile`. The auto-continue and slideshow runners guard on
+  "CurrentCuePos() still == my cue"; cuePos surviving Stop meant pressing
+  Stop during a postWait window still fired the next cue, and a stopped
+  slideshow kept cycling. New live-gst test `TestStopClearsCueAssociation`.
+- `b3572fa` **Re-upload replaces media** — `RegisterMedia` is an upsert
+  (`ON CONFLICT(filename) DO UPDATE` of the probe columns, background work
+  re-armed, `media_id` stable so cue FKs survive). Previously a plain INSERT
+  made re-uploading a registered filename fail with a UNIQUE error,
+  breaking the "replace a file" flow. Pinned-reject test replaced by
+  `TestRegisterMediaReuploadReplacesProbe`.
+- `c8dde49` **Failed requests surface as toasts** — htmx 4 swaps error
+  bodies by default (noSwap covers only 204/304), which ui.js already
+  suppressed; but the suppression left failed htmx actions looking like
+  no-op clicks, and the fetch paths (cue delete, context-menu Play/Delete)
+  only console.error'd. Now every 4xx/5xx raises a dismissible bootstrap
+  toast (server message extracted from the error.html body); fetch paths
+  wired to the same toast.
+- `b86c229` **SQLite WAL + busy_timeout** — DB opens with
+  `_journal_mode=WAL&_busy_timeout=5000` alongside `_foreign_keys=on`.
+  External readers/writers (sqlite3 CLI mid-show, backups) no longer cause
+  instant SQLITE_BUSY failures on app writes; readers proceed against
+  snapshots. Verified live (journal_mode reads back wal; -wal/-shm present
+  while running, checkpointed away on clean close).
+
+Not actioned (deliberate ceilings, need product decisions): single-pipeline
+playback (no crossfade; fade-to-black between slideshow images), cuePos
+identity guards can't distinguish same-cue replays (needs generation
+counters), no auth on the LAN appliance surface, group membership inferred
+from flat-order contiguity.
+
 ## 2026-09-04 — Product decisions round 2 (docs only, no code)
 
 Refinements from the second Q&A round; recorded in DESIGN.md (Product
