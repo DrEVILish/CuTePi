@@ -95,11 +95,15 @@ func processOne(m ctp.Media) {
 
 	if m.WaveformPending {
 		// Amplitude peaks feed the Cue Inspector's trim timeline. A failure
-		// just clears the flag (so it isn't retried forever) and leaves the
-		// timeline empty - the Analyse button can retry on demand.
+		// clears the pending flag (so it isn't retried on every poll tick)
+		// and leaves the timeline empty - the Analyse button can retry on
+		// demand via RequestWaveformAnalysis.
 		peaks, perr := media.GeneratePeaks(srcPath)
 		if perr != nil {
-			log.Printf("worker: waveform analysis failed for %q: %v", m.Filename, perr)
+			log.Printf("worker: waveform analysis failed for %q (flag cleared): %v", m.Filename, perr)
+			if err := ctp.FailWaveform(m.Media_id); err != nil {
+				log.Printf("worker: failed clearing waveform flag for %q: %v", m.Filename, err)
+			}
 		} else {
 			enc, _ := json.Marshal(peaks)
 			if err := ctp.StoreWaveform(m.Media_id, string(enc)); err != nil {

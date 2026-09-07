@@ -916,11 +916,24 @@ func StoreWaveform(mediaID int, peaksJSON string) (err error) {
 	return nil
 }
 
+// FailWaveform gives up on a waveform that cannot be computed (undecodable
+// file, missing codec): clears the pending flag so the worker stops
+// retrying it every poll tick, leaving the timeline empty. The Analyse
+// button can retry on demand via RequestWaveformAnalysis.
+func FailWaveform(mediaID int) (err error) {
+	_, err = db.Exec(`UPDATE mediapool SET waveform_pending = 0 WHERE media_id = ?;`, mediaID)
+	if err != nil {
+		log.Printf("Error clearing waveform flag: %v", err)
+		return err
+	}
+	bumpMediaVersion()
+	return nil
+}
+
 // RequestWaveformAnalysis flags a media file for (re)analysis by the
 // background worker. "Analyse" regenerates the amplitude peaks used by the
 // Cue Inspector's trim timeline.
-func RequestWaveformAnalysis(filename string) (err error) {
-	_, err = db.Exec(`UPDATE mediapool SET waveform_pending = 1 WHERE filename = ?;`, filename)
+func RequestWaveformAnalysis(filename string) (err error) {	_, err = db.Exec(`UPDATE mediapool SET waveform_pending = 1 WHERE filename = ?;`, filename)
 	if err != nil {
 		log.Printf("Error requesting waveform analysis: %v", err)
 		return err
