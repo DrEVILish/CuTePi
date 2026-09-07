@@ -221,7 +221,15 @@ func Stop() {
 	if err := p.SetState(gst.StateNull); err != nil {
 		logs.Printf(logs.GSPStopErr, "gsp: error stopping: %v", err)
 	}
-	mgr.bump()
+	// Stop keeps the (nulled) pipeline so a later Play() can resume the same
+	// clip, but the clip is no longer "current": a natural end or error clears
+	// currentFile via clearIfCurrent, so stopping must too — otherwise the
+	// media-delete guard keeps blocking deletion of a stopped clip.
+	mgr.mu.Lock()
+	mgr.currentFile = ""
+	mgr.version++
+	mgr.mu.Unlock()
+	go ws.Broadcast()
 }
 
 // ShowTest loads and plays a GStreamer video-test-pattern.
