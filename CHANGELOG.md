@@ -48,6 +48,25 @@ Still open in DESIGN.md: none — Q18 (config `loop` default seeding) resolved
 direct-load default); Q19 (`./smoke-test.sh`) resolved 2026-09-07 — ships with
 the stop fix below.
 
+## 2026-09-07 — Lifecycle + input polish (4 commits)
+
+- `85e0b19` **main: bind failures are fatal** — `r.Run` ignored its error;
+  "address already in use" exited 0 and systemd happily restarted a server
+  that never listened. Now `log.Fatalf` with the cause, exit 1.
+- `78e08ee` **main: SIGTERM drains properly** — HTTP shutdown (5s budget) →
+  pipeline teardown → DB close → exit 0. The old handler closed the DB
+  first, killing in-flight uploads/imports and the worker mid-transaction.
+  `/api/shutdown` and `/api/restart` flow through the same path.
+- `265cce9` **config: atomic SaveConfig** — temp+rename instead of
+  truncate-then-encode; a power cut mid-save can no longer replace the
+  operator's config (port, auth password) with defaults.
+- `a94b616` **ui: throttled scrubber** — seeks capped at 10/s during a drag
+  (plus one on pointer-up to land exactly), instead of one POST per
+  pointermove.
+- Skipped (deliberate): the WS-vs-poller cuesheet swap race — it self-heals
+  within one poll cycle; routing the poller through htmx would add more
+  machinery than the flicker is worth.
+
 ## 2026-09-07 — High-priority fixes: gsp internals + context menu (3 commits)
 
 - `1bdd8ae` **gsp: pad-added identity guard** — a rapid load A→B could let
