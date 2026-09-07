@@ -184,3 +184,39 @@ func buildWav(data []byte, sampleRate int) []byte {
 	binary.Write(header, binary.LittleEndian, uint32(len(data)))
 	return append(header.Bytes(), data...)
 }
+
+// The runnable check for image imports: Probe must accept an image (which
+// has NO duration in ffprobe's format section) with Kind=image, resolution
+// set and Duration 0 - and must still reject a video/audio file whose
+// duration is missing. Image uploads used to fail with a ParseFloat("")
+// error because duration was parsed before the kind was known.
+func TestProbeImageHasNoDuration(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available; skipping image-probe test")
+	}
+	dir := t.TempDir()
+	img := filepath.Join(dir, "t.jpg")
+	if out, err := exec.Command("ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=red:s=64x48", "-frames:v", "1", img).CombinedOutput(); err != nil {
+		t.Skipf("could not generate test image: %v: %s", err, out)
+	}
+	meta, err := Probe(img)
+	if err != nil {
+		t.Fatalf("Probe(image) = error %v, want success", err)
+	}
+	if meta.Kind != KindImage || meta.Duration != 0 || meta.Resolution != "64x48" {
+		t.Fatalf("Probe(image) = %+v, want KindImage, Duration 0, 64x48", meta)
+	}
+
+	// A real clip must still carry its duration.
+	wav := filepath.Join(dir, "t.wav")
+	if out, err := exec.Command("ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", wav).CombinedOutput(); err != nil {
+		t.Skipf("could not generate test wav: %v: %s", err, out)
+	}
+	meta, err = Probe(wav)
+	if err != nil {
+		t.Fatalf("Probe(wav) = error %v, want success", err)
+	}
+	if meta.Duration < 0.5 || meta.Duration > 2 {
+		t.Fatalf("Probe(wav) duration = %v, want ~1s", meta.Duration)
+	}
+}

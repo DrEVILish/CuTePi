@@ -65,11 +65,6 @@ func Probe(path string) (Metadata, error) {
 	}
 
 	var meta Metadata
-	duration, err := strconv.ParseFloat(parsed.Format.Duration, 64)
-	if err != nil {
-		return Metadata{}, fmt.Errorf("media: could not determine duration for %q: %w", path, err)
-	}
-	meta.Duration = duration
 
 	var videoStream, audioStream *ffprobeStream
 	for i, s := range parsed.Streams {
@@ -103,6 +98,19 @@ func Probe(path string) (Metadata, error) {
 
 	if meta.Codec == "" {
 		return Metadata{}, fmt.Errorf("media: could not determine codec for %q", path)
+	}
+
+	// Images carry no duration in ffprobe's format section (a still frame
+	// has none); only time-based media must have one. Parsing AFTER the
+	// kind switch is what makes image imports possible at all - the old
+	// code parsed up front and rejected every image with a ParseFloat("")
+	// error.
+	if meta.Kind != KindImage {
+		duration, err := strconv.ParseFloat(parsed.Format.Duration, 64)
+		if err != nil {
+			return Metadata{}, fmt.Errorf("media: could not determine duration for %q: %w", path, err)
+		}
+		meta.Duration = duration
 	}
 
 	return meta, nil
