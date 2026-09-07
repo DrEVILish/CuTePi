@@ -1,12 +1,14 @@
 package routes
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -35,7 +37,7 @@ func handleYoutubeDownload(c *gin.Context) {
 	}
 
 	logs.Printf(logs.YDLResolve, "stage=start url=%q media_dir=%q", url, config.MediaLocation())
-	filename, err := downloadWithYtDlp(url)
+	tmpDir, filename, err := downloadWithYtDlp(url)
 	if err != nil {
 		logs.Printf(logs.YDLFailed, "stage=resolve_or_download url=%q error=%v", url, err)
 		c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{
@@ -43,11 +45,17 @@ func handleYoutubeDownload(c *gin.Context) {
 		})
 		return
 	}
+	// The download lands in a temp subdir of the media dir and only moves
+	// into place after probe/verify/registration succeed (same reason as the
+	// upload path: yt-dlp's own filename may collide with existing media,
+	// and a failed validation must not leave the original clobbered).
+	defer os.RemoveAll(tmpDir)
+	dlPath := filepath.Join(tmpDir, filename)
 	logs.Printf(logs.YDLDownload, "stage=complete filename=%q", filename)
 
 	destPath := filepath.Join(config.MediaLocation(), filename)
-	logs.Printf(logs.YDLProbe, "stage=start filename=%q path=%q", filename, destPath)
-	meta, err := media.Probe(destPath)
+	logs.Printf(logs.YDLProbe, "stage=start filename=%q path=%q", filename, dlPath)
+	meta, err := media.Probe(dlPath)
 	if err != nil {
 		logs.Printf(logs.YDLFailed, "stage=probe filename=%q error=%v", filename, err)
 		c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{"error": err.Error()})
@@ -58,14 +66,14 @@ func handleYoutubeDownload(c *gin.Context) {
 	// here rather than failing at cue time. Images are excluded (ffprobe +
 	// the thumbnail copy already prove them).
 	if meta.Kind == media.KindVideo || meta.Kind == media.KindAudio {
-		if err := media.VerifyPlayable(destPath); err != nil {
+		if err := media.VerifyPlayable(dlPath); err != nil {
 			logs.Printf(logs.YDLFailed, "stage=playability filename=%q error=%v", filename, err)
 			c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{"error": err.Error()})
 			return
 		}
 	}
 
-	size, err := fileSize(destPath)
+	size, err := fileSize(dlPath)
 	if err != nil {
 		logs.Printf(logs.YDLFailed, "stage=stat filename=%q error=%v", filename, err)
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
@@ -80,6 +88,12 @@ func handleYoutubeDownload(c *gin.Context) {
 		return
 	}
 
+	if err := os.Rename(dlPath, destPath); err != nil {
+		logs.Printf(logs.YDLFailed, "stage=move filename=%q error=%v", filename, err)
+		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+		return
+	}
+
 	mediapool, err := mediapoolView()
 	if err != nil {
 		logs.Printf(logs.YDLFailed, "stage=render filename=%q error=%v", filename, err)
@@ -90,40 +104,63 @@ func handleYoutubeDownload(c *gin.Context) {
 	c.HTML(http.StatusOK, "mediapool.html", gin.H{"Mediapool": mediapool})
 }
 
-// downloadWithYtDlp shells out to yt-dlp to fetch url into the media
-// directory, using yt-dlp's own filename templating, then returns the
-// resulting filename (relative to the media directory) by asking yt-dlp
-// for it directly via --print filename.
-func downloadWithYtDlp(url string) (string, error) {
+// ytDlpResolveTimeout bounds the filename-resolution invocation; the
+// download itself gets ytDlpDownloadTimeout (long videos over slow links).
+var (
+	ytDlpResolveTimeout  = 60 * time.Second
+	ytDlpDownloadTimeout = 30 * time.Minute
+)
+
+// downloadWithYtDlp shells out to yt-dlp to fetch url, using yt-dlp's own
+// filename templating, and returns the temp dir holding the download plus
+// the resulting filename (relative to that dir), resolved via --print
+// filename. Both invocations run under exec.CommandContext so a hung
+// yt-dlp (network black hole, spinner) fails the request after the timeout
+// instead of pinning the HTTP handler forever. The download lands in a
+// temp subdir - never directly over an existing media file.
+func downloadWithYtDlp(url string) (string, string, error) {
 	outputTemplate := "%(title)s.%(ext)s"
 	// The default web client currently returns YouTube's "page needs to be
 	// reloaded" response in the target environment. Android remains the
 	// simplest yt-dlp client that resolves these public videos.
 	extractorArgs := "youtube:player_client=android"
 
-	printCmd := exec.Command("yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", url)
-	printCmd.Dir = config.MediaLocation()
+	tmpDir, err := os.MkdirTemp(config.MediaLocation(), "ytdlp-")
+	if err != nil {
+		return "", "", err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), ytDlpResolveTimeout)
+	defer cancel()
+	printCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", url)
+	printCmd.Dir = tmpDir
 	nameOut, err := printCmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("could not resolve output filename: %w: %s", err, strings.TrimSpace(string(nameOut)))
+		os.RemoveAll(tmpDir)
+		return "", "", fmt.Errorf("could not resolve output filename: %w: %s", err, strings.TrimSpace(string(nameOut)))
 	}
 	filename := strings.TrimSpace(string(nameOut))
 	if filename == "" {
-		return "", fmt.Errorf("yt-dlp returned an empty filename")
+		os.RemoveAll(tmpDir)
+		return "", "", fmt.Errorf("yt-dlp returned an empty filename")
 	}
 
 	// Keep the two-step flow so the final path is known before probing, but
 	// force the same single-video selection in both invocations.
-	dlCmd := exec.Command("yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "--no-progress", "-o", outputTemplate, url)
-	dlCmd.Dir = config.MediaLocation()
+	ctx, cancel = context.WithTimeout(context.Background(), ytDlpDownloadTimeout)
+	defer cancel()
+	dlCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "--no-progress", "-o", outputTemplate, url)
+	dlCmd.Dir = tmpDir
 	if out, err := dlCmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("%w: %s", err, out)
+		os.RemoveAll(tmpDir)
+		return "", "", fmt.Errorf("%w: %s", err, out)
 	}
-	if _, err := os.Stat(filepath.Join(config.MediaLocation(), filename)); err != nil {
-		return "", fmt.Errorf("yt-dlp reported success but output %q is missing: %w", filename, err)
+	if _, err := os.Stat(filepath.Join(tmpDir, filename)); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", "", fmt.Errorf("yt-dlp reported success but output %q is missing: %w", filename, err)
 	}
 
-	return filename, nil
+	return tmpDir, filename, nil
 }
 
 func fileSize(path string) (int64, error) {

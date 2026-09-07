@@ -1938,3 +1938,38 @@ func TestUploadBodyLimit(t *testing.T) {
 		t.Fatalf("oversized upload left files behind: %v", entries)
 	}
 }
+
+// TestYoutubeDlpTimeout is the runnable check for the yt-dlp timeout: a hung
+// yt-dlp subprocess is killed after ytDlpResolveTimeout and the request
+// fails instead of pinning the HTTP handler forever; the temp download dir
+// is cleaned up.
+func TestYoutubeDlpTimeout(t *testing.T) {
+	setupTestServer(t) // config dirs for the temp download location
+	old := ytDlpResolveTimeout
+	ytDlpResolveTimeout = 300 * time.Millisecond
+	defer func() { ytDlpResolveTimeout = old }()
+
+	// Fake yt-dlp that hangs forever (exec so the kill reaches the sleeper,
+	// not just the shell wrapping it).
+	bin := t.TempDir()
+	script := "#!/bin/sh\nexec sleep 30\n"
+	if err := os.WriteFile(filepath.Join(bin, "yt-dlp"), []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake yt-dlp: %v", err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	start := time.Now()
+	_, _, err := downloadWithYtDlp("https://youtube.com/watch?v=x")
+	if err == nil {
+		t.Fatal("hung yt-dlp must fail via timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("timeout took %v, subprocess not killed promptly", elapsed)
+	}
+	entries, _ := os.ReadDir(config.MediaLocation())
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "ytdlp-") {
+			t.Fatalf("temp download dir left behind: %s", e.Name())
+		}
+	}
+}
