@@ -10,6 +10,22 @@ htmx.on("htmx:before:swap", (e) => {
   }
 });
 
+// Failed htmx requests are never swapped (above), so without this a failed
+// action (play, fade, group ops, ...) looks exactly like a no-op click.
+// Surface every 4xx/5xx as a dismissible toast, extracting the server's
+// message from the error.html body when present.
+htmx.on("htmx:response:error", (e) => {
+  const ctx = e.detail?.ctx || {};
+  let detail = "";
+  try {
+    detail = new DOMParser().parseFromString(ctx.text || "", "text/html")
+      .body.textContent.replace(/\s+/g, " ").trim();
+  } catch (err) { /* body may be empty or non-HTML; status alone still shows */ }
+  if (detail.length > 160) detail = detail.slice(0, 159) + "…";
+  const status = ctx.response?.raw?.status ?? "?";
+  showToast("Request failed (" + status + ")" + (detail ? ": " + detail : ""));
+});
+
 // Error responses are deliberately not swapped into application panels. Keep
 // the originating YouTube form useful by showing its sanitized server error
 // in the modal instead of failing silently.
@@ -60,6 +76,35 @@ function hideModal(id) {
   if (!window.bootstrap) return;
   const m = bootstrap.Modal.getInstance(document.getElementById(id));
   if (m) m.hide();
+}
+
+// One dismissible bootstrap toast per error; the container is created lazily
+// so every page that loads ui.js gets feedback with no markup changes.
+function showToast(message) {
+  let holder = document.getElementById("ctp-toasts");
+  if (!holder) {
+    holder = document.createElement("div");
+    holder.id = "ctp-toasts";
+    holder.className = "toast-container position-fixed bottom-0 end-0 p-3";
+    holder.style.zIndex = 2000; // above modals (1055)
+    document.body.appendChild(holder);
+  }
+  const el = document.createElement("div");
+  el.className = "toast align-items-center text-bg-danger border-0";
+  el.setAttribute("role", "alert");
+  el.innerHTML =
+    '<div class="d-flex"><div class="toast-body"></div>' +
+    '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div>';
+  el.querySelector(".toast-body").textContent = message;
+  holder.appendChild(el);
+  if (window.bootstrap && bootstrap.Toast) {
+    new bootstrap.Toast(el, { delay: 6000 }).show();
+    el.addEventListener("hidden.bs.toast", () => el.remove());
+  } else {
+    // No bootstrap JS (shouldn't happen): show it raw so it is never silent.
+    el.classList.add("show");
+    setTimeout(() => el.remove(), 6000);
+  }
 }
 
 const appThemes = new Set(["lcars", "qlab", "blue-future", "custom"]);
@@ -366,8 +411,9 @@ document.addEventListener("click", (e) => {
     .catch((err) => {
       button.disabled = false;
       console.error("CuTePi: delete cue failed", err);
+      showToast("Delete cue failed: " + err.message);
     });
-}, true);
+  }, true);
 
 document.addEventListener("dragstart", (e) => {
     const bar = e.target.closest(".cue-progress-bar");
@@ -520,7 +566,10 @@ function patternOptions() {
       const action = item.dataset.cueAction;
       hideMenu();
       if (action === "play") {
-        fetch("/api/cue/" + encodeURIComponent(pos) + "/play", {method: "POST"});
+        fetch("/api/cue/" + encodeURIComponent(pos) + "/play", {method: "POST"})
+          .then((res) => {
+            if (!res.ok) showToast("Play cue failed (server returned " + res.status + ")");
+          });
       } else if (action === "autofollow") {
         const newVal = menuEl.dataset.cueAutoContinue === "true" ? "false" : "true";
         menuEl.dataset.cueAutoContinue = newVal;
@@ -620,7 +669,10 @@ function patternOptions() {
             if (window.htmx) htmx.process(replacement);
           }
         })
-        .catch((err) => console.error("CuTePi: delete cue failed", err));
+        .catch((err) => {
+          console.error("CuTePi: delete cue failed", err);
+          showToast("Delete cue failed: " + err.message);
+        });
       hideMenu();
     }
   });
