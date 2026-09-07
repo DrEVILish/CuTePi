@@ -53,6 +53,12 @@ htmx.on("htmx:after:request", (e) => {
         const sPoll = document.getElementById("settingsPollInterval");
         if (sPort) sPort.value = body.port;
         if (sPoll) sPoll.value = body.pollInterval;
+        const authState = document.getElementById("settingsAuthState");
+        if (authState && typeof body.authEnabled === "boolean") {
+          authState.textContent = body.authEnabled
+            ? "A password is currently set."
+            : "No password set (open access).";
+        }
         status.textContent = body.message || "Saved.";
         status.className = "text-success";
       } catch (err) {

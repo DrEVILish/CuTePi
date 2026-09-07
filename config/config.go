@@ -13,6 +13,7 @@ type Config struct {
 	Port           int    `json:"port"`
 	PollInterval   int    `json:"poll_interval_ms"`
 	Loop           bool   `json:"loop"`
+	AuthPassword   string `json:"auth_password,omitempty"` // empty = no auth (LAN default)
 	WorkingDir     string `json:"working_dir"`
 	ConfigFilePath string `json:"config_file_path"`
 	Db             struct {
@@ -232,6 +233,24 @@ func SetPort(port int) error {
 	conf.Port = port
 	SaveConfig()
 	return nil
+}
+
+// AuthPassword returns the operator password; empty means auth is disabled
+// (the default for a trusted show LAN).
+func AuthPassword() string {
+	return conf.AuthPassword
+}
+
+// HasAuth reports whether the operator password is enabled.
+func HasAuth() bool {
+	return conf.AuthPassword != ""
+}
+
+// SetAuthPassword sets (non-empty) or clears (empty) the operator password,
+// persisting it. Applies to new requests immediately.
+func SetAuthPassword(pw string) {
+	conf.AuthPassword = strings.TrimSpace(pw)
+	SaveConfig()
 }
 
 // WorkingDir returns the working directory from the configuration

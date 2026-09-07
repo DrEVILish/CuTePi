@@ -48,6 +48,7 @@ func setupTestServer(t *testing.T) *gin.Engine {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	r.Use(AuthMiddleware()) // mirrors main.go; no-op unless a password is set
 	extendedFuncs := map[string]any{
 		"contains":    strings.Contains,
 		"hasPrefix":   strings.HasPrefix,
@@ -1693,4 +1694,56 @@ func mustCue(t *testing.T, pos string) ctp.Cue {
 		t.Fatalf("GetCue(%s): %v", pos, err)
 	}
 	return cue
+}
+
+// TestAuthMiddlewareOptional is the runnable check for the operator
+// password: disabled by default (open LAN appliance); when set, every
+// request needs HTTP Basic credentials (any username) and wrong/missing
+// credentials get a 401 with a WWW-Authenticate challenge. Clearing the
+// password restores open access.
+func TestAuthMiddlewareOptional(t *testing.T) {
+	r := setupTestServer(t)
+
+	// Default: no password, open access.
+	if w := get(t, r, "/api/cuesheet"); w.Code != 200 {
+		t.Fatalf("GET /api/cuesheet without auth = %d, want 200 (open by default)", w.Code)
+	}
+
+	config.SetAuthPassword("showtime")
+	defer config.SetAuthPassword("")
+
+	if w := get(t, r, "/api/cuesheet"); w.Code != 401 {
+		t.Fatalf("GET /api/cuesheet without credentials = %d, want 401", w.Code)
+	}
+	if ch := get(t, r, "/api/cuesheet").Header().Get("WWW-Authenticate"); ch == "" {
+		t.Fatalf("401 response missing WWW-Authenticate challenge")
+	}
+	if w := getWithBasic(t, r, "/api/cuesheet", "op", "wrong"); w.Code != 401 {
+		t.Fatalf("GET with wrong password = %d, want 401", w.Code)
+	}
+	if w := getWithBasic(t, r, "/api/cuesheet", "any-user", "showtime"); w.Code != 200 {
+		t.Fatalf("GET with correct password = %d, want 200", w.Code)
+	}
+
+	// Settings report auth state without leaking the password.
+	config.SetAuthPassword("showtime")
+	body := getWithBasic(t, r, "/api/settings", "op", "showtime").Body.String()
+	if !strings.Contains(body, `"authEnabled":true`) || strings.Contains(body, "showtime") {
+		t.Fatalf("settings must expose authEnabled but not the password: %s", body)
+	}
+
+	// Clearing restores open access.
+	config.SetAuthPassword("")
+	if w := get(t, r, "/api/cuesheet"); w.Code != 200 {
+		t.Fatalf("GET after clearing password = %d, want 200", w.Code)
+	}
+}
+
+func getWithBasic(t *testing.T, r *gin.Engine, path, user, pass string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", path, nil)
+	req.SetBasicAuth(user, pass)
+	r.ServeHTTP(w, req)
+	return w
 }

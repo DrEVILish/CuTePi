@@ -57,6 +57,9 @@ func main() {
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)
+	// Optional operator password (config.json auth_password / Settings).
+	// Applies to every route group below, including the WebSocket handshake.
+	r.Use(routes.AuthMiddleware())
 
 	extendedFuncs := map[string]any{
 		"contains":    strings.Contains,

@@ -380,14 +380,17 @@ func Api(rg *gin.RouterGroup) {
 			"port":         config.Port(),
 			"pollInterval": config.PollInterval(),
 			"loop":         gsp.Loop(),
+			"authEnabled":  config.HasAuth(), // never return the password itself
 		})
 	})
 
 	rg.POST("/settings", func(c *gin.Context) {
 		var body struct {
-			Port         int   `json:"port" form:"port"`
-			PollInterval int   `json:"pollInterval" form:"pollInterval"`
-			Loop         *bool `json:"loop" form:"loop"`
+			Port          int    `json:"port" form:"port"`
+			PollInterval  int    `json:"pollInterval" form:"pollInterval"`
+			Loop          *bool  `json:"loop" form:"loop"`
+			Password      string `json:"password" form:"password"`
+			ClearPassword bool   `json:"clearPassword" form:"clearPassword"`
 		}
 		if err := c.ShouldBind(&body); err != nil {
 			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
@@ -408,10 +411,18 @@ func Api(rg *gin.RouterGroup) {
 		if body.Loop != nil {
 			gsp.SetLoop(*body.Loop)
 		}
+		// A blank password means "unchanged" (forms always send the field);
+		// the explicit clear checkbox disables auth.
+		if body.ClearPassword {
+			config.SetAuthPassword("")
+		} else if pw := strings.TrimSpace(body.Password); pw != "" {
+			config.SetAuthPassword(pw)
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"port":         config.Port(),
 			"pollInterval": config.PollInterval(),
 			"loop":         gsp.Loop(),
+			"authEnabled":  config.HasAuth(),
 			"message":      "Port changes require a server restart to take effect.",
 		})
 	})
