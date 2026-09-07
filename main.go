@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -97,9 +98,17 @@ func main() {
 		routes.Youtube(youtube)
 	}
 
-	// Start the server
+	// Start the server. An explicit http.Server so the SIGTERM handler can
+	// drain in-flight requests (srv.Shutdown) instead of killing them.
 	address := fmt.Sprintf(":%d", config.Port())
+	srv := &http.Server{Addr: address, Handler: r}
 	printNetworkInfo()
-	r.Run(address)
-
+	log.Printf("CuTePi: listening on %s", address)
+	// A bind failure (port already in use - e.g. the restart handover losing
+	// the race, or a second instance) must NOT look like a clean exit: the
+	// old `r.Run(address)` ignoring the error exited 0 and systemd restarted
+	// a server that had never listened.
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("CuTePi: server failed on %s: %v", address, err)
+	}
 }
