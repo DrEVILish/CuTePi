@@ -489,10 +489,10 @@ func Api(rg *gin.RouterGroup) {
 		// playback makes the current file the only meaningful "other"; the
 		// scope column is accepted for a future multi-layer output.
 		if wasPlaying := gsp.CurrentPlaying() != ""; wasPlaying && cue.FadeOut > 0 {
-			go func() {
+			goSafe(func() {
 				gsp.FadeAndStop(cue.FadeOut)
 				loadAndPlayCue(cue)
-			}()
+			})
 			c.Status(http.StatusOK)
 			return
 		}

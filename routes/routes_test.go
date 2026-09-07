@@ -1973,3 +1973,25 @@ func TestYoutubeDlpTimeout(t *testing.T) {
 		}
 	}
 }
+
+// TestGoSafeRecoversPanic is the runnable check for goSafe: a panic in a
+// background goroutine (fade chain, auto-continue timer) is converted into
+// a log line instead of killing the process - Gin's Recovery middleware
+// never sees these goroutines.
+func TestGoSafeRecoversPanic(t *testing.T) {
+	done := make(chan struct{})
+	goSafe(func() {
+		defer close(done)
+		panic("boom")
+	})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("panicking goroutine killed before its defer ran")
+	}
+	// The process is still alive and the hub works: prove it by hitting the
+	// test server once more.
+	if w := get(t, setupTestServer(t), "/api/cuesheet"); w.Code != 200 {
+		t.Fatalf("server dead after recovered panic: %d", w.Code)
+	}
+}

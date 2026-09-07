@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,22 @@ import (
 	"CuTePi/gsp"
 	"CuTePi/logs"
 )
+
+// goSafe runs fn on its own goroutine, converting a panic into a logged
+// error instead of a process kill. Gin's Recovery middleware only covers
+// the request goroutine; these goroutines outlive it and run mid-show
+// (fades, auto-continue timers), where a panic would abort the whole
+// appliance.
+func goSafe(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("background task panic recovered: %v\n%s", r, debug.Stack())
+			}
+		}()
+		fn()
+	}()
+}
 
 type MediapoolItem struct {
 	Filename  string
@@ -248,7 +265,7 @@ func autoContinueFrom(endingPos int) {
 		delay += time.Duration(nextCue.PreWait) * time.Millisecond
 	}
 	gen := gsp.Generation()
-	go func() {
+	goSafe(func() {
 		time.Sleep(delay)
 		// Generation guard: fires only if the playback decision state is
 		// unchanged since arming. Any operator action during the wait (load,
@@ -263,7 +280,7 @@ func autoContinueFrom(endingPos int) {
 			return
 		}
 		_ = ctp.SetCue(strconv.Itoa(next))
-	}()
+	})
 }
 
 // renderCuesheet fetches the cuesheet, tags the currently-playing cue, and
