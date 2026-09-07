@@ -248,11 +248,55 @@ func TestGetMediapoolSortedNewestFirst(t *testing.T) {
 	}
 }
 
-func TestRegisterMediaRejectsDuplicateFilename(t *testing.T) {
+// Re-uploading a registered filename must replace the probe metadata (and
+// re-queue thumbnail/waveform work) instead of failing on the UNIQUE
+// constraint — the operator's "replace a file" flow. media_id must stay
+// stable so every cue FK'd to it survives.
+func TestRegisterMediaReuploadReplacesProbe(t *testing.T) {
 	mustRegisterMedia(t, "dup.mp4")
-	err := RegisterMedia("dup.mp4", 1, media.Metadata{Codec: "h264"}, "dup")
-	if err == nil {
-		t.Fatalf("expected registering a duplicate filename to fail")
+
+	var before int
+	if err := db.Get(&before, `SELECT media_id FROM mediapool WHERE filename = 'dup.mp4'`); err != nil {
+		t.Fatalf("reading media_id: %v", err)
+	}
+
+	if err := RegisterMedia("dup.mp4", 999, media.Metadata{
+		Mimetype:   "video/mp4",
+		Duration:   42,
+		Resolution: "640x360",
+		Codec:      "hevc",
+	}, "dup"); err != nil {
+		t.Fatalf("re-registering dup.mp4: %v", err)
+	}
+
+	var row struct {
+		Media_id   int     `db:"media_id"`
+		Size       int64   `db:"size"`
+		Duration   float64 `db:"duration"`
+		Resolution string  `db:"resolution"`
+		Codec      string  `db:"codec"`
+		ThumbPend  bool    `db:"thumbnail_pending"`
+		WavePend   bool    `db:"waveform_pending"`
+	}
+	if err := db.Get(&row, `SELECT media_id, size, duration, resolution, codec, thumbnail_pending, waveform_pending FROM mediapool WHERE filename = 'dup.mp4'`); err != nil {
+		t.Fatalf("reading replaced row: %v", err)
+	}
+	if row.Media_id != before {
+		t.Errorf("media_id changed on re-upload: %d -> %d (cues would lose their FK)", before, row.Media_id)
+	}
+	if row.Size != 999 || row.Duration != 42 || row.Resolution != "640x360" || row.Codec != "hevc" {
+		t.Errorf("probe metadata not replaced: %+v", row)
+	}
+	if !row.ThumbPend || !row.WavePend {
+		t.Errorf("background work not re-queued: thumb=%v wave=%v", row.ThumbPend, row.WavePend)
+	}
+
+	var count int
+	if err := db.Get(&count, `SELECT COUNT(*) FROM mediapool WHERE filename = 'dup.mp4'`); err != nil {
+		t.Fatalf("counting rows: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 row for dup.mp4, got %d", count)
 	}
 }
 
@@ -847,12 +891,12 @@ func TestNewCueColumnsRoundTrip(t *testing.T) {
 	pos := strconv.Itoa(cues.Cues[0].CuePos)
 
 	cases := map[string][2]string{
-		"loop":       {"true", "true"},
+		"loop":         {"true", "true"},
 		"autoContinue": {"true", "true"},
-		"color":      {"#ff00aa", "#ff00aa"},
-		"fadeAction": {"all", "all"},
-		"fadeOut":    {"2.5", "2.5"}, // 2.5 s stored as ms
-		"volume":     {"0.6", "0.6"}, // per-cue master gain in dB; 0 = 0dB default
+		"color":        {"#ff00aa", "#ff00aa"},
+		"fadeAction":   {"all", "all"},
+		"fadeOut":      {"2.5", "2.5"}, // 2.5 s stored as ms
+		"volume":       {"0.6", "0.6"}, // per-cue master gain in dB; 0 = 0dB default
 	}
 	for col, vals := range cases {
 		if err := UpdateCue(pos, col, vals[0]); err != nil {

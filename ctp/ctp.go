@@ -820,9 +820,23 @@ func MoveCueDown(cuePos string) error {
 // directory as filename) into the mediapool, using the given probed
 // metadata. The thumbnail is left pending for the background worker.
 func RegisterMedia(filename string, size int64, meta media.Metadata, title string) (err error) {
+	// Upsert on filename: re-uploading a file the pool already knows replaces
+	// its probe metadata and re-queues background work while keeping media_id
+	// (and so every cue's FK to it) stable. A plain INSERT here made any
+	// re-upload of a registered filename fail with a UNIQUE constraint error,
+	// breaking the operator's "replace a file" flow.
 	_, err = db.Exec(`
 		INSERT INTO mediapool (filename, mimetype, size, duration, resolution, codec, media_title, thumbnail_pending, waveform_pending)
-		VALUES (:filename, :mimetype, :size, :duration, :resolution, :codec, :media_title, 1, 1);
+		VALUES (:filename, :mimetype, :size, :duration, :resolution, :codec, :media_title, 1, 1)
+		ON CONFLICT(filename) DO UPDATE SET
+			mimetype = excluded.mimetype,
+			size = excluded.size,
+			duration = excluded.duration,
+			resolution = excluded.resolution,
+			codec = excluded.codec,
+			media_title = excluded.media_title,
+			thumbnail_pending = 1,
+			waveform_pending = 1;
 	`,
 		sql.Named("filename", filename),
 		sql.Named("mimetype", meta.Mimetype),

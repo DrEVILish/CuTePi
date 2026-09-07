@@ -47,9 +47,8 @@ ok "clean"
 
 say "upload"
 if curl -fsS "$BASE/mediapool" | grep -q 'smoke.mp4'; then
-  # A tile already exists (e.g. an interrupted previous run). Re-uploading a
-  # registered filename is rejected by design (register is an INSERT), so a
-  # round with a playable asset on disk can just reuse it.
+  # A tile already exists (e.g. an interrupted previous run); re-uploading
+  # would just replace it, so reuse the registered asset.
   ok "already in mediapool (leftover), reusing"
 else
   code="$(curl -s -o /dev/null -w '%{http_code}' -F "media=@$VID" "$BASE/upload")"
