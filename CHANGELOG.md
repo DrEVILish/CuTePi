@@ -48,8 +48,39 @@ Still open in DESIGN.md: none — Q18 (config `loop` default seeding) resolved
 direct-load default); Q19 (`./smoke-test.sh`) resolved 2026-09-07 — ships with
 the stop fix below.
 
-## 2026-09-07 — Q19 smoke-test script + stop state fix (2 commits)
+## 2026-09-07 — Design-review fixes round 2 (5 commits)
 
+Remaining review findings, one commit each with detailed logs.
+
+- `38ec52b` **Cue-end hook fires for non-hold cues** — handleEnd read the cue
+  association after teardown, which zeroes it; every cue without hold ended
+  silently: no cue_end audit entry and no auto-continue. Auto-continue only
+  ever "worked" for held cues. Fixed by capturing the association before
+  teardown; regression test TestCueEndHookFiresWithoutHold (live gst, fails
+  on the old code).
+- `5b2c3cb` **Generation counter disarms auto-continue on same-cue replay** —
+  the cuePos-equality wait guard could not tell "still the original cue"
+  from "operator replayed the same cue", so re-triggering cue N during its
+  own postWait still fired the armed next cue. gsp gains a monotonic
+  generation counter (load/stop/panic/teardown); autoContinueFrom arms
+  against it. TestAutoContinueChainFiresAndIsDisarmed proves the replay hole
+  (fails on the old guard).
+- `10eb531` **Group membership follows placement** — drag-reorder/move/add
+  could split a group into two same-named folders (contiguous-run render
+  invariant broken). normalizeGroupMembership now runs after every position
+  mutation: placed-between-members joins, separated members leave (lone
+  members travel with their group), structural pass heals the rest. Also
+  fixes SetCueGroup's off-by-one (new member landed BEFORE the last member
+  instead of after).
+- `df549a2` **Optional operator password** — HTTP Basic over every route
+  (incl. WebSocket handshake), off by default so the trusted-LAN stance is
+  unchanged; constant-time compare; settable/clearable in Settings
+  (authEnabled exposed, never the password).
+- Deferred (unchanged, needs a product decision): crossfade between
+  slideshow images — single-pipeline playback makes it a fade-to-black
+  today; real crossfades need a multi-layer mixer pipeline.
+
+## 2026-09-07 — Q19 smoke-test script + stop state fix (2 commits)
 - `5e0d3bb` **Design notes** — Q18 resolved (config `loop` seeding; behaviour
   already matched the "cue flag wins" option, no code change).
 - `1a66845` **Q19 smoke-test + stop fix** — `./smoke-test.sh` (repo root,
