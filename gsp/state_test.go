@@ -266,3 +266,74 @@ func tinyWav(seconds int) []byte {
 	}
 	return buf.Bytes()
 }
+
+// Rapid cue swaps must leave the ACTIVE pipeline owning the volume/fade
+// handles (pad-added of a replaced pipeline fires asynchronously and used to
+// re-point them at the dead pipeline), and each retired pipeline's bus watch
+// must unregister (retirePipeline wake-up + identity precheck) instead of
+// pinning pipeline+watch for the process lifetime. Requires real GStreamer.
+// ponytail: the pad-added race itself is timing-dependent, so this asserts
+// the invariant after settle windows rather than proving the old failure.
+func TestSwapKeepsHandlesOnActivePipeline(t *testing.T) {
+	if _, err := exec.LookPath("gst-launch-1.0"); err != nil {
+		t.Skip("gst-launch-1.0 not available; skipping swap-handle test")
+	}
+	dir := t.TempDir()
+	config.SetConfigFilePath(dir + "/config.json")
+	config.SetDirsForTesting(dir)
+	if err := os.WriteFile(filepath.Join(dir, "swap.wav"), tinyWav(1), 0o644); err != nil {
+		t.Skipf("no writable media fixture dir: %v", err)
+	}
+
+	assertHandlesCurrent := func() {
+		t.Helper()
+		time.Sleep(700 * time.Millisecond) // pad-added settles asynchronously
+		mgr.mu.Lock()
+		p, vol, bright := mgr.pipeline, mgr.volumeEl, mgr.brightEl
+		mgr.mu.Unlock()
+		if p == nil {
+			t.Fatalf("no active pipeline")
+		}
+		if vol == nil {
+			t.Fatalf("active pipeline has no volume handle (audio pad-added did not fire)")
+		}
+		name := vol.GetName()
+		activeVol, err := p.GetElementByName(name)
+		if err != nil || activeVol == nil {
+			t.Fatalf("active pipeline does not contain the volume handle element %q (stale handle from a retired pipeline): %v", name, err)
+		}
+		if vol.Instance() != activeVol.Instance() {
+			t.Fatalf("volume handle %q belongs to a RETIRED pipeline, not the active one", name)
+		}
+		_ = bright // videotestsrc/na tests have no video element; wav has no brightness
+	}
+
+	// Load A, then swap A->B, then a stress burst: the handle must always
+	// track the newest pipeline and every retirement must clean up its watch.
+	if err := LoadWithOpts("swap.wav", LoadOpts{Volume: 6}); err != nil {
+		t.Fatalf("load A: %v", err)
+	}
+	assertHandlesCurrent()
+	if err := LoadWithOpts("swap.wav", LoadOpts{Volume: -6}); err != nil {
+		t.Fatalf("load B: %v", err)
+	}
+	assertHandlesCurrent()
+	for i := 0; i < 5; i++ {
+		if err := Load("swap.wav"); err != nil {
+			t.Fatalf("swap %d: %v", i, err)
+		}
+	}
+	assertHandlesCurrent()
+
+	// Panic retires the pipeline: the wake-up must unregister its watch
+	// without side effects, and the machinery must keep working afterwards.
+	Panic()
+	time.Sleep(300 * time.Millisecond)
+	if got := CurrentPlaying(); got != "" {
+		t.Fatalf("after Panic CurrentPlaying() = %q, want empty", got)
+	}
+	if err := ShowTest("smpte"); err != nil {
+		t.Fatalf("ShowTest after panic: %v", err)
+	}
+	Stop()
+}

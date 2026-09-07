@@ -83,7 +83,7 @@ func Generation() uint64 {
 func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadOpts) {
 	m.mu.Lock()
 	if m.pipeline != nil {
-		m.pipeline.SetState(gst.StateNull)
+		retirePipeline(m.pipeline)
 	}
 	m.clearPlayback()
 	m.pipeline = newPipeline
@@ -121,7 +121,7 @@ func (m *manager) clearPlayback() {
 func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 	m.mu.Lock()
 	if m.pipeline == p {
-		m.pipeline.SetState(gst.StateNull)
+		retirePipeline(p)
 		m.pipeline = nil
 		m.clearPlayback()
 		m.gen++
@@ -218,7 +218,7 @@ func TogglePause() {
 func Panic() {
 	mgr.mu.Lock()
 	if mgr.pipeline != nil {
-		mgr.pipeline.SetState(gst.StateNull)
+		retirePipeline(mgr.pipeline)
 		mgr.pipeline = nil
 		mgr.clearPlayback()
 		mgr.gen++
@@ -585,6 +585,18 @@ func watchAndPlay(p *gst.Pipeline) {
 		go watchTrim(p)
 	}
 	p.GetPipelineBus().AddWatch(func(msg *gst.Message) bool {
+		// Identity precheck: if this pipeline was retired (replaced/stopped),
+		// unregister the watch by returning false. Without this the closure
+		// - and through it the pipeline and its bus - is pinned forever,
+		// because a retired pipeline never reaches EOS or error (the only
+		// other ways the watch unregisters). retirePipeline posts a wake-up
+		// message so this check actually runs after a retirement.
+		mgr.mu.Lock()
+		current := mgr.pipeline == p
+		mgr.mu.Unlock()
+		if !current {
+			return false
+		}
 		switch msg.Type() {
 		case gst.MessageEOS:
 			mgr.handleEnd(p)
@@ -598,6 +610,16 @@ func watchAndPlay(p *gst.Pipeline) {
 		}
 		return true
 	})
+}
+
+// retirePipeline tears down a pipeline that is no longer (or about to stop
+// being) the active one and posts a wake-up message to its bus so the watch
+// closure's identity precheck runs and unregisters. SetState(Null) alone
+// never produces a bus message, so the watch - and everything it captures -
+// would otherwise leak on every cue swap for the lifetime of the process.
+func retirePipeline(p *gst.Pipeline) {
+	p.SetState(gst.StateNull)
+	p.GetPipelineBus().Post(gst.NewApplicationMessage(p, gst.NewStructure("retire")))
 }
 
 // watchTrim polls the pipeline position until the out-point is reached and
