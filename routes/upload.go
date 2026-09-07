@@ -90,20 +90,27 @@ func saveUploadedFile(fh *multipart.FileHeader) error {
 	}
 	defer src.Close()
 
-	dst, err := os.Create(destPath)
+	// Write to a temp sidecar and only move into place after the file has
+	// passed probe/verify/registration. Writing straight to destPath (the
+	// old behaviour) clobbers an existing media file before validation, and
+	// the failure cleanup then deleted the ORIGINAL file that live cues
+	// point at. os.Rename is atomic within the media dir.
+	tmpPath := filepath.Join(config.MediaLocation(), filename+".uploading")
+
+	dst, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
 	size, err := io.Copy(dst, src)
 	dst.Close()
 	if err != nil {
-		os.Remove(destPath)
+		os.Remove(tmpPath)
 		return err
 	}
 
-	meta, err := media.Probe(destPath)
+	meta, err := media.Probe(tmpPath)
 	if err != nil {
-		os.Remove(destPath)
+		os.Remove(tmpPath)
 		return err
 	}
 
@@ -111,15 +118,20 @@ func saveUploadedFile(fh *multipart.FileHeader) error {
 	// corrupt sources are rejected here rather than failing at cue time.
 	// Images are excluded - ffprobe (+ the thumbnail copy) already prove them.
 	if meta.Kind == media.KindVideo || meta.Kind == media.KindAudio {
-		if err := media.VerifyPlayable(destPath); err != nil {
-			os.Remove(destPath)
+		if err := media.VerifyPlayable(tmpPath); err != nil {
+			os.Remove(tmpPath)
 			return err
 		}
 	}
 
 	title := strings.TrimSuffix(filename, filepath.Ext(filename))
 	if err := ctp.RegisterMedia(filename, size, meta, title); err != nil {
-		os.Remove(destPath)
+		os.Remove(tmpPath)
+		return err
+	}
+
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 	return nil

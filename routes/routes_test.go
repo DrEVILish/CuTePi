@@ -1747,3 +1747,44 @@ func getWithBasic(t *testing.T, r *gin.Engine, path, user, pass string) *httptes
 	r.ServeHTTP(w, req)
 	return w
 }
+
+// TestUploadFailurePreservesExistingMedia is the runnable check for the
+// temp-write fix: re-uploading a file under a name that already exists in
+// the media dir must never destroy the original if the new upload fails
+// probe/verify (the old code wrote straight over the file and its failure
+// cleanup then deleted the original that live cues point at).
+func TestUploadFailurePreservesExistingMedia(t *testing.T) {
+	r := setupTestServer(t)
+	dir := config.MediaLocation()
+
+	original := []byte("ORIGINAL GOOD MEDIA - cues depend on this file")
+	if err := os.WriteFile(filepath.Join(dir, "clip.mp4"), original, 0o644); err != nil {
+		t.Fatalf("seed original: %v", err)
+	}
+
+	// Garbage payload with a video extension: passes the extension check,
+	// fails media.Probe.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("media", "clip.mp4")
+	fw.Write([]byte("this is not a real video file"))
+	mw.Close()
+	req := httptest.NewRequest("POST", "/upload/", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("corrupt re-upload = %d, want 422 (got: %s)", w.Code, w.Body.String())
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "clip.mp4"))
+	if err != nil {
+		t.Fatalf("original media must survive a failed re-upload: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("failed re-upload destroyed/overwrote the original media file")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "clip.mp4.uploading")); !os.IsNotExist(err) {
+		t.Fatalf("temp sidecar not cleaned up after failure: %v", err)
+	}
+}
