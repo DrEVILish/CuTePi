@@ -1788,3 +1788,123 @@ func TestUploadFailurePreservesExistingMedia(t *testing.T) {
 		t.Fatalf("temp sidecar not cleaned up after failure: %v", err)
 	}
 }
+
+// buildCTPBytes builds an in-memory .CTP (zip) with the given manifest and
+// media entries for import tests.
+func buildCTPBytes(t *testing.T, m showManifest, media map[string][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := writeShowZip(&buf, m); err != nil {
+		t.Fatalf("writeShowZip: %v", err)
+	}
+	// writeShowZip only embeds files present in the media dir; graft extra
+	// (possibly bogus) entries on by rewriting with the zip package directly.
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	w, _ := zw.Create("cutepi.json")
+	if err := json.NewEncoder(w).Encode(m); err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	for name, content := range media {
+		w, err := zw.Create("media/" + name)
+		if err != nil {
+			t.Fatalf("zip entry %q: %v", name, err)
+		}
+		w.Write(content)
+	}
+	zw.Close()
+	return out.Bytes()
+}
+
+// postCTP imports a .CTP payload and returns the recorder.
+func postCTP(t *testing.T, r *gin.Engine, data []byte, mode string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "show.ctp")
+	fw.Write(data)
+	mw.WriteField("mode", mode)
+	mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/show/import", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// TestShowImportRejectsUnsafeNames is the runnable check for the zip-slip
+// guard: traversal names in either the zip entries or the manifest must be
+// rejected without writing outside the media dir.
+func TestShowImportRejectsUnsafeNames(t *testing.T) {
+	r := setupTestServer(t)
+	dir := config.MediaLocation()
+
+	manifest := showManifest{
+		App: "CuTePi", Version: manifestVersion, SelectedCuePos: 0,
+		Cues: []ctp.ExportCue{{Title: "evil", Filename: "../../evil.mp4"}},
+	}
+
+	// Traversal in the manifest cue filename.
+	w := postCTP(t, r, buildCTPBytes(t, manifest, nil), "append")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("manifest traversal import = %d, want 422 (got: %s)", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "..", "evil.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("import wrote outside the media dir: %v", err)
+	}
+
+	// Traversal in a zip entry name (manifest clean, entry evil).
+	clean := manifest
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	mw2, _ := zw.Create("cutepi.json")
+	json.NewEncoder(mw2).Encode(clean)
+	ew, _ := zw.Create("media/../../evil.mp4")
+	ew.Write([]byte("x"))
+	zw.Close()
+	if w := postCTP(t, r, out.Bytes(), "append"); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("zip-slip entry import = %d, want 422 (got: %s)", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "..", "evil.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("zip-slip wrote outside the media dir: %v", err)
+	}
+}
+
+// TestShowImportFailureKeepsSheet is the runnable check for import ordering:
+// a media failure during an OVERWRITE import must not have cleared the
+// operator's current cuesheet (the old code cleared the sheet first).
+func TestShowImportFailureKeepsSheet(t *testing.T) {
+	r := setupTestServer(t)
+
+	// One pre-existing cue the operator would lose on a bad import.
+	wav := buildTinyWav(1.0)
+	if err := os.WriteFile(filepath.Join(config.MediaLocation(), "mine.wav"), wav, 0o644); err != nil {
+		t.Fatalf("seed media: %v", err)
+	}
+	if err := ctp.RegisterMedia("mine.wav", int64(len(wav)), media.Metadata{Mimetype: "audio/wav", Duration: 1.0, Codec: "pcm_s16le"}, "mine.wav"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if err := ctp.AddCue("mine.wav", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+
+	// Import in overwrite mode: carries "bad.mp4" (garbage payload named like
+	// a video) which fails media.Probe during import.
+	manifest := showManifest{
+		App: "CuTePi", Version: manifestVersion, SelectedCuePos: 0,
+		Cues: []ctp.ExportCue{{Title: "bad", Filename: "bad.mp4"}},
+	}
+	bad := buildCTPBytes(t, manifest, map[string][]byte{"bad.mp4": []byte("not a real video")})
+	w := postCTP(t, r, bad, "overwrite")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("import with unprobeable media = %d, want 422 (got: %s)", w.Code, w.Body.String())
+	}
+
+	cues, err := ctp.GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	if len(cues.Cues) != 1 || cues.Cues[0].Title != "mine.wav" {
+		t.Fatalf("failed import destroyed the operator's sheet: %+v", cues.Cues)
+	}
+}

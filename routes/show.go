@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -113,15 +114,8 @@ func Show(rg *gin.RouterGroup) {
 			}
 		}
 
-		if mode == "overwrite" {
-			if err := ctp.ClearCueSheet(); err != nil {
-				c.String(http.StatusInternalServerError, err.Error())
-				return
-			}
-		}
-
-		// Import media: register anything new, in export order so background
-		// thumbnail generation picks them up like uploads do.
+		// Import media BEFORE touching the cuesheet: a media write/probe
+		// failure must not cost the operator their current show.
 		mediaDir := config.MediaLocation()
 		for _, cue := range manifest.Cues {
 			if registered[cue.Filename] {
@@ -157,11 +151,29 @@ func Show(rg *gin.RouterGroup) {
 				appendedOffset = count
 			}
 		}
+
+		// Only after the media is in place: overwrite clears the sheet, then
+		// cues are inserted. If an insert fails mid-way, the cues inserted so
+		// far are rolled back so the sheet is left empty-but-consistent (with
+		// an audit note) instead of a random half-show.
+		if mode == "overwrite" {
+			if err := ctp.ClearCueSheet(); err != nil {
+				c.String(http.StatusInternalServerError, err.Error())
+				return
+			}
+			appendedOffset = 0
+		}
+		inserted := 0
 		for _, cue := range manifest.Cues {
 			if _, err := ctp.AddCueFull(cue); err != nil {
+			for pos := inserted; pos >= 1; pos-- {
+				_ = ctp.RemoveCue(strconv.Itoa(pos)) // best-effort rollback of this import's inserts
+			}
+			logs.Emit(logs.AuditEvent{Event: "import_failed", Pos: 0, Title: fmt.Sprintf("after %d cues: %v", inserted, err)})
 				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 				return
 			}
+			inserted++
 		}
 		ctp.SelectedCuePosFor(manifest.SelectedCuePos, len(manifest.Cues), appendedOffset)
 
@@ -218,7 +230,21 @@ func writeShowZip(dst io.Writer, m showManifest) error {
 	return zw.Close()
 }
 
+// safeMediaName rejects anything that is not a plain relative filename:
+// empty, path separators, or traversal components. Export always writes
+// bare filenames ("media/clip.mp4"), so anything else in a zip entry name or
+// manifest cue is either foreign or malicious (zip-slip would otherwise let
+// a crafted .CTP write outside the media dir via filepath.Join).
+func safeMediaName(name string) bool {
+	if name == "" || strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	return filepath.Base(name) == name && name != "." && name != ".."
+}
+
 // parseShowZip reads cutepi.json and the media/ entries from a .CTP archive.
+// Entry names are validated with safeMediaName before they ever reach
+// filepath.Join on import.
 func parseShowZip(src io.Reader) (showManifest, map[string][]byte, error) {
 	data, err := io.ReadAll(src)
 	if err != nil {
@@ -244,6 +270,10 @@ func parseShowZip(src io.Reader) (showManifest, map[string][]byte, error) {
 				return showManifest{}, nil, err
 			}
 		case strings.HasPrefix(f.Name, "media/"):
+			name := strings.TrimPrefix(f.Name, "media/")
+			if !safeMediaName(name) {
+				return showManifest{}, nil, fmt.Errorf("unsafe media entry name %q", f.Name)
+			}
 			rc, err := f.Open()
 			if err != nil {
 				return showManifest{}, nil, err
@@ -253,11 +283,16 @@ func parseShowZip(src io.Reader) (showManifest, map[string][]byte, error) {
 			if err != nil {
 				return showManifest{}, nil, err
 			}
-			mediaFiles[strings.TrimPrefix(f.Name, "media/")] = content
+			mediaFiles[name] = content
 		}
 	}
 	if m.Version == 0 {
 		return showManifest{}, nil, fmt.Errorf("missing cutepi.json manifest")
+	}
+	for _, cue := range m.Cues {
+		if !safeMediaName(cue.Filename) {
+			return showManifest{}, nil, fmt.Errorf("manifest cue %q has an unsafe media filename %q", cue.Title, cue.Filename)
+		}
 	}
 	return m, mediaFiles, nil
 }
