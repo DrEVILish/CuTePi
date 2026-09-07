@@ -487,7 +487,7 @@ function patternOptions() {
     menuEl.hidden = true;
     menuEl.innerHTML = `
       <div class="cue-context-item" data-cue-action="play"><i class="bi bi-play-fill"></i> Play</div>
-      <div class="cue-context-item cue-context-color" data-cue-action="colour">
+      <div class="cue-context-item cue-context-color">
         <i class="bi bi-palette"></i> Colour:
         <select title="Cue colour">${patternOptions()}</select>
       </div>
@@ -578,7 +578,11 @@ function patternOptions() {
     if (!menuEl || menuEl.hidden) return;
     const pos = menuEl.dataset.cuePos;
     const item = e.target.closest("[data-cue-action]");
-    if (item) {
+    // Form controls inside the menu (colour/scope selects, fade time) handle
+    // their own change events - a click on them must not match a parent
+    // action row (it used to match the colour row's action and close the
+    // menu before the dropdown could open).
+    if (item && !e.target.closest("select, input")) {
       const action = item.dataset.cueAction;
       hideMenu();
       if (action === "play") {
