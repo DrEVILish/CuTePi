@@ -1603,3 +1603,94 @@ func buildTinyWav(seconds int) []byte {
 	}
 	return buf.Bytes()
 }
+
+// TestAutoContinueChainFiresAndIsDisarmed is the runnable check for the
+// auto-continue wait guard: the chain must fire when nothing intervenes, and
+// must be disarmed by ANY operator playback action during the wait —
+// including replaying the SAME ending cue, which the old cuePos-equality
+// guard could not detect (cuePos stays equal on a replay).
+func TestAutoContinueChainFiresAndIsDisarmed(t *testing.T) {
+	// Test server setup only (config/DB isolation); the chain logic is
+	// exercised directly, not over HTTP.
+	setupTestServer(t)
+
+	// DB-only media (no files on disk): buildPipeline succeeds and the swap
+	// happens synchronously, while the sink error surfaces later on the bus —
+	// same approach as TestGroupPlayNonSlideshowPlaysFirstMember. Keeps the
+	// test free of real sink state changes (no audio device in CI).
+	for _, name := range []string{"chain-a.wav", "chain-b.wav", "chain-c.wav"} {
+		if err := ctp.RegisterMedia(name, 40000, media.Metadata{
+			Mimetype: "audio/wav", Duration: 1.0, Codec: "pcm_s16le",
+		}, name); err != nil {
+			t.Fatalf("RegisterMedia: %v", err)
+		}
+		if err := ctp.AddCue(name, ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	if err := ctp.UpdateCue("1", "autoContinue", "true"); err != nil {
+		t.Fatalf("UpdateCue(autoContinue): %v", err)
+	}
+
+	waitForPos := func(want int, d time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(d)
+		for time.Now().Before(deadline) {
+			if gsp.CurrentCuePos() == want {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("cue pos stuck at %d, want %d within %v", gsp.CurrentCuePos(), want, d)
+	}
+
+	// 1. No intervention: cue 1 ends -> cue 2 fires immediately (postWait 0).
+	// Load cue 1 first so the association exists (the old cuePos guard
+	// required it; the generation guard does not).
+	if err := loadAndPlayCue(mustCue(t, "1")); err != nil {
+		t.Fatalf("play cue 1: %v", err)
+	}
+	autoContinueFrom(1)
+	waitForPos(2, 2*time.Second)
+
+	// 2. Replay of the SAME cue during the wait disarms the chain. The old
+	// guard (CurrentCuePos() != endingPos) passed here — cuePos is still 1 —
+	// so cue 2 wrongly fired after the operator re-triggered cue 1.
+	if err := ctp.UpdateCue("1", "postWait", "0.4"); err != nil { // 0.4s
+		t.Fatalf("UpdateCue(postWait): %v", err)
+	}
+	if err := loadAndPlayCue(mustCue(t, "1")); err != nil {
+		t.Fatalf("replay cue 1: %v", err)
+	}
+	autoContinueFrom(1)
+	time.Sleep(100 * time.Millisecond)
+	if err := loadAndPlayCue(mustCue(t, "1")); err != nil { // operator replays cue 1 mid-wait
+		t.Fatalf("operator replay: %v", err)
+	}
+	time.Sleep(600 * time.Millisecond)
+	if got := gsp.CurrentCuePos(); got != 1 {
+		t.Fatalf("replayed cue must disarm the chain: cue pos = %d, want 1 (cue 2 fired)", got)
+	}
+
+	// 3. Loading a different cue during the wait disarms the chain too.
+	autoContinueFrom(1)
+	time.Sleep(100 * time.Millisecond)
+	if err := loadAndPlayCue(mustCue(t, "3")); err != nil {
+		t.Fatalf("operator loads cue 3: %v", err)
+	}
+	waitForPos(3, 600*time.Millisecond)
+	time.Sleep(400 * time.Millisecond)
+	if got := gsp.CurrentCuePos(); got != 3 {
+		t.Fatalf("operator load must disarm the chain: cue pos = %d, want 3", got)
+	}
+}
+
+// mustCue fetches a cue by position or fails the test.
+func mustCue(t *testing.T, pos string) ctp.Cue {
+	t.Helper()
+	cue, err := ctp.GetCue(pos)
+	if err != nil {
+		t.Fatalf("GetCue(%s): %v", pos, err)
+	}
+	return cue
+}

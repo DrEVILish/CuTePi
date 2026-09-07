@@ -34,6 +34,7 @@ type manager struct {
 	brightEl    *gst.Element  // per-video-branch "videobalance" element (last wins)
 	cuePos      int           // cue position associated with the active clip (0 = not a cue)
 	onCueEnd    func(pos int) // invoked (in a goroutine) when an active cue reaches its end
+	gen         uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
 }
 
 var (
@@ -65,6 +66,18 @@ func StateVersion() uint64 {
 	return mgr.version
 }
 
+// Generation is a monotonic counter of playback-decision changes: pipeline
+// load/swap, stop, panic, and end-of-clip teardown all advance it. Chain
+// runners (auto-continue) capture it when they arm and abort if it moved.
+// Unlike a CurrentCuePos equality check, it also detects the same cue being
+// replayed — the operator re-triggering cue N during its own postWait window
+// leaves cuePos unchanged but bumps the generation.
+func Generation() uint64 {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	return mgr.gen
+}
+
 // swap atomically stops/releases the current pipeline (if any) and installs
 // newPipeline as the active one, under the manager lock.
 func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadOpts) {
@@ -81,6 +94,7 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	m.loop = opts.Loop
 	m.loopRemain = opts.LoopCount
 	m.volume = opts.Volume // per-cue gain in dB (0 = 0dB)
+	m.gen++
 	m.mu.Unlock()
 	go ws.Broadcast()
 }
@@ -110,6 +124,7 @@ func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 		m.pipeline.SetState(gst.StateNull)
 		m.pipeline = nil
 		m.clearPlayback()
+		m.gen++
 		m.mu.Unlock()
 		go ws.Broadcast()
 		return
@@ -206,6 +221,7 @@ func Panic() {
 		mgr.pipeline.SetState(gst.StateNull)
 		mgr.pipeline = nil
 		mgr.clearPlayback()
+		mgr.gen++
 	}
 	mgr.mu.Unlock()
 	go ws.Broadcast()
@@ -235,6 +251,7 @@ func Stop() {
 	mgr.mu.Lock()
 	mgr.currentFile = ""
 	mgr.cuePos = 0
+	mgr.gen++
 	mgr.version++
 	mgr.mu.Unlock()
 	go ws.Broadcast()

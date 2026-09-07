@@ -247,12 +247,15 @@ func autoContinueFrom(endingPos int) {
 	if nextCue.AutoContinue {
 		delay += time.Duration(nextCue.PreWait) * time.Millisecond
 	}
+	gen := gsp.Generation()
 	go func() {
 		time.Sleep(delay)
-		// ponytail: cuePos identity guards against operator intervention during
-		// waits; per-cue generation counters would be needed to disambiguate
-		// "same cue replayed" from "still that original cue".
-		if gsp.CurrentCuePos() != endingPos {
+		// Generation guard: fires only if the playback decision state is
+		// unchanged since arming. Any operator action during the wait (load,
+		// stop, panic — including re-triggering the SAME cue, which leaves
+		// cuePos equal but bumps the generation) disarms the chain, so a
+		// triggered cue can never interrupt a newer decision.
+		if gsp.Generation() != gen {
 			return
 		}
 		if err := loadAndPlayCue(nextCue); err != nil {
