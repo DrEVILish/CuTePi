@@ -225,8 +225,16 @@ func Stop() {
 	// clip, but the clip is no longer "current": a natural end or error clears
 	// currentFile via clearIfCurrent, so stopping must too — otherwise the
 	// media-delete guard keeps blocking deletion of a stopped clip.
+	//
+	// The cue association must go as well: the auto-continue and slideshow
+	// runners guard on CurrentCuePos() ("is the ending cue still the active
+	// decision"), and cuePos surviving Stop made an explicit stop invisible to
+	// them — the next cue would still fire after the operator hit Stop, and a
+	// stopped slideshow kept cycling. Resuming a stopped clip replays to its
+	// end without re-arming the chain; that is the operator's explicit choice.
 	mgr.mu.Lock()
 	mgr.currentFile = ""
+	mgr.cuePos = 0
 	mgr.version++
 	mgr.mu.Unlock()
 	go ws.Broadcast()

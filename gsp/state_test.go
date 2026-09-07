@@ -136,3 +136,35 @@ func TestStateVersionBumpsOnPlaybackOperations(t *testing.T) {
 		t.Errorf("expected idle position queries to leave the version unchanged, v7=%d v8=%d", v7, v)
 	}
 }
+
+// Stop must end the cue association along with playback: the auto-continue
+// and slideshow runners treat "CurrentCuePos() still == my cue" as "the chain
+// is still armed", so a cuePos surviving Stop made the next cue fire even
+// after the operator pressed Stop. Same gating as the state-version test.
+func TestStopClearsCueAssociation(t *testing.T) {
+	if _, err := exec.LookPath("gst-launch-1.0"); err != nil {
+		t.Skip("gst-launch-1.0 not available; skipping stop-state test")
+	}
+
+	if err := ShowTest("smpte"); err != nil {
+		t.Fatalf("ShowTest: %v", err)
+	}
+	SetCuePos(7)
+	if got := CurrentCuePos(); got != 7 {
+		t.Fatalf("SetCuePos(7) then CurrentCuePos() = %d, want 7", got)
+	}
+
+	Stop()
+	if got := CurrentCuePos(); got != 0 {
+		t.Errorf("after Stop CurrentCuePos() = %d, want 0 (chain must be disarmed)", got)
+	}
+	if got := CurrentPlaying(); got != "" {
+		t.Errorf("after Stop CurrentPlaying() = %q, want empty", got)
+	}
+
+	// Stopping with no pipeline must stay a harmless no-op.
+	Stop()
+	if got := CurrentCuePos(); got != 0 {
+		t.Errorf("Stop with no pipeline changed cuePos to %d, want 0", got)
+	}
+}
