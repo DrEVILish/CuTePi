@@ -49,6 +49,7 @@ func setupTestServer(t *testing.T) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(AuthMiddleware()) // mirrors main.go; no-op unless a password is set
+	r.Use(LimitBody())      // mirrors main.go
 	extendedFuncs := map[string]any{
 		"contains":    strings.Contains,
 		"hasPrefix":   strings.HasPrefix,
@@ -1906,5 +1907,34 @@ func TestShowImportFailureKeepsSheet(t *testing.T) {
 	}
 	if len(cues.Cues) != 1 || cues.Cues[0].Title != "mine.wav" {
 		t.Fatalf("failed import destroyed the operator's sheet: %+v", cues.Cues)
+	}
+}
+
+// TestUploadBodyLimit is the runnable check for the body cap: a request
+// larger than maxBodyBytes is rejected instead of being spooled to disk.
+func TestUploadBodyLimit(t *testing.T) {
+	r := setupTestServer(t)
+	old := maxBodyBytes
+	maxBodyBytes = 1 << 20 // 1 MiB for the test
+	defer func() { maxBodyBytes = old }()
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("media", "big.mp4")
+	if _, err := io.Copy(fw, strings.NewReader(strings.Repeat("x", 2<<20))); err != nil { // 2 MiB payload
+		t.Fatalf("building oversized upload: %v", err)
+	}
+	mw.Close()
+	req := httptest.NewRequest("POST", "/upload/", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.ContentLength = int64(buf.Len())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code < 400 {
+		t.Fatalf("oversized upload = %d, want an error status; body: %.200s", w.Code, w.Body.String())
+	}
+	// Nothing may have landed in the media dir.
+	if entries, _ := os.ReadDir(config.MediaLocation()); len(entries) != 0 {
+		t.Fatalf("oversized upload left files behind: %v", entries)
 	}
 }
