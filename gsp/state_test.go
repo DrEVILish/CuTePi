@@ -161,7 +161,28 @@ func TestStopClearsCueAssociation(t *testing.T) {
 		t.Fatalf("SetCuePos(7) then CurrentCuePos() = %d, want 7", got)
 	}
 
+	// Generation must advance on pipeline swap (load) and on stop. (Whether a
+	// no-pipeline Stop bumps can't be asserted here: a concurrent sink error
+	// lands via clearIfCurrent and legitimately bumps.)
+	genAfterLoad := Generation()
 	Stop()
+	if Generation() <= genAfterLoad {
+		t.Errorf("Stop must bump the generation, %d -> %d", genAfterLoad, Generation())
+	}
+	genStopped := Generation()
+
+	if err := ShowTest("smpte"); err != nil {
+		t.Fatalf("ShowTest: %v", err)
+	}
+	genAfterReload := Generation()
+	if genAfterReload <= genStopped {
+		t.Errorf("pipeline swap must bump the generation, %d -> %d", genStopped, genAfterReload)
+	}
+	Panic()
+	if Generation() <= genAfterReload {
+		t.Errorf("Panic must bump the generation, %d -> %d", genAfterReload, Generation())
+	}
+
 	if got := CurrentCuePos(); got != 0 {
 		t.Errorf("after Stop CurrentCuePos() = %d, want 0 (chain must be disarmed)", got)
 	}
