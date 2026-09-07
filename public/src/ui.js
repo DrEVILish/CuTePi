@@ -720,6 +720,9 @@ function patternOptions() {
       // Transient network/server error; the next poll tick will retry.
     }
   }
+  // WebSocket "sync" wakes this poller immediately (single writer for the
+  // widget, same rationale as the cuesheet poller).
+  document.addEventListener("cutepi-sync", refresh);
 
 })();
 
@@ -809,6 +812,10 @@ document.addEventListener("input", (e) => {
     }
   }
   setInterval(refresh, POLL_MS);
+  // WebSocket "sync" wakes this poller immediately (single writer: the
+  // poller is the only thing that swaps the cuesheet, so a WS-triggered
+  // swap and a poll tick can no longer race each other's re-render).
+  document.addEventListener("cutepi-sync", refresh);
 })();
 
 // Prefer server push for cross-browser updates. The existing pollers remain
@@ -834,16 +841,12 @@ document.addEventListener("input", (e) => {
         return;
       }
       if (type !== "sync") return;
-      // Force the normal authoritative pollers to fetch fresh state.
+      // Wake the authoritative pollers; they are the only writers for the
+      // cuesheet and now-playing widget, so no parallel htmx swap here (it
+      // used to race the poller's replaceWith: the htmx response could land
+      // in a node the poller had just detached, losing that update until
+      // the next tick - and the double re-render flickered).
       document.dispatchEvent(new Event("cutepi-sync"));
-      const cuesheet = document.getElementById("cuesheet");
-      if (cuesheet) {
-        htmx.ajax("GET", "/api/cuesheet", {target: "#cuesheet", swap: "outerHTML"});
-      }
-      const info = document.getElementById("mediainfo");
-      if (info) {
-        htmx.ajax("GET", "/api/nowplaying", {target: "#mediainfo", swap: "outerHTML"});
-      }
     };
     socket.onclose = () => {
       clearTimeout(retry);
