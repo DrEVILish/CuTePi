@@ -52,8 +52,6 @@ func InitDB() error {
 			size INTEGER,
 			duration REAL,
 			resolution TEXT,
-			codec TEXT,
-			media_title TEXT,
 			thumbnail_pending BOOLEAN NOT NULL DEFAULT 1,
 			waveform TEXT NOT NULL DEFAULT '',
 			waveform_pending BOOLEAN NOT NULL DEFAULT 0,
@@ -82,6 +80,22 @@ func InitDB() error {
 	// the empty string so SELECTs scan cleanly into Go strings.
 	if _, err = db.Exec(`UPDATE mediapool SET waveform = '' WHERE waveform IS NULL;`); err != nil {
 		return fmt.Errorf("ctp: backfilling waveform column: %w", err)
+	}
+
+	// Migration: the codec and media_title columns were write-only (populated
+	// by RegisterMedia, read by nothing - no handler, template, export or JS
+	// surfaced them). Drop them so SELECT * scans cleanly against the slimmed
+	// Media struct.
+	for _, dead := range []string{"codec", "media_title"} {
+		var present int
+		if err := db.Get(&present, fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info('mediapool') WHERE name = '%s'`, dead)); err != nil {
+			return fmt.Errorf("ctp: checking mediapool column %s: %w", dead, err)
+		}
+		if present > 0 {
+			if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE mediapool DROP COLUMN %s;`, dead)); err != nil {
+				return fmt.Errorf("ctp: dropping mediapool column %s: %w", dead, err)
+			}
+		}
 	}
 
 	_, err = db.Exec(`

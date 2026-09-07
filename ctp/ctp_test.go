@@ -274,17 +274,16 @@ func TestRegisterMediaReuploadReplacesProbe(t *testing.T) {
 		Size       int64   `db:"size"`
 		Duration   float64 `db:"duration"`
 		Resolution string  `db:"resolution"`
-		Codec      string  `db:"codec"`
 		ThumbPend  bool    `db:"thumbnail_pending"`
 		WavePend   bool    `db:"waveform_pending"`
 	}
-	if err := db.Get(&row, `SELECT media_id, size, duration, resolution, codec, thumbnail_pending, waveform_pending FROM mediapool WHERE filename = 'dup.mp4'`); err != nil {
+	if err := db.Get(&row, `SELECT media_id, size, duration, resolution, thumbnail_pending, waveform_pending FROM mediapool WHERE filename = 'dup.mp4'`); err != nil {
 		t.Fatalf("reading replaced row: %v", err)
 	}
 	if row.Media_id != before {
 		t.Errorf("media_id changed on re-upload: %d -> %d (cues would lose their FK)", before, row.Media_id)
 	}
-	if row.Size != 999 || row.Duration != 42 || row.Resolution != "640x360" || row.Codec != "hevc" {
+	if row.Size != 999 || row.Duration != 42 || row.Resolution != "640x360" {
 		t.Errorf("probe metadata not replaced: %+v", row)
 	}
 	if !row.ThumbPend || !row.WavePend {

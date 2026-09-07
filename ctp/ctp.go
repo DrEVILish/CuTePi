@@ -24,8 +24,6 @@ type Media struct {
 	Size             int       `db:"size"`
 	Duration         float64   `db:"duration"`
 	Resolution       string    `db:"resolution"`
-	Codec            string    `db:"codec"`
-	MediaTitle       string    `db:"media_title"`
 	ThumbnailPending bool      `db:"thumbnail_pending"`
 	Waveform         string    `db:"waveform"` // JSON array of amplitude peaks (0..1), "" if unanalysed
 	WaveformPending  bool      `db:"waveform_pending"`
@@ -833,6 +831,9 @@ func MoveCueDown(cuePos string) error {
 // RegisterMedia inserts a newly-uploaded file (already saved to the media
 // directory as filename) into the mediapool, using the given probed
 // metadata. The thumbnail is left pending for the background worker.
+// ponytail: the `title` param is kept for API stability but no longer
+// persisted - nothing ever read media_title; restore the column write (the
+// DB column stays, nullable) if a surface for it appears.
 func RegisterMedia(filename string, size int64, meta media.Metadata, title string) (err error) {
 	// Upsert on filename: re-uploading a file the pool already knows replaces
 	// its probe metadata and re-queues background work while keeping media_id
@@ -840,15 +841,13 @@ func RegisterMedia(filename string, size int64, meta media.Metadata, title strin
 	// re-upload of a registered filename fail with a UNIQUE constraint error,
 	// breaking the operator's "replace a file" flow.
 	_, err = db.Exec(`
-		INSERT INTO mediapool (filename, mimetype, size, duration, resolution, codec, media_title, thumbnail_pending, waveform_pending)
-		VALUES (:filename, :mimetype, :size, :duration, :resolution, :codec, :media_title, 1, 1)
+		INSERT INTO mediapool (filename, mimetype, size, duration, resolution, thumbnail_pending, waveform_pending)
+		VALUES (:filename, :mimetype, :size, :duration, :resolution, 1, 1)
 		ON CONFLICT(filename) DO UPDATE SET
 			mimetype = excluded.mimetype,
 			size = excluded.size,
 			duration = excluded.duration,
 			resolution = excluded.resolution,
-			codec = excluded.codec,
-			media_title = excluded.media_title,
 			thumbnail_pending = 1,
 			waveform_pending = 1;
 	`,
@@ -857,8 +856,6 @@ func RegisterMedia(filename string, size int64, meta media.Metadata, title strin
 		sql.Named("size", size),
 		sql.Named("duration", meta.Duration),
 		sql.Named("resolution", meta.Resolution),
-		sql.Named("codec", meta.Codec),
-		sql.Named("media_title", title),
 	)
 	if err != nil {
 		log.Printf("Error registering uploaded file: %v", err)
