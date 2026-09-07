@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,39 +9,58 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func TestBroadcastReachesConnectedClient(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(Handle))
-	defer server.Close()
-
-	url := "ws" + server.URL[len("http"):]
+// dial registers a client against a real HTTP server (websocket upgrade
+// needs real TCP) and returns the connection plus the server.
+func dial(t *testing.T) (*websocket.Conn, *httptest.Server) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(Handle))
+	t.Cleanup(srv.Close)
+	url := "ws" + srv.URL[len("http"):] + "/"
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
+		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { conn.Close() })
+	return conn, srv
+}
 
-	// Handle sends an initial sync message when the client connects.
-	if _, _, err := conn.ReadMessage(); err != nil {
-		t.Fatalf("read initial sync: %v", err)
+// TestBroadcastReachesClientAndEvictsDead is the runnable check for the
+// fan-out: a live client receives the sync message; a closed client is
+// evicted on the next broadcast without stalling or panicking (with the
+// write deadline, even a black-holed peer cannot block this loop).
+func TestBroadcastReachesClientAndEvictsDead(t *testing.T) {
+	live, _ := dial(t)
+	dead, _ := dial(t)
+
+	// Initial sync hint on connect.
+	dead.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var hint map[string]string
+	if err := dead.ReadJSON(&hint); err != nil || hint["type"] != "sync" {
+		t.Fatalf("initial sync hint: err=%v msg=%v", err, hint)
+	}
+	live.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	_ = dead.Close()
+
+	// Discard live's queued connect hint, then read the real broadcast.
+	live.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var skip map[string]string
+	if err := live.ReadJSON(&skip); err != nil {
+		t.Fatalf("reading connect hint: %v", err)
 	}
 
 	Broadcast()
-	conn.SetReadDeadline(time.Now().Add(time.Second))
-	_, payload, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read broadcast: %v", err)
-	}
-	var message map[string]string
-	if err := json.Unmarshal(payload, &message); err != nil || message["type"] != "sync" {
-		t.Fatalf("broadcast message = %s, want sync", payload)
+
+	var msg map[string]string
+	if err := live.ReadJSON(&msg); err != nil || msg["type"] != "sync" {
+		t.Fatalf("live client missed broadcast: err=%v msg=%v", err, msg)
 	}
 
+	// The evicted peer must be gone: no further writes to it (would error),
+	// and the hub stays functional.
 	BroadcastMedia()
-	_, payload, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read media broadcast: %v", err)
-	}
-	if err := json.Unmarshal(payload, &message); err != nil || message["type"] != "media" {
-		t.Fatalf("media broadcast message = %s, want media", payload)
+	var mediaMsg map[string]string
+	if err := live.ReadJSON(&mediaMsg); err != nil || mediaMsg["type"] != "media" {
+		t.Fatalf("live client missed media broadcast: err=%v msg=%v", err, mediaMsg)
 	}
 }

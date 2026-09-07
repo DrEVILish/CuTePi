@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -36,6 +37,7 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Send an initial sync hint so the newly-connected client refreshes immediately.
 	c.write.Lock()
+	_ = conn.SetWriteDeadline(time.Now().Add(writeDeadline))
 	_ = conn.WriteJSON(map[string]string{"type": "sync"})
 	c.write.Unlock()
 
@@ -65,6 +67,16 @@ func BroadcastMedia() {
 	broadcast("media")
 }
 
+// writeDeadline caps every client write. Without it one stalled TCP peer
+// (dead phone, half-closed laptop) blocks broadcast() — which runs on the
+// ctp/gsp bump paths — and with it the whole server's HTTP handlers and
+// event flow. 2s: slow Wi-Fi clients still get every sync; dead ones are
+// evicted at the next broadcast.
+// ponytail: serial fan-out means worst case 2s per dead client per
+// broadcast; per-client writer goroutines if a real deployment ever
+// shows that stall.
+const writeDeadline = 2 * time.Second
+
 func broadcast(kind string) {
 	mu.Lock()
 	if len(clients) == 0 {
@@ -81,6 +93,7 @@ func broadcast(kind string) {
 	msg, _ := json.Marshal(map[string]string{"type": kind})
 	for _, c := range snapshot {
 		c.write.Lock()
+		_ = c.conn.SetWriteDeadline(time.Now().Add(writeDeadline))
 		err := c.conn.WriteMessage(websocket.TextMessage, msg)
 		c.write.Unlock()
 		if err != nil {
