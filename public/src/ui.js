@@ -429,7 +429,14 @@ document.addEventListener("dragstart", (e) => {
     const bar = e.target.closest(".cue-progress-bar");
     if (!bar) return;
     e.preventDefault();
+    // Throttled to ~100ms: a raw seek per pointermove turns one drag into
+    // dozens of POSTs, each a QueryDuration+SeekTime on the pipeline (and
+    // serialized with everything else server-side).
+    let lastSeek = 0;
     const seek = (ev) => {
+      const now = Date.now();
+      if (now - lastSeek < 100) return;
+      lastSeek = now;
       const rect = bar.getBoundingClientRect();
       const ratio = (ev.clientX - rect.left) / rect.width;
       const dur = parseInt(bar.dataset.dur, 10) || 0;
@@ -442,6 +449,7 @@ document.addEventListener("dragstart", (e) => {
     const onUp = (ev) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      seek(ev); // land exactly where the drag ended, not at the last throttle window
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
