@@ -521,6 +521,16 @@ func TestMediapoolEscapesMediaActionPaths(t *testing.T) {
 func TestCuesheetRendersColumnResizeMarkers(t *testing.T) {
 	r := setupTestServer(t)
 
+	// The suite shares one in-memory DB: earlier tests leave cues behind and
+	// a stale selection (e.g. the export/import roundtrip's SetCue("1"))
+	// renders an inspector for THAT cue, resurrecting inline markup this
+	// test asserts was removed. Start from a known, empty sheet (ClearCueSheet
+	// also resets the selection; leftover cue_group rows are inert without
+	// member cues).
+	if err := ctp.ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+
 	if err := ctp.RegisterMedia("resize-route.mp4", 100, media.Metadata{
 		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
 	}, "resize-route.mp4"); err != nil {
