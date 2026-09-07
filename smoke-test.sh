@@ -67,12 +67,16 @@ ok "cue $POS added"
 say "play cue $POS"
 curl -fsS -o /dev/null -X POST "$BASE/api/cue/$POS/play" || die "cue play failed"
 sleep 1
-curl -fsS "$BASE/api/nowplaying" | grep -q 'smoke.mp4' || die "now playing is not smoke.mp4"
+# pipefail + `grep -q` would fail the pipeline when grep exits on match and
+# curl gets EPIPE mid-body; capture to a file and grep that instead.
+curl -fsS -o "$WORK/nowplaying.html" "$BASE/api/nowplaying" || die "nowplaying fetch failed"
+grep -q 'smoke.mp4' "$WORK/nowplaying.html" || die "now playing is not smoke.mp4"
 ok "smoke.mp4 now playing"
 
 say "trim to 2s"
-curl -fsS -X PUT --data "posStart=0" --data "posEnd=2" "$BASE/api/cue/inspector/$POS" \
-  | grep -q 'data-pos-end="2000"' || die "trim out not persisted"
+curl -fsS -o "$WORK/inspector.html" -X PUT --data "posStart=0" --data "posEnd=2" \
+  "$BASE/api/cue/inspector/$POS" || die "trim PUT failed"
+grep -q 'data-pos-end="2000"' "$WORK/inspector.html" || die "trim out not persisted"
 ok "trim out = 2.000s"
 
 say "stop"
