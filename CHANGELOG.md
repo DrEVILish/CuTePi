@@ -48,6 +48,20 @@ Still open in DESIGN.md: none — Q18 (config `loop` default seeding) resolved
 direct-load default); Q19 (`./smoke-test.sh`) resolved 2026-09-07 — ships with
 the stop fix below.
 
+## 2026-09-07 — High-priority fixes: gsp internals + context menu (3 commits)
+
+- `1bdd8ae` **gsp: pad-added identity guard** — a rapid load A→B could let
+  A's asynchronous pad-added callback re-point the volume/fade handles at
+  the dead pipeline: volume changes and fade-to-black silently did nothing
+  to the clip on screen.
+- `ab1ebe7` **gsp: bus-watch leak per cue swap** — a replaced pipeline never
+  reached EOS/error (the only watch-unregister paths), pinning pipeline +
+  watch forever; retirePipeline (Null + wake-up message) + identity
+  precheck now unregister them. Stop still keeps its watch (resume).
+- `19c330a` **ui: single context-menu dispatcher** — the handler was
+  registered twice; the double toggle made the autofollow on/off switch a
+  silent no-op and doubled play/loop/delete requests.
+
 ## 2026-09-07 — Design-review fixes round 3: previously-unaudited packages (9 commits)
 
 Fresh audit of the surfaces the earlier reviews never covered (upload,
