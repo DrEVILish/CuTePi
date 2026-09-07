@@ -647,9 +647,7 @@ covered in this pass - see Suggested Improvements below).
   recorded in "Product Decisions"; this section is now for anything still open.
 
 Remaining open:
-- Pi validation ownership: whether a `./smoke-test.sh` (generate assets with
-  ffmpeg, exercise upload → pool → cue → play → trim → stop via curl against
-  the HDMI sink) should ship so hardware validation is one command.
+- (none)
 
 Resolved:
 - **Config `loop` default (2026-09-06):** cue loads already always honour the
@@ -659,6 +657,14 @@ Resolved:
   loaded (the Settings Loop toggle persists it). New cues default loop off
   (registration does not seed). Keep it as the direct-load default; not
   removed, no registration seeding.
+- **Smoke-test script (2026-09-07):** `./smoke-test.sh` ships (repo root,
+  next to `install.sh`): generates a 3s clip with ffmpeg and exercises
+  upload → pool → cue → play → trim → stop → delete over HTTP. Re-runs
+  converge from interrupted runs (reuses an already-registered asset, deletes
+  it at the end). Surfaced one real bug on the way: after `/api/stop` the
+  media-delete guard still saw the clip as "current" (only EOS/error cleared
+  it), so stopping then deleting media returned 409 — fixed in
+  `gsp.Stop()` to clear `currentFile`.
 
 ## UI Pass (2026-08-28)
 

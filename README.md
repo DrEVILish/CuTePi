@@ -143,7 +143,7 @@ Outstanding (see TODO.md): none from the 2026-09-04 scope — all built.
 Hardware target: Raspberry Pi 4/5, headless Debian Trixie (no display server —
 HDMI video via KMS/DRM, HDMI embedded audio exclusive to CuTePi), hardware-
 first decode with software fallback. Remaining work is hardware validation on
-the Pi (plus the two DESIGN.md open questions, Q18/Q19).
+the Pi — one command: `./smoke-test.sh` (see DESIGN.md; Q18/Q19 both resolved).
 
 **Not planned** (explicitly out of scope): HyperDeck / Companion
 feature-compatibility and DeckLink SDI output.

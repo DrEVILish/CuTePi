@@ -43,10 +43,21 @@ All decisions from the second Q&A round are now built. Commits, newest first:
   the cuePos identity guard; `spaceBar`/`ArrowUp`/`ArrowDown` triggers.
 - `29dc239` housekeeping.
 
-Still open in DESIGN.md: Q18 (config `loop` default seeding) resolved 2026-09-06
-(see Design Notes — cue loads already always use the cue's own flag; config is
-only the direct-load default). Q19 (smoke-test script) still open — documented,
-not blocking.
+Still open in DESIGN.md: none — Q18 (config `loop` default seeding) resolved
+2026-09-06 (cue loads already always use the cue's own flag; config is only the
+direct-load default); Q19 (`./smoke-test.sh`) resolved 2026-09-07 — ships with
+the stop fix below.
+
+## 2026-09-07 — Q19 smoke-test script + stop state fix (2 commits)
+
+- `5e0d3bb` **Design notes** — Q18 resolved (config `loop` seeding; behaviour
+  already matched the "cue flag wins" option, no code change).
+- `1a66845` **Q19 smoke-test + stop fix** — `./smoke-test.sh` (repo root,
+  alongside `install.sh`): generates a 3s clip with ffmpeg and exercises
+  upload → pool → cue → play → trim → stop → delete over HTTP; re-runs
+  converge from interrupted runs. Fixes `gsp.Stop()` to clear `currentFile`:
+  EOS/error already did, but stop kept it, so deleting the just-stopped media
+  returned 409 and the media-delete guard blocked a legitimate flow.
 
 ## 2026-09-04 — Product decisions round 2 (docs only, no code)
 
