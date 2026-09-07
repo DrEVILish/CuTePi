@@ -65,7 +65,9 @@ the stop fix below.
   pointermove.
 - Skipped (deliberate): the WS-vs-poller cuesheet swap race — it self-heals
   within one poll cycle; routing the poller through htmx would add more
-  machinery than the flicker is worth.
+  machinery than the flicker is worth. (Reversed in `4dea128`: the pollers
+  are the fallback path, not redundant — the fix made WS wake them instead
+  of racing them, deleting duplicate swap code rather than adding any.)
 
 ## 2026-09-07 — High-priority fixes: gsp internals + context menu (3 commits)
 
