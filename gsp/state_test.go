@@ -1,9 +1,16 @@
 package gsp
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"CuTePi/config"
 )
 
 // dbToGain is the core audio conversion: 0dB -> 1.0 and -Inf/-60dB -> silence,
@@ -167,4 +174,74 @@ func TestStopClearsCueAssociation(t *testing.T) {
 	if got := CurrentCuePos(); got != 0 {
 		t.Errorf("Stop with no pipeline changed cuePos to %d, want 0", got)
 	}
+}
+
+// The cue-end hook must fire for non-hold cues too. handleEnd used to read
+// the cue association after teardown, and teardown (clearIfCurrent) zeroes
+// it — so a cue without hold ended silently: no cue_end audit, no
+// auto-continue. Regression: capture-before-teardown fires the hook with the
+// position that just finished, for both the hold and the teardown path.
+func TestCueEndHookFiresWithoutHold(t *testing.T) {
+	if _, err := exec.LookPath("gst-launch-1.0"); err != nil {
+		t.Skip("gst-launch-1.0 not available; skipping cue-end hook test")
+	}
+
+	// A real (tiny) WAV on disk so filesrc can open it; the media dir is
+	// pointed at a temp location for the duration of the test.
+	dir := t.TempDir()
+	config.SetDirsForTesting(dir)
+	if err := os.WriteFile(filepath.Join(dir, "hook-test.wav"), tinyWav(1), 0o644); err != nil {
+		t.Fatalf("writing media fixture: %v", err)
+	}
+
+	fired := make(chan int, 1)
+	SetCueEndHook(func(pos int) { fired <- pos })
+	defer SetCueEndHook(nil)
+
+	for _, hold := range []bool{false, true} {
+		if err := LoadWithOpts("hook-test.wav", LoadOpts{Hold: hold}); err != nil {
+			t.Fatalf("LoadWithOpts: %v", err)
+		}
+		SetCuePos(7)
+		mgr.mu.Lock()
+		p := mgr.pipeline
+		mgr.mu.Unlock()
+		if p == nil {
+			t.Fatalf("no pipeline after load")
+		}
+		mgr.handleEnd(p)
+
+		select {
+		case got := <-fired:
+			if got != 7 {
+				t.Errorf("hook fired with pos %d, want 7 (hold=%v)", got, hold)
+			}
+		case <-time.After(2 * time.Second):
+			t.Errorf("cue-end hook did not fire (hold=%v)", hold)
+		}
+	}
+}
+
+// tinyWav builds a minimal valid PCM WAV of n seconds of 440Hz tone
+// (same fixture approach as the routes tests).
+func tinyWav(seconds int) []byte {
+	const sampleRate = 8000
+	var buf bytes.Buffer
+	buf.WriteString("RIFF")
+	binary.Write(&buf, binary.LittleEndian, uint32(36+2*seconds*sampleRate))
+	buf.WriteString("WAVEfmt ")
+	binary.Write(&buf, binary.LittleEndian, uint32(16))
+	binary.Write(&buf, binary.LittleEndian, uint16(1))
+	binary.Write(&buf, binary.LittleEndian, uint16(1))
+	binary.Write(&buf, binary.LittleEndian, uint32(sampleRate))
+	binary.Write(&buf, binary.LittleEndian, uint32(sampleRate*2))
+	binary.Write(&buf, binary.LittleEndian, uint16(2))
+	binary.Write(&buf, binary.LittleEndian, uint16(16))
+	buf.WriteString("data")
+	binary.Write(&buf, binary.LittleEndian, uint32(2*seconds*sampleRate))
+	for s := 0; s < seconds*sampleRate; s++ {
+		v := int16(3000 * math.Sin(2*math.Pi*440*float64(s%int(sampleRate))/float64(sampleRate)))
+		binary.Write(&buf, binary.LittleEndian, v)
+	}
+	return buf.Bytes()
 }

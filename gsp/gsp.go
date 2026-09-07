@@ -493,6 +493,13 @@ func (m *manager) handleEnd(p *gst.Pipeline) {
 	hold := m.hold
 	remaining := m.loopRemain
 	inPoint := m.inPoint
+	// Capture the cue association before any teardown: the non-hold path
+	// below clears it (clearIfCurrent -> clearPlayback zeroes cuePos), and
+	// the end hook needs the position that just finished. Capturing after
+	// teardown meant the hook only ever fired for held cues — non-hold cues
+	// ended silently, with no cue_end audit entry and no auto-continue.
+	pos := m.cuePos
+	cb := m.onCueEnd
 	if m.loop {
 		// A finite loop count is exhausted pass by pass; 0 means infinite
 		// and always restarts.
@@ -517,10 +524,6 @@ func (m *manager) handleEnd(p *gst.Pipeline) {
 
 	// AutoFollow hook: if a cue just finished (not looping), let the app
 	// layer advance the selection to the next cue.
-	m.mu.Lock()
-	pos := m.cuePos
-	cb := m.onCueEnd
-	m.mu.Unlock()
 	if pos > 0 && cb != nil {
 		go cb(pos)
 	}
