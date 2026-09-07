@@ -170,25 +170,36 @@ func LoadConfig() {
 	}
 }
 
-// Save configuration to the config file
+// Save configuration to the config file. Atomic: encode to a temp sidecar
+// and rename over the real file, so a crash or power-cut mid-write cannot
+// leave a truncated config.json (which LoadConfig would silently replace
+// with defaults, losing the operator's port/auth settings).
 func SaveConfig() {
 	if err := ensureDirs(); err != nil {
 		println("Error creating CuTePi directories:", err.Error())
 		return
 	}
 
-	file, err := os.Create(conf.ConfigFilePath)
+	tmpPath := conf.ConfigFilePath + ".tmp"
+	file, err := os.Create(tmpPath)
 	if err != nil {
 		println("Error creating config file:", err.Error())
 		return
 	}
-	defer file.Close()
-
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	err = encoder.Encode(conf)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
+		os.Remove(tmpPath)
 		println("Error writing to config file:", err.Error())
+		return
+	}
+	if err := os.Rename(tmpPath, conf.ConfigFilePath); err != nil {
+		os.Remove(tmpPath)
+		println("Error replacing config file:", err.Error())
 	}
 }
 

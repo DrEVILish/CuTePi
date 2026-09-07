@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -190,5 +191,34 @@ func TestLoadConfigClampsPollIntervalBelowMinimum(t *testing.T) {
 
 	if PollInterval() < minPollInterval {
 		t.Fatalf("PollInterval() = %d, want clamped to >= %d", PollInterval(), minPollInterval)
+	}
+}
+
+// TestSaveConfigAtomic is the runnable check for the temp+rename save: the
+// config file must remain valid JSON after a save (never truncated - the
+// old os.Create truncate-then-encode lost the whole file on a crash or
+// power-cut mid-write, and LoadConfig then silently reverted to defaults,
+// dropping the operator's port/auth settings), and no .tmp sidecar is left
+// behind.
+func TestSaveConfigAtomic(t *testing.T) {
+	dir := t.TempDir()
+	SetConfigFilePath(filepath.Join(dir, "config.json"))
+	SetDirsForTesting(dir)
+	SetPort(5050)
+	SetAuthPassword("s3cret")
+
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatalf("config file missing after save: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("saved config is not valid JSON: %v", err)
+	}
+	if parsed["auth_password"] != "s3cret" || parsed["port"].(float64) != 5050 {
+		t.Fatalf("saved config lost settings: %s", data)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "config.json") + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temp sidecar left behind: %v", err)
 	}
 }
