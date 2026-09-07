@@ -373,92 +373,80 @@ func AddCue(filename string, cuePos string) (err error) {
 		}
 		title = fmt.Sprintf("%s (%d)", filename, suffix)
 	}
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Target position: an empty cuePos appends after the last cue; otherwise
+	// cuePos names the position the new cue should land on (the cue sitting
+	// there moves up too).
+	nextPos := 0
 	if cuePos == "" {
-		var result sql.Result
-		result, err = db.Exec(`
-  		INSERT INTO cuesheet (cuePos, cueNum, media_id, title, hold, loop, loop_count)
-  		SELECT
-  			(SELECT COALESCE(MAX(cuePos), 0) + 1 FROM cuesheet) AS cuePos,
-  			(SELECT COALESCE(MAX(cueNum), 0) + 1 FROM cuesheet) AS cueNum,
-  			mp.media_id,
-			:title AS title,
-			0, 0, 0
-  		FROM
-  			(SELECT media_id FROM mediapool WHERE filename = :filename) AS mp;
-		`, sql.Named("filename", filename), sql.Named("title", title))
-		if err != nil {
-			log.Printf("Error adding cue: %v", err)
-			return err // Log the error instead of panicking
+		if err := tx.Get(&nextPos, `SELECT COALESCE(MAX(cuePos), 0) + 1 FROM cuesheet`); err != nil {
+			log.Printf("Error reading next cuePos: %v", err)
+			return err
 		}
-		if rows, _ := result.RowsAffected(); rows == 0 {
-			return fmt.Errorf("media %q not found", filename)
-		}
-		bumpCuesheetVersion()
 	} else {
-		cuePosInt, atoiErr := strconv.Atoi(cuePos)
-		if atoiErr != nil {
-			return atoiErr
-		}
-
-		tx, err := db.Beginx()
-		if err != nil {
+		if nextPos, err = strconv.Atoi(cuePos); err != nil {
 			return err
 		}
-		defer tx.Rollback()
+	}
 
-		// Bump the target position and everything after it up by one to make
-		// space for the new cue (>= because cuePos names the position the new
-		// cue should land on, so the cue currently sitting there must move
-		// too). This can't be a single set-based UPDATE: SQLite enforces the
-		// cuePos UNIQUE constraint per-row as it processes the statement, so
-		// bumping e.g. position 1 to 2 while position 2 is still occupied (not
-		// yet bumped to 3) fails with a transient UNIQUE violation depending on
-		// internal row order. Updating highest-position-first, one row at a
-		// time, guarantees each target slot is vacated before it's claimed.
-		var positions []int
-		err = tx.Select(&positions, `SELECT cuePos FROM cuesheet WHERE cuePos >= ? ORDER BY cuePos DESC`, cuePosInt)
+	// Bump the target position and everything after it up by one to make
+	// space for the new cue. For an append, nothing is >= nextPos, so this
+	// is a no-op and both paths share one insert statement. This can't be a
+	// single set-based UPDATE: SQLite enforces the cuePos UNIQUE constraint
+	// per-row as it processes the statement, so bumping e.g. position 1 to 2
+	// while position 2 is still occupied (not yet bumped to 3) fails with a
+	// transient UNIQUE violation depending on internal row order. Updating
+	// highest-position-first, one row at a time, guarantees each target slot
+	// is vacated before it's claimed.
+	var positions []int
+	err = tx.Select(&positions, `SELECT cuePos FROM cuesheet WHERE cuePos >= ? ORDER BY cuePos DESC`, nextPos)
+	if err != nil {
+		log.Printf("Error reading cuePos values to bump: %v", err)
+		return err
+	}
+	for _, p := range positions {
+		_, err = tx.Exec(`UPDATE cuesheet SET cuePos = cuePos + 1 WHERE cuePos = ?;`, p)
 		if err != nil {
-			log.Printf("Error reading cuePos values to bump: %v", err)
+			log.Printf("Error updating cuePos: %v", err)
 			return err
 		}
-		for _, p := range positions {
-			_, err = tx.Exec(`UPDATE cuesheet SET cuePos = cuePos + 1 WHERE cuePos = ?;`, p)
-			if err != nil {
-				log.Printf("Error updating cuePos: %v", err)
-				return err
-			}
-		}
+	}
 
-		// insert new cue at the new cuePos position
-		var result sql.Result
-		result, err = tx.Exec(`
-  		INSERT INTO cuesheet (cuePos, cueNum, media_id, title, hold, loop, loop_count)
-  		SELECT
-  			:cuePos AS cuePos,
-  			(SELECT COALESCE(MAX(cueNum), 0) + 1 FROM cuesheet) AS cueNum,
-  			mp.media_id,
-			:title AS title,
+	// insert new cue at the nextPos position
+	var result sql.Result
+	result, err = tx.Exec(`
+		INSERT INTO cuesheet (cuePos, cueNum, media_id, title, hold, loop, loop_count)
+		SELECT
+			? AS cuePos,
+			(SELECT COALESCE(MAX(cueNum), 0) + 1 FROM cuesheet) AS cueNum,
+			mp.media_id,
+			? AS title,
 			0, 0, 0
-  		FROM
-  			(SELECT media_id FROM mediapool WHERE filename = :filename) AS mp;
-	`, sql.Named("cuePos", cuePosInt), sql.Named("filename", filename), sql.Named("title", title))
-		if err != nil {
-			log.Printf("Error inserting into cuesheet: %v", err)
-			return err // Log the error instead of panicking
-		}
-		if rows, _ := result.RowsAffected(); rows == 0 {
-			return fmt.Errorf("media %q not found", filename)
-		}
+		FROM
+			(SELECT media_id FROM mediapool WHERE filename = ?) AS mp;
+	`, nextPos, title, filename)
+	if err != nil {
+		log.Printf("Error inserting into cuesheet: %v", err)
+		return err // Log the error instead of panicking
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return fmt.Errorf("media %q not found", filename)
+	}
 
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		bumpCuesheetVersion()
-		// The insert may land inside a group's span; re-align membership.
-		return normalizeGroupMembership(cuePosInt)
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	bumpCuesheetVersion()
-	return nil
+	if cuePos == "" {
+		return nil // append: cannot land inside a group's span
+	}
+	// The insert may land inside a group's span; re-align membership.
+	return normalizeGroupMembership(nextPos)
 }
 
 // editableCueColumns allow-lists which cuesheet columns may be updated via
