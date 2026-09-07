@@ -48,6 +48,42 @@ Still open in DESIGN.md: none — Q18 (config `loop` default seeding) resolved
 direct-load default); Q19 (`./smoke-test.sh`) resolved 2026-09-07 — ships with
 the stop fix below.
 
+## 2026-09-07 — Design-review fixes round 3: previously-unaudited packages (9 commits)
+
+Fresh audit of the surfaces the earlier reviews never covered (upload,
+show import, youtube, ws, worker, logs).
+
+- `175f5fa` **upload: temp sidecar before validation** — a failed re-upload
+  used to overwrite the original media file and its cleanup then DELETED
+  it, destroying media that live cues point at. Probe/verify/registration
+  now run against `*.uploading`, moved into place atomically on success.
+- `c9bd9da` **show import: validate before destroying** — overwrite mode
+  cleared the cuesheet BEFORE media import/inserts, so any mid-import
+  failure left an empty sheet; media now imports first, cue-insert
+  failures roll back their own inserts. Also: zip-slip guard
+  (safeMediaName) on every zip entry name and manifest cue filename.
+- `f71e276` **http: 2 GiB body cap** — LimitBody middleware (MaxBytesReader);
+  one giant POST could fill the disk (killing SQLite) or OOM the in-memory
+  .CTP parse.
+- `44f181a` **ws: write deadline** — one stalled TCP client blocked
+  broadcast() on the ctp/gsp bump paths, freezing the whole server. All
+  client writes now capped at 2s with eviction.
+- `818bee4` **worker: waveform flag cleared on failure** — the code comment
+  claimed it; the call was missing, so undecodable files re-ran a full
+  ffmpeg decode every poll tick forever. ctp.FailWaveform + Analyse button
+  remains the on-demand retry.
+- `7c4d182` **youtube: timeouts + temp-dir download** — hung yt-dlp pinned
+  the handler forever (now 60s resolve / 30min download caps); downloads
+  land in a temp subdir and only rename into place after validation, so a
+  colliding title can no longer clobber existing media.
+- `40b94d8` **logs: audit trail capped at 10000** — the in-memory trail grew
+  unbounded for the process lifetime and was copied on every export.
+- `7d3a3bf` **routes: goSafe for background goroutines** — fade chains and
+  auto-continue timers now recover panics into log lines instead of
+  killing the process mid-show.
+- Still deferred: slideshow crossfade (needs a multi-layer pipeline; see
+  round 2).
+
 ## 2026-09-07 — Design-review fixes round 2 (5 commits)
 
 Remaining review findings, one commit each with detailed logs.
