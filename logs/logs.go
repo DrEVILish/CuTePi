@@ -61,10 +61,9 @@ type Entry struct {
 // included in .CTP exports. It stays JSON-only (no log text) so exports carry
 // clean, machine-readable show history.
 type AuditEvent struct {
-	Event     string `json:"event"`     // e.g. "cue_start", "cue_stop"
-	Pos       int    `json:"pos"`       // cue position (0 for transport/source events)
-	Title     string `json:"title"`     // cue / file title
-	WallClock string `json:"wallClock"` // RFC3339 timestamp of the event
+	Event string `json:"event"` // e.g. "cue_start", "cue_stop"
+	Pos   int    `json:"pos"`   // cue position (0 for transport/source events)
+	Title string `json:"title"` // cue / file title
 }
 
 const bufferSize = 1000
@@ -214,7 +213,7 @@ const (
 	RTEToggle     = "RTE-E203" // POST /api/togglePause
 	RTEFadeOut    = "RTE-E204" // POST /api/fadeOut
 	RTEPanic      = "RTE-E205" // POST /api/panic
-	RTEClear      = "RTE-E206" // POST /api/clear (clear cuesheet) (E207/E208 now unused — dead prev/next removed 2026-08-31)
+	RTEClear      = "RTE-E206" // POST /api/clear (clear cuesheet)
 	RTEStop       = "RTE-E209" // POST /api/stop
 	RTETest       = "RTE-E210" // POST /api/test/*pattern
 	RTEDirect     = "RTE-E211" // POST /api/play/:filename (direct play)
@@ -237,8 +236,7 @@ const (
 
 // NET - network startup info (network.go).
 const (
-	NETListErr  = "NET-E300" // error fetching network interfaces
-	NETInfoList = "NET-E310" // available network interfaces listing
+	NETListErr = "NET-E300" // error fetching network interfaces
 )
 
 // AUD - structured playback audit records (also exposed to the Web UI).
