@@ -712,10 +712,17 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		}
 
 		// Retain the audio "volume" element so SetVolume can drive it, and
-		// apply the per-cue master gain once an audio branch exists.
+		// apply the per-cue master gain once an audio branch exists. The
+		// manager fields are only written if this pipeline is STILL the
+		// active one: decodebin's pad-added fires asynchronously, so a rapid
+		// load A->B can emit A's pads after B was swapped in - writing A's
+		// elements here would make SetVolume/FadeAndStop ramp the dead
+		// pipeline while B played unattended.
 		if isAudio {
 			mgr.mu.Lock()
-			mgr.volumeEl = elements[3]
+			if mgr.pipeline == pipeline {
+				mgr.volumeEl = elements[3]
+			}
 			gain := dbToGain(mgr.volume)
 			mgr.mu.Unlock()
 			elements[3].Set("volume", gain)
@@ -724,7 +731,9 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		// drive its brightness; a fresh clip always starts at full brightness.
 		if isVideo {
 			mgr.mu.Lock()
-			mgr.brightEl = elements[2]
+			if mgr.pipeline == pipeline {
+				mgr.brightEl = elements[2]
+			}
 			mgr.mu.Unlock()
 			elements[2].Set("brightness", 0.0)
 		}
