@@ -88,3 +88,33 @@ func TestRecordedFilterAndClear(t *testing.T) {
 		t.Fatalf("Clear must not touch the audit trail (second Emit added one), got %d", len(body))
 	}
 }
+
+// TestAuditTrailCapped is the runnable check for the audit capacity: after
+// more than auditCapacity events the trail holds at the cap and keeps the
+// NEWEST entries (a runaway trail used to grow for the whole process
+// lifetime and get copied on every export).
+func TestAuditTrailCapped(t *testing.T) {
+	mu.Lock()
+	old := audit
+	audit = nil
+	mu.Unlock()
+	defer func() {
+		mu.Lock()
+		audit = old
+		mu.Unlock()
+	}()
+
+	for i := 0; i < auditCapacity+500; i++ {
+		Emit(AuditEvent{Event: "cue_start", Pos: i, Title: "x"})
+	}
+	trail := AuditTrail()
+	if len(trail) != auditCapacity {
+		t.Fatalf("audit trail = %d entries, want capped at %d", len(trail), auditCapacity)
+	}
+	if last := trail[len(trail)-1]; last.Pos != auditCapacity+499 {
+		t.Fatalf("newest entry lost: last pos = %d, want %d", last.Pos, auditCapacity+499)
+	}
+	if first := trail[0]; first.Pos != 500 {
+		t.Fatalf("oldest kept entry = %d, want 500 (oldest rolled off)", first.Pos)
+	}
+}

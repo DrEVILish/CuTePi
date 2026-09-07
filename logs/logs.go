@@ -69,6 +69,11 @@ type AuditEvent struct {
 
 const bufferSize = 1000
 
+// auditCapacity caps the in-memory audit trail. A show-day of cue events
+// fits easily; beyond that the oldest entries roll off. The trail is a
+// process-lifetime record - the buffer ring above is the model to copy.
+const auditCapacity = 10000
+
 var (
 	mu     sync.Mutex
 	level  = LevelInfo
@@ -110,9 +115,14 @@ func PrintfDebug(code, format string, args ...any) {
 }
 
 // Emit appends a structured audit record (kept for exports) and a buffered log
-// entry so the event also appears in the viewer.
+// entry so the event also appears in the viewer. Oldest audit entries roll
+// off once auditCapacity is reached (the slice would otherwise grow for the
+// whole process lifetime and be copied on every export).
 func Emit(a AuditEvent) {
 	mu.Lock()
+	if len(audit) >= auditCapacity {
+		audit = audit[len(audit)-auditCapacity+1:]
+	}
 	audit = append(audit, a)
 	msg := fmt.Sprintf("%s pos=%d title=%q", a.Event, a.Pos, a.Title)
 	mu.Unlock()
