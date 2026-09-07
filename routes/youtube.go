@@ -73,7 +73,13 @@ func handleYoutubeDownload(c *gin.Context) {
 		}
 	}
 
-	size, err := fileSize(dlPath)
+	info, err := os.Stat(dlPath)
+	if err != nil {
+		logs.Printf(logs.YDLFailed, "stage=stat filename=%q error=%v", filename, err)
+		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+		return
+	}
+	size := info.Size()
 	if err != nil {
 		logs.Printf(logs.YDLFailed, "stage=stat filename=%q error=%v", filename, err)
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
