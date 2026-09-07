@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"log"
@@ -16,6 +17,7 @@ import (
 
 	"CuTePi/config"
 	"CuTePi/ctp"
+	"CuTePi/gsp"
 	"CuTePi/routes"
 	"CuTePi/worker"
 )
@@ -45,14 +47,6 @@ func main() {
 	// One-time scan flags media whose source files are missing on disk; cues
 	// and pool tiles then surface a warning (see the Missing flag).
 	ctp.MarkMissingFiles()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		ctp.CloseDB()
-		os.Exit(0)
-	}()
 
 	go worker.RunThumbnailWorker(2 * time.Second)
 
@@ -102,6 +96,28 @@ func main() {
 	// drain in-flight requests (srv.Shutdown) instead of killing them.
 	address := fmt.Sprintf(":%d", config.Port())
 	srv := &http.Server{Addr: address, Handler: r}
+
+	// Graceful shutdown on SIGTERM/SIGINT (also what /api/shutdown triggers).
+	// Drain order matters: stop accepting requests and let in-flight
+	// handlers finish (uploads, show imports - all of which write), THEN
+	// tear down the playback pipeline, THEN close the DB. The old handler
+	// closed the DB first, killing the worker's and any in-flight handler's
+	// transactions with 'database is closed'.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Printf("CuTePi: shutting down (signal received)")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("CuTePi: HTTP shutdown: %v", err)
+		}
+		gsp.Panic() // tear down the playback pipeline (stops the show cleanly)
+		ctp.CloseDB()
+		os.Exit(0)
+	}()
+
 	printNetworkInfo()
 	log.Printf("CuTePi: listening on %s", address)
 	// A bind failure (port already in use - e.g. the restart handover losing
