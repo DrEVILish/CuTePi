@@ -337,8 +337,12 @@ window.addEventListener("keydown", (e) => {
       htmx.trigger("#ArrowLeft", "arrowLeft")
     }
   }
+  // Escape = stop — but only when no context menu holds the gesture: menus
+  // use Escape to close (their own listeners run for the same keydown), and
+  // closing a menu must not also kill playback.
   if (plain && ["Escape"].indexOf(e.code) > -1) {
-    htmx.trigger("#esc", "esc")
+    const menuOpen = document.querySelector(".cue-context-menu:not([hidden])");
+    if (!menuOpen) htmx.trigger("#esc", "esc")
   }
   // Ctrl/Cmd+A selects every rendered cue (plain focus only).
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyA" && plain) {
