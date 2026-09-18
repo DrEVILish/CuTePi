@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,44 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// TestConfigConcurrentReadsWrites is the runnable check for the conf access
+// race (auth middleware reads the password per request while a Settings POST
+// mutates it). Under `go test -race` this fails before the RWMutex fix and
+// passes after; it also sanity-checks that the getters settle on the last
+// writes the writer thread made.
+func TestConfigConcurrentReadsWrites(t *testing.T) {
+	dir := t.TempDir()
+	useTestDir(dir)
+	defer useTestDir(testDir)
+
+	start := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-start
+		for i := 0; i < 500; i++ {
+			_ = Port()
+			_ = PollInterval()
+			_ = Loop()
+			_ = HasAuth()
+			_ = AuthPassword()
+			_ = WorkingDir()
+		}
+	}()
+	close(start)
+	for i := 0; i < 200; i++ {
+		if err := SetPort(3000 + i%50); err != nil {
+			t.Fatalf("SetPort: %v", err)
+		}
+		if err := SetPollInterval(100 + i%20); err != nil {
+			t.Fatalf("SetPollInterval: %v", err)
+		}
+		SetLoop(i%2 == 0)
+		SetAuthPassword(strings.Repeat("x", i%13))
+	}
+	<-done
 }
 
 func TestExpandHome(t *testing.T) {
@@ -218,7 +257,11 @@ func TestSaveConfigAtomic(t *testing.T) {
 	if parsed["auth_password"] != "s3cret" || parsed["port"].(float64) != 5050 {
 		t.Fatalf("saved config lost settings: %s", data)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "config.json") + ".tmp"); !os.IsNotExist(err) {
-		t.Fatalf("temp sidecar left behind: %v", err)
+	leftovers, err := filepath.Glob(filepath.Join(dir, "config-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("temp sidecars left behind: %v", leftovers)
 	}
 }

@@ -1,7 +1,7 @@
 {{ define "cueinspector.html" }}
-<div id="cueinspector-body" class="cueinspector-body">
+<div id="cueinspector-body" class="cueinspector-body"{{ if hasPrefix .Cue.Mimetype "image/" }} data-no-audio-tab{{ end }}>
   {{ if not .Selected }}
-  <p class="text-muted small mb-0">Select a cue to edit its trim In/Out and Hold settings.</p>
+  <p class="text-muted small mb-0">Select a cue to edit its time, video, audio and colour settings.</p>
   {{ else }}
   {{ $dur := .MediaDuration }}
   {{ if .Cue.Missing }}
@@ -24,103 +24,301 @@
     </form>
   </div>
   {{ end }}
-  <div class="d-flex flex-wrap align-items-end gap-3">
-    <div>
-      <div class="small text-muted">Cue</div>
-      <div>
-        <span class="badge text-bg-warning">{{ .Cue.CueNum }}</span>
-        {{ .Cue.Title }}
-        <span class="text-muted small">Source: {{ .Cue.Filename }}</span>
+  <div class="inspector-identity d-flex flex-wrap align-items-center gap-2">
+    <span class="badge inspector-cuebadge{{ if .Cue.Color }} has-color{{ end }}"{{ if .Cue.Color }} style="--cue-accent: {{ .Cue.Color }}"{{ end }}>{{ .Cue.CueNum }}</span>
+    <span class="inspector-identity-title">{{ .Cue.Title }}</span>
+    <span class="text-muted small">Source: {{ .Cue.Filename }}</span>
+  </div>
+  <!-- One form spans every tab pane; hidden panes' fields still submit, and
+       any visible change saves instantly via htmx-triggered events. -->
+  <form id="inspector-form" class="inspector-tabform"
+    hx-put="/api/cue/inspector/{{ .Cue.CuePos }}" hx-target="#cueinspector-body" hx-swap="outerHTML"
+    hx-trigger="change delay:200ms from:'findAll input', change delay:200ms from:'findAll select', submit, ctp-save">
+    <div class="inspector-tabpanes d-flex flex-column" data-active-tab="time">
+      <div class="inspector-tabpane" data-tabpane="time">
+        {{ if gt $dur 0.0 }}
+        <div class="insp-time-row mt-2">
+          <div class="insp-time-fields">
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-in">Trim In</label>
+              <input id="insp-in" name="posStart" class="form-control form-control-sm" value="{{ formatTime .Cue.PosStart }}" placeholder="hh:mm:ss.ms">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-out">Trim Out</label>
+              <input id="insp-out" name="posEnd" class="form-control form-control-sm" value="{{ formatTime .Cue.PosEnd }}" placeholder="hh:mm:ss.ms">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-prewait">PreWait</label>
+              <input id="insp-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="hh:mm:ss.ms" title="Wait this long before the cue starts">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-postwait">PostWait</label>
+              <input id="insp-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="hh:mm:ss.ms" title="Wait this long after the cue ends">
+             </div>
+           </div>
+           <div class="insp-time-right">
+            <div class="trim-timeline" id="trim-timeline"
+              data-filename="{{ .Cue.Filename }}"
+              data-pos-start="{{ .Cue.PosStart }}"
+              data-pos-end="{{ .Cue.PosEnd }}"
+              data-duration="{{ $dur }}"
+              data-wave="{{ .Cue.Waveform }}"
+              title="Drag the In/Out markers to adjust the trim window">
+              <canvas class="trim-waveform" id="trim-waveform" width="800" height="120"></canvas>
+              <div class="trim-shade" id="trim-shade-before" aria-hidden="true" style="left:0;width:0%"></div>
+              <div class="trim-shade" id="trim-shade-after" aria-hidden="true" style="right:0;width:0%"></div>
+              <div class="trim-zoomsel" id="trim-zoomsel" aria-hidden="true"></div>
+              <div class="trim-marker" id="trim-marker-in" title="Trim In"></div>
+              <div class="trim-marker trim-marker-out" id="trim-marker-out" title="Trim Out"></div>
+              <span class="trim-time" id="trim-time-in"></span>
+              <span class="trim-time" id="trim-time-out"></span>
+              <span class="trim-length" id="trim-length"></span>
+            </div>
+            <div class="insp-time-buttons">
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="trim-clear" title="Clear trim window">
+                Clear trim
+              </button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="trim-zoom" aria-pressed="false" title="Click to arm, then drag a box over the waveform to zoom into it">
+                Zoom
+              </button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="trim-zoom-in" aria-label="Zoom in" title="Zoom in">
+                +
+              </button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="trim-zoom-out" aria-label="Zoom out" title="Zoom out">
+                &minus;
+              </button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="trim-zoom-reset" title="Show the full length">
+                Zoom reset
+              </button>
+             </div>
+              <div class="insp-time-options">
+              <div class="insp-time-checks">
+               <div class="d-flex align-items-center">
+                 <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
+                 <label class="form-check-label small" for="insp-loop">Loop</label>
+                 <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
+                   class="form-control form-control-sm ms-2" style="width:5em"
+                   value="{{ .Cue.LoopCount }}"
+                   title="Loop count: 0 = infinite, N = play N times"
+                   aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
+               </div>
+               <div class="d-flex align-items-center">
+                 <input class="form-check-input me-1" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
+                 <label class="form-check-label small" for="insp-hold">Hold last frame</label>
+               </div>
+               <div class="d-flex align-items-center">
+                 <input class="form-check-input me-1" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
+                 <label class="form-check-label small" for="insp-autocontinue">Auto-continue</label>
+                </div>
+              </div>
+              <div class="d-flex align-items-start gap-3 flex-wrap">
+                            <div class="insp-rate">
+                <label class="insp-field-label" for="insp-rate">Playback rate <output id="insp-rate-value">{{ .Cue.Rate }}×</output></label>
+                <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" title="Playback speed (pitch preserved)">
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-rate-reset>1×</button>
+              </div>
+                             <div class="d-flex align-items-center gap-2">
+                 <label class="insp-field-label" for="insp-fadeaction">Fade-stop others</label>
+                 <select id="insp-fadeaction" name="fadeAction" class="form-select form-select-sm" style="width:auto" title="Which other cues fade out when this one starts">
+                   <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
+                   <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
+                   <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
+                 </select>
+                 <input id="insp-fadeout" name="fadeOut" class="form-control form-control-sm" style="width:4.5em"
+                   value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
+                 <select id="insp-fadecurve" name="fadeCurve" class="form-select form-select-sm" style="width:auto"
+                   title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential">
+                   <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
+                   <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
+                   <option value="log" {{ if eq .Cue.FadeCurve "log" }}selected{{ end }}>Log</option>
+                   <option value="exp" {{ if eq .Cue.FadeCurve "exp" }}selected{{ end }}>Exp</option>
+                 </select>
+               </div>
+             </div>
+          </div>
+          <!-- Recurring schedule: the cue fires at this wall-clock time
+               on the chosen day, regardless of what else is playing. -->
+          <div class="insp-schedule mt-3 pt-2 border-top">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <input class="form-check-input" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
+              <label class="form-check-label small" for="insp-schedule">Schedule this cue</label>
+            </div>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+              <select id="insp-schedule-day" name="schedule_days" class="form-select form-select-sm" style="width:auto" aria-label="Day of week">
+                <option value="">Day&hellip;</option>
+                {{ range $i, $d := listDays }}
+                <option value="{{ add $i 1 }}" {{ if eq $.ScheduleDay (add $i 1) }}selected{{ end }}>{{ $d }}</option>
+                {{ end }}
+              </select>
+              <input id="insp-schedule-time" name="schedule_time" type="time" class="form-control form-control-sm" style="width:7.5em" step="1"
+                value="{{ if .Cue.ScheduleEnabled }}{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}{{ end }}"
+                aria-label="Time of day, to the second">
+            </div>
+            <div id="schedule-help" class="text-muted small mt-1">
+              Fires regardless of what is currently playing.
+            </div>
+          </div>
+       </div>
+         </div>
       </div>
-    </div>
-    <form id="inspector-form" class="d-flex flex-wrap align-items-end gap-3"
-      hx-put="/api/cue/inspector/{{ .Cue.CuePos }}" hx-target="#cueinspector-body" hx-swap="outerHTML">
-      <div>
-        <label class="form-label small mb-0" for="insp-in">Trim In (start)</label>
-        <input id="insp-in" name="posStart" class="form-control form-control-sm" value="{{ formatTime .Cue.PosStart }}" placeholder="hh:mm:ss.ms">
-      </div>
-      <div>
-        <label class="form-label small mb-0" for="insp-out">Trim Out (end)</label>
-        <input id="insp-out" name="posEnd" class="form-control form-control-sm" value="{{ formatTime .Cue.PosEnd }}" placeholder="hh:mm:ss.ms">
-      </div>
-      <div class="d-flex align-items-center pb-1">
-        <input class="form-check-input me-1" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
-        <label class="form-check-label small" for="insp-hold">Hold last frame</label>
-      </div>
-      <div class="d-flex align-items-center pb-1">
-        <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
-        <label class="form-check-label small" for="insp-loop">Loop</label>
-        <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
-          class="form-control form-control-sm ms-2" style="width:5em"
-          value="{{ .Cue.LoopCount }}"
-          title="Loop count: 0 = infinite, N = play N times"
-          aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
-      </div>
-      <div class="d-flex align-items-center pb-1">
-        <input class="form-check-input me-1" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
-        <label class="form-check-label small" for="insp-autocontinue">Auto-continue</label>
-      </div>
-      <div>
-        <label class="form-label small mb-0" for="insp-color">Colour</label>
-        <select id="insp-color" name="color" class="form-select form-select-sm" style="width:auto" aria-label="Cue colour">
-          <option value="">None</option>
-          {{ range $name, $hex := .Palette }}
-          <option value="{{ $hex }}" {{ if eq $.Cue.Color $hex }}selected{{ end }}>{{ $name }}</option>
-          {{ end }}
-        </select>
-      </div>
-      <div class="insp-volume">
-        <label class="form-label small mb-1" for="insp-volume">Volume</label>
-        <input id="insp-volume" name="volume" type="range" min="-60" max="12" step="1"
-          value="{{ .Cue.Volume }}" class="insp-volume-slider"
-          title="Per-cue master gain (dB); 0dB is the default"
-          data-volume-inspector aria-label="Volume (dB)">
-        <input id="insp-volume-db" type="number" class="form-control form-control-sm insp-volume-db"
-          value="{{ .Cue.Volume }}" min="-60" max="12" step="1" readonly tabindex="-1" aria-label="Volume dB value">
-      </div>
-      <div>
-        <label class="form-label small mb-0" for="insp-fadeaction">Fade-stop others</label>
-        <div class="d-flex gap-1">
-          <select id="insp-fadeaction" name="fadeAction" class="form-select form-select-sm" style="width:auto">
-            <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
-            <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
-            <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
-          </select>
-          <input id="insp-fadeout" name="fadeOut" class="form-control form-control-sm" style="width:6em"
-            value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
+      {{ else if hasPrefix .Cue.Mimetype "image/" }}
+        <div class="insp-time-row mt-2">
+          <div class="insp-time-fields">
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-img-duration">Display duration</label>
+              <input id="insp-img-duration" name="cueDuration" class="form-control form-control-sm" value="{{ if .Cue.CueDuration }}{{ formatTime .Cue.CueDuration }}{{ end }}" placeholder="hh:mm:ss.ms" title="How long the image stays on screen (blank = indefinitely)">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-img-prewait">PreWait</label>
+              <input id="insp-img-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="hh:mm:ss.ms" title="Wait this long before the image shows">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-img-postwait">PostWait</label>
+              <input id="insp-img-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="hh:mm:ss.ms" title="Wait this long after the image ends">
+            </div>
+          </div>
+          <div class="insp-time-right">
+            <div class="insp-time-checks">
+              <div class="d-flex align-items-center">
+                <input class="form-check-input me-1" type="checkbox" id="insp-img-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
+                <label class="form-check-label small" for="insp-img-autocontinue">Auto-continue</label>
+              </div>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <label class="insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
+              <select id="insp-img-fadeaction" name="fadeAction" class="form-select form-select-sm" style="width:auto" title="Which other cues fade out when this one starts">
+                <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
+                <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
+                <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
+              </select>
+              <input id="insp-img-fadeout" name="fadeOut" class="form-control form-control-sm" style="width:4.5em"
+                value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
+              <select id="insp-img-fadecurve" name="fadeCurve" class="form-select form-select-sm" style="width:auto"
+                title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential">
+                <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
+                <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
+                <option value="log" {{ if eq .Cue.FadeCurve "log" }}selected{{ end }}>Log</option>
+                <option value="exp" {{ if eq .Cue.FadeCurve "exp" }}selected{{ end }}>Exp</option>
+              </select>
+            </div>
+            <div class="text-muted small mt-1">Still images don't trim — duration ends the display{{ if .Cue.AutoContinue }} and continues{{ end }}.</div>
+          </div>
+        </div>
+      {{ end }}
+      {{ if not (hasPrefix .Cue.Mimetype "image/") }}
+      <div class="inspector-tabpane" data-tabpane="audio">
+        <div class="insp-audio-wrap">
+          <div class="insp-volume">
+            <label class="form-label small mb-1" for="insp-volume">Volume</label>
+            <input id="insp-volume" name="volume" type="range" min="-60" max="12" step="1"
+              value="{{ .Cue.Volume }}" class="insp-volume-slider"
+              title="Per-cue master gain (dB); 0dB is the default"
+              data-volume-inspector aria-label="Volume (dB)">
+            <div class="d-flex align-items-center gap-1">
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-volume-step="-1" aria-label="Decrease volume by 1 dB">↓</button>
+              <input id="insp-volume-db" type="number" class="form-control form-control-sm insp-volume-db"
+                value="{{ .Cue.Volume }}" min="-60" max="12" step="1" aria-label="Volume dB value">
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-volume-step="1" aria-label="Increase volume by 1 dB">↑</button>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-volume-reset>Reset to 0 dB</button>
+          </div>
+          <div class="insp-audio-settings">
+            <div class="insp-time-field insp-fadein">
+              <label class="insp-field-label" for="insp-audio-fadein">Fade In</label>
+              <input id="insp-audio-fadein" name="fadeIn" data-fade-in class="form-control form-control-sm"
+                value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade audio and video in (seconds)">
+            </div>
+            <label class="insp-field-label" for="insp-balance">Balance / Pan <output id="insp-balance-value">{{ .Cue.Balance }}</output></label>
+            <div class="d-flex align-items-center gap-2">
+              <span class="small">L</span>
+              <input id="insp-balance" name="balance" type="range" min="-1" max="1" step="0.05" value="{{ .Cue.Balance }}" title="Left (−1) / Centre (0) / Right (+1)">
+              <span class="small">R</span>
+            </div>
+            <label class="form-check-label small" for="insp-mute">
+              <input id="insp-mute" name="mute" type="checkbox" class="form-check-input me-1" value="true" {{ if .Cue.Mute }}checked{{ end }}> Mute
+            </label>
+            <span class="small text-muted">EBU R128 gain: {{ printf "%+.1f" .Cue.LoudnessGain }} dB</span>
+          </div>
         </div>
       </div>
-      <button class="btn btn-sm btn-primary" type="submit">Save</button>
-    </form>
-    <button class="btn btn-sm btn-outline-success" type="button"
-      hx-post="/api/cue/{{ .Cue.CuePos }}/play" hx-swap="none" title="Play this cue" aria-label="Play this cue">
-      <i class="bi bi-play-fill"></i> Play
-    </button>
-  </div>
-
-  {{ if gt $dur 0.0 }}
-  <div class="trim-timeline mt-3" id="trim-timeline"
-    data-pos-start="{{ .Cue.PosStart }}"
-    data-pos-end="{{ .Cue.PosEnd }}"
-    data-duration="{{ $dur }}"
-    data-wave="{{ .Cue.Waveform }}"
-    title="Click to set trim In, drag the markers to adjust">
-    <canvas class="trim-waveform" id="trim-waveform" width="800" height="120"></canvas>
-    <div class="trim-shade" id="trim-shade-before" aria-hidden="true" style="left:0;width:0%"></div>
-    <div class="trim-shade" id="trim-shade-after" aria-hidden="true" style="right:0;width:0%"></div>
-    <div class="trim-marker" id="trim-marker-in" title="Trim In"></div>
-    <div class="trim-marker trim-marker-out" id="trim-marker-out" title="Trim Out"></div>
-    <span class="trim-time" id="trim-time-in"></span>
-    <span class="trim-time" id="trim-time-out"></span>
-  </div>
-  <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="trim-clear" title="Clear trim window">
-    Clear trim
-  </button>
+      {{ end }}
+      <div class="inspector-tabpane" data-tabpane="video">
+        {{ if not (hasPrefix .Cue.Mimetype "image/") }}
+        <div class="insp-time-field insp-fadein mt-2">
+          <label class="insp-field-label" for="insp-video-fadein">Fade In</label>
+          <input id="insp-video-fadein" data-fade-in class="form-control form-control-sm"
+            value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade audio and video in from silence and black (seconds)">
+        </div>
+        <div class="insp-time-field insp-fadeout mt-2">
+          <label class="insp-field-label" for="insp-video-fadeout">Fade Out</label>
+          <input id="insp-video-fadeout" data-fade-out class="form-control form-control-sm"
+            value="{{ formatTime .Cue.FadeOut }}" placeholder="hh:mm:ss.ms" title="Fade audio and video out after playback (seconds)">
+        </div>
+        {{ end }}
+        <div class="d-flex align-items-end gap-2 flex-wrap mt-2">
+          <div class="insp-time-field">
+            <label class="insp-field-label" for="insp-fit">Frame fit</label>
+            <select id="insp-fit" name="fit_mode" class="form-select form-select-sm" style="width:auto" title="Fit: letterbox preserving aspect; Stretch: fill the screen, distorting aspect">
+              <option value="fit" {{ if ne .Cue.FitMode "stretch" }}selected{{ end }}>Fit</option>
+              <option value="stretch" {{ if eq .Cue.FitMode "stretch" }}selected{{ end }}>Stretch</option>
+            </select>
+          </div>
+          <div class="insp-time-field">
+            <label class="insp-field-label" for="insp-rotation">Rotate</label>
+            <select id="insp-rotation" name="rotation" class="form-select form-select-sm" style="width:auto" title="Rotate the frame clockwise">
+              <option value="0" {{ if eq .Cue.Rotation 0 }}selected{{ end }}>0&deg;</option>
+              <option value="90" {{ if eq .Cue.Rotation 90 }}selected{{ end }}>90&deg;</option>
+              <option value="180" {{ if eq .Cue.Rotation 180 }}selected{{ end }}>180&deg;</option>
+              <option value="270" {{ if eq .Cue.Rotation 270 }}selected{{ end }}>270&deg;</option>
+            </select>
+          </div>
+          <div class="insp-time-field">
+            <label class="insp-field-label" for="insp-flip">Flip / Mirror</label>
+            <select id="insp-flip" name="flip" class="form-select form-select-sm" style="width:auto" title="Mirror the frame">
+              <option value="none" {{ if ne .Cue.Flip "h" }}{{ if ne .Cue.Flip "v" }}selected{{ end }}{{ end }}>None</option>
+              <option value="h" {{ if eq .Cue.Flip "h" }}selected{{ end }}>Mirror &#8596;</option>
+              <option value="v" {{ if eq .Cue.Flip "v" }}selected{{ end }}>Flip &#8597;</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="inspector-tabpane" data-tabpane="media">
+        {{ if .MediaRows }}
+        <div class="media-info-grid mt-2" aria-label="Media information">
+          {{ range .MediaRows }}
+          <span class="media-info-label small text-muted">{{ .Label }}</span>
+          <span class="media-info-value small font-monospace">{{ .Value }}</span>
+          {{ end }}
+        </div>
+        {{ else }}
+        <p class="text-muted small mb-0">No media information available - re-run analysis from the media pool.</p>
+        {{ end }}
+      </div>
+      <div class="inspector-tabpane" data-tabpane="advanced">
+        <label class="form-label small mb-1 d-block" for="insp-swatches">Colour</label>
+        <div class="insp-swatches" id="insp-swatches" role="radiogroup" aria-label="Cue colour">
+          <label class="insp-swatch insp-swatch-none" title="None">
+            <input type="radio" name="color" value="" aria-label="No colour" {{ if not $.Cue.Color }}checked{{ end }}>
+            <span class="insp-swatch-fill"></span>
+          </label>
+          {{ range .Palette }}
+          <label class="insp-swatch" style="--swatch: {{ .Hex }}" title="{{ .Name }}">
+            <input type="radio" name="color" value="{{ .Hex }}" aria-label="{{ .Name }}" {{ if eq $.Cue.Color .Hex }}checked{{ end }}>
+            <span class="insp-swatch-fill"></span>
+          </label>
+          {{ end }}
+        </div>
+      </div>
+    </div>
+  </form>
   {{ end }}
-  {{ end }}
-</div>
 
-<script>
+  <!-- The trim-timeline script must live inside #cueinspector-body: htmx
+       re-renders that div (outerHTML swap) after every inspector save, so it
+       is re-evaluated from the freshly swapped markup. All interactions are
+       document-level DELEGATED and wired once (fragment-run guard below), so
+       event listeners survive any later re-render of the timeline markup. -->
+  <script>
   (function () {
     var loopCheck = document.getElementById("insp-loop");
     var loopCount = document.getElementById("insp-loopcount");
@@ -131,46 +329,14 @@
     }
   })();
   (function () {
-    var timeline = document.getElementById("trim-timeline");
-    if (!timeline) return;
-    var inEl = document.getElementById("trim-marker-in");
-    var outEl = document.getElementById("trim-marker-out");
-    var shadeBefore = document.getElementById("trim-shade-before");
-    var shadeAfter = document.getElementById("trim-shade-after");
-    var timeIn = document.getElementById("trim-time-in");
-    var timeOut = document.getElementById("trim-time-out");
-    var posStart = parseFloat(timeline.dataset.posStart) / 1000; // seconds
-    var posEnd = parseFloat(timeline.dataset.posEnd) / 1000;
-    var duration = parseFloat(timeline.dataset.duration);
-    if (duration <= 0) return;
-    // A stored posEnd of 0 means "no trim out" (play to end of file), so show
-    // the out marker at the full duration; otherwise it would sit at 0% and be
-    // undraggable, hiding the audio.
-    if (!(posEnd > 0)) posEnd = duration;
-    var clearBtn = document.getElementById("trim-clear");
-
-    // Draw the waveform (amplitude peaks stored in the DB) centred on the
-    // vertical axis. The peaks are normalized 0..1; missing/empty gives a
-    // flat track.
-    var canvas = document.getElementById("trim-waveform");
-    function drawWave() {
-      if (!canvas) return;
-      var ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      var peaks = [];
-      try {
-        var raw = timeline.dataset.wave;
-        if (raw) peaks = JSON.parse(raw);
-      } catch (e) { peaks = []; }
-      if (!Array.isArray(peaks) || peaks.length === 0) return;
-      ctx.fillStyle = "#2fd6ff";
-      var n = peaks.length, w = canvas.width / n, mid = canvas.height / 2;
-      for (var i = 0; i < n; i++) {
-        var v = Math.max(0, Math.min(1, peaks[i])) * (mid - 2);
-        ctx.fillRect(i * w + 0.5, mid - v, w - 1, v * 2);
-      }
+    // Idempotent wiring: the drag/click handlers are document-level delegates,
+    // re-running the script must not add a second set.
+    if (document.__trimTimelineWired) {
+      drawTarget(document.getElementById("trim-timeline"));
+      if (window.__fitMediaGrid) window.__fitMediaGrid();
+      return;
     }
-    drawWave();
+    document.__trimTimelineWired = true;
 
     function fmtSec(s) {
       s = Math.max(0, s);
@@ -191,84 +357,434 @@
       var ss = (s < 10 ? "0" : "") + s.toFixed(2);
       return hh + mm + ":" + ss;
     }
-    function pct(sec) { return (Math.max(0, Math.min(duration, sec)) / duration * 100); }
-    function update() {
-      inEl.style.left = pct(posStart) + "%";
-      outEl.style.left = pct(posEnd) + "%";
-      timeIn.style.left = pct(posStart) + "%";
-      timeOut.style.left = pct(posEnd) + "%";
-      timeIn.textContent = fmtSec(posStart);
-      timeOut.textContent = fmtSec(posEnd);
-      shadeBefore.style.width = pct(posStart) + "%";
-      shadeAfter.style.width = (100 - pct(posEnd)) + "%";
-      document.getElementById("insp-in").value = fmtClock(posStart * 1000);
-      document.getElementById("insp-out").value = fmtClock(posEnd * 1000);
-    }
-    function movingMarker(marker) {
-      return marker === inEl || marker === outEl;
-    }
-    // Drag the markers directly.
-    inEl.addEventListener("pointerdown", function (e) { e.preventDefault(); dragStart(e, "in"); });
-    outEl.addEventListener("pointerdown", function (e) { e.preventDefault(); dragStart(e, "out"); });
 
-    var activeDrag = null;
-    var dragged = false;
-    function dragStart(e, which) {
-      activeDrag = which;
-      dragged = false;
-      timeline.setPointerCapture(e.pointerId);
-    }
-    timeline.addEventListener("pointermove", function (e) {
-      if (!activeDrag) return;
-      var rect = timeline.getBoundingClientRect();
-      var frac = (e.clientX - rect.left) / rect.width;
-      if (activeDrag === "in") {
-        posStart = Math.max(0, Math.min(frac * duration, posEnd - 0.05));
-      } else {
-        posEnd = Math.min(duration, Math.max(frac * duration, posStart + 0.05));
-      }
-      dragged = true;
-      update();
-      e.preventDefault();
-    });
-    timeline.addEventListener("pointerup", function () {
-      if (dragged) {
-        // A press-drag-release also fires a trailing click on the track. That
-        // handler would re-set trim In to the drop position, making a trim-Out
-        // drag appear to move trim In too. Swallow the immediate click that
-        // follows a real drag; a plain click (no drag) falls through normally.
-        var onClick = function (e) {
-          document.removeEventListener("click", onClick, true);
-          e.stopPropagation();
-          e.preventDefault();
-        };
-        document.addEventListener("click", onClick, true);
-      }
-      activeDrag = null;
-    });
-    timeline.addEventListener("pointercancel", function () { activeDrag = null; });
-
-    // Click the track to set the trim IN point.
-    timeline.addEventListener("click", function (e) {
-      if (e.target === inEl || e.target === outEl) return;
-      var rect = timeline.getBoundingClientRect();
-      var frac = (e.clientX - rect.left) / rect.width;
-      posStart = Math.max(0, Math.min(frac * duration, posEnd - 0.05));
-      update();
-    });
-
-    if (clearBtn) {
-      clearBtn.addEventListener("click", function () {
-        posStart = 0; posEnd = duration;
-        update();
+    // Resolution-aware waveform painting. The stored envelope is coarse
+    // enough for the full file, but a deep zoom would only show a handful of
+    // stored bars (thick horizontal slabs). When that happens we fetch a
+    // pixel-matched envelope for the visible window (/api/media/:name/wave)
+    // and draw it instead, so zooming in reveals real detail while bar
+    // density stays roughly 1 bar per CSS pixel at every zoom depth.
+    var waveCache = null;   // {from,to,peaks}: fetched window, padded around the view
+    var wavePending = false;
+    // Mirror /api/media/:name/wave's server-side cap (media.MaxWaveformBins).
+    var mediaMaxBins = 16000;
+    function requestWave(timeline, from, to, wantBins) {
+      if (wavePending) return;
+      // Mid-animation the window is moving anyway; fetch after it settles.
+      if (zoomAnim) return;
+      var dur = parseFloat(timeline.dataset.duration);
+      var span = to - from, pad = span * 0.25;
+      var cFrom = Math.max(0, from - pad), cTo = Math.min(dur, to + pad);
+      if (!(cTo > cFrom)) return;
+      var bins = Math.max(64, Math.min(mediaMaxBins, Math.round(wantBins * (cTo - cFrom) / span)));
+      wavePending = true;
+      var url = "/api/media/" + encodeURIComponent(timeline.dataset.filename) +
+        "/wave?from=" + cFrom + "&to=" + cTo + "&bins=" + bins;
+      fetch(url).then(function (r) {
+        wavePending = false;
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      }).then(function (peaks) {
+        if (Array.isArray(peaks) && peaks.length > 0) {
+          waveCache = { from: cFrom, to: cTo, peaks: peaks };
+        }
+        drawTarget(timeline);
+      }).catch(function () {
+        wavePending = false; // retried on the next repaint
       });
     }
+    // Max-hold resample to exactly `bins` values: dense arrays compress to
+    // ~1 bar per pixel, sparse arrays (upscale) never stretch into slabs.
+    function resampleMax(arr, bins) {
+      var out = new Array(bins);
+      if (bins >= arr.length) {
+        for (var i = 0; i < bins; i++) out[i] = arr[Math.min(arr.length - 1, Math.floor(i * arr.length / bins))];
+        return out;
+      }
+      for (var i = 0; i < bins; i++) {
+        var a = Math.floor(i * arr.length / bins);
+        var b = Math.max(a + 1, Math.floor((i + 1) * arr.length / bins));
+        var m = 0;
+        for (var j = a; j < b; j++) if (arr[j] > m) m = arr[j];
+        out[i] = m;
+      }
+      return out;
+    }
+    function drawWave(timeline) {
+      var canvas = timeline.querySelector("#trim-waveform");
+      if (!canvas) return;
+      var ctx = canvas.getContext && canvas.getContext("2d");
+      if (!ctx) return;
+      // Size the backing store to the element so the drawing is crisp at the
+      // panel's current size instead of stretching a fixed 800x120 buffer.
+      var dpr = window.devicePixelRatio || 1;
+      var cw = canvas.clientWidth || timeline.clientWidth || 800;
+      var ch = canvas.clientHeight || timeline.clientHeight || 120;
+      if (!(cw > 0) || !(ch > 0)) return;
+      var bw = Math.round(cw * dpr), bh = Math.round(ch * dpr);
+      if (canvas.width !== bw || canvas.height !== bh) {
+        canvas.width = bw;
+        canvas.height = bh;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      var peaks = [];
+      try {
+        var raw = timeline.dataset.wave;
+        if (raw) peaks = JSON.parse(raw);
+      } catch (e) { peaks = []; }
+      if (!Array.isArray(peaks) || peaks.length === 0) return;
+      var style = getComputedStyle(document.documentElement);
+      var waveColour = (style.getPropertyValue("--ctp-accent-2") || "#2fd6ff").trim() || "#2fd6ff";
+      ctx.fillStyle = waveColour;
+      var dur = parseFloat(timeline.dataset.duration);
+      if (!(dur > 0)) return;
+      var vFrom = view ? Math.max(0, view.from) : 0;
+      var vTo = view ? Math.min(dur, view.to) : dur;
+      var span = vTo - vFrom;
+      if (!(span > 0)) return;
+      // Source selection: the pixel-matched cached window whenever the view
+      // sits inside it, otherwise the stored envelope (fine for the full
+      // file and a fine-enough stencil while a fetch is in flight).
+      var src = peaks, sFrom = 0, sTo = dur;
+      if (view && waveCache && vFrom >= waveCache.from && vTo <= waveCache.to) {
+        src = waveCache.peaks; sFrom = waveCache.from; sTo = waveCache.to;
+      }
+      var want = Math.max(2, Math.round(cw));
+      // Request a finer envelope only when the current source can't fill the
+      // canvas with ~1 bar per pixel (deep zoom) and the window is small
+      // enough to decode cheaply (< 60s); wider views rely on the stored
+      // envelope. Only fires once per covered window (wavePending + cache).
+      if (view && span >= 0.05 && span <= 60 &&
+          (sTo - sFrom) > span &&
+          src.length * span / (sTo - sFrom) < want &&
+          !(waveCache && vFrom >= waveCache.from && vTo <= waveCache.to)) {
+        requestWave(timeline, vFrom, vTo, want);
+      }
+      var i0 = Math.floor((vFrom - sFrom) / (sTo - sFrom) * src.length);
+      var i1 = Math.ceil((vTo - sFrom) / (sTo - sFrom) * src.length);
+      i0 = Math.max(0, i0); i1 = Math.min(src.length, i1);
+      if (i1 <= i0) return;
+      var bars = resampleMax(src.slice(i0, i1), want);
+      var mid = canvas.height / 2;
+      var w = canvas.width / bars.length;
+      for (var i = 0; i < bars.length; i++) {
+        var v = Math.max(0, Math.min(1, bars[i])) * (mid - 2);
+        ctx.fillRect(i * w + 0.5, mid - v, Math.max(1, w - 1), v * 2);
+      }
+    }
+    function drawTarget(timeline) {
+      if (!timeline) return;
+      var dur = parseFloat(timeline.dataset.duration);
+      if (!(dur > 0)) return;
+      // Keep a stale zoom window (from before a save changed the duration)
+      // inside the file; a window that covers everything is a no-zoom.
+      if (view) {
+        view.from = Math.max(0, view.from);
+        view.to = Math.min(dur, view.to);
+        if (view.to - view.from >= dur - 0.05) view = null;
+      }
+      drawWave(timeline);
+      update(timeline, expand(stateOf(timeline)));
+      window.__trimView = view; // survive the next save's re-render
+    }
 
-    // The trim timeline's markers and fields must push their values back into
-    // the form fields so a Save posts them. Marker drags already update the
-    // inputs; wire the standard save flow to leave them as-is.
-    update();
+    // Per-drag/zoom state, re-read from the live DOM (never cached per render).
+    var drag = null;
+    // Zoom window {from,to} in seconds; null = full file. Backed by a window
+    // property: the script re-runs after every inspector save, and a fresh
+    // closure would otherwise reset a zoomed view to the full file (visible
+    // as the waveform jumping scale on each save).
+    var view = window.__trimView || null;
+    var zoomMode = false;
+    var box = null;     // in-progress box select {timeline, f0, lo, hi}
+    function stateOf(timeline) {
+      var posStart = parseFloat(timeline.dataset.posStart) / 1000; // seconds
+      var posEnd = parseFloat(timeline.dataset.posEnd) / 1000;
+      var duration = parseFloat(timeline.dataset.duration);
+      return { posStart: posStart, posEnd: posEnd, duration: duration };
+    }
+    function pct(st, sec) {
+      // Position a time within the current zoom window; values outside the
+      // window clamp to its edges so markers/shades stay visible while zoomed.
+      var from = view ? view.from : 0;
+      var to = view ? view.to : st.duration;
+      return (Math.max(from, Math.min(to, sec)) - from) / (to - from) * 100;
+    }
+    function update(timeline, st) {
+      var inEl = timeline.querySelector("#trim-marker-in");
+      var outEl = timeline.querySelector("#trim-marker-out");
+      var timeIn = timeline.querySelector("#trim-time-in");
+      var timeOut = timeline.querySelector("#trim-time-out");
+      if (!inEl || !outEl) return;
+      inEl.style.left = pct(st, st.posStart) + "%";
+      outEl.style.left = pct(st, st.posEnd) + "%";
+      timeIn.style.left = pct(st, st.posStart) + "%";
+      timeOut.style.left = pct(st, st.posEnd) + "%";
+      timeIn.textContent = fmtSec(st.posStart);
+      timeOut.textContent = fmtSec(st.posEnd);
+      var shades = {};
+      var sb = timeline.querySelector("#trim-shade-before");
+      var sa = timeline.querySelector("#trim-shade-after");
+      if (sb) sb.style.width = pct(st, st.posStart) + "%";
+      if (sa) sa.style.width = (100 - pct(st, st.posEnd)) + "%";
+      var inpIn = document.getElementById("insp-in");
+      var inpOut = document.getElementById("insp-out");
+      if (inpIn) inpIn.value = fmtClock(st.posStart * 1000);
+      if (inpOut) inpOut.value = fmtClock(st.posEnd * 1000);
+      var lenEl = timeline.querySelector("#trim-length");
+      if (lenEl) lenEl.textContent = fmtClock((st.posEnd - st.posStart) * 1000);
+    }
+    // Instant save: PUT the current field values (the form re-renders the
+    // inspector from server state, so this is also the "commit" of a drag).
+    function save() {
+      var form = document.getElementById("inspector-form");
+      if (form && window.htmx) htmx.trigger(form, "ctp-save");
+    }
+
+    // A stored posEnd of 0 means "no trim out" (play to end of file), so the
+    // out marker shows at the full duration; 0 would sit at 0% undraggable.
+    function expand(st) {
+      if (!(st.posEnd > 0)) st.posEnd = st.duration;
+      return st;
+    }
+
+    // Delegated pointerdown: begin a marker drag, or (when Zoom mode is
+    // armed) a box select on the empty timeline.
+    document.addEventListener("pointerdown", function (e) {
+      var targ = e.target instanceof Element ? e.target : null;
+      if (!targ) return;
+      var marker = targ.closest(".trim-marker");
+      var timeline = (marker || targ).closest(".trim-timeline");
+      if (!timeline) return;
+      if (marker) {
+        var st = expand(stateOf(timeline));
+        drag = { timeline: timeline, st: st, which: marker.id === "trim-marker-out" ? "out" : "in" };
+        e.preventDefault();
+        timeline.setPointerCapture(e.pointerId);
+        return;
+      }
+      if (zoomMode) {
+        var rect = timeline.getBoundingClientRect();
+        box = { timeline: timeline, f0: rect.width ? (e.clientX - rect.left) / rect.width : 0, lo: 0, hi: 0 };
+        e.preventDefault();
+        timeline.setPointerCapture(e.pointerId);
+      }
+    });
+    // Retargeted moves while capture is held land on the timeline itself.
+    document.addEventListener("pointermove", function (e) {
+      if (box) {
+        var rect = box.timeline.getBoundingClientRect();
+        if (!rect.width) return;
+        var f1 = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        box.lo = Math.min(box.f0, f1);
+        box.hi = Math.max(box.f0, f1);
+        var sel = document.getElementById("trim-zoomsel");
+        if (sel) {
+          sel.style.left = (box.lo * 100) + "%";
+          sel.style.width = ((box.hi - box.lo) * 100) + "%";
+          sel.classList.add("trim-zoomsel-active");
+        }
+        e.preventDefault();
+        return;
+      }
+      if (!drag) return;
+      var rect = drag.timeline.getBoundingClientRect();
+      if (!rect.width) return;
+      var frac = (e.clientX - rect.left) / rect.width;
+      var from = view ? view.from : 0, to = view ? view.to : drag.st.duration;
+      var sec = from + frac * (to - from);
+      if (drag.which === "in") {
+        drag.st.posStart = Math.max(0, Math.min(sec, drag.st.posEnd - 0.05));
+      } else {
+        drag.st.posEnd = Math.min(drag.st.duration, Math.max(sec, drag.st.posStart + 0.05));
+      }
+      update(drag.timeline, drag.st);
+      e.preventDefault();
+    });
+    document.addEventListener("pointerup", function () {
+      if (drag) {
+        update(drag.timeline, drag.st);
+        save();
+        drag = null;
+        return;
+      }
+      if (box) {
+        var timeline = box.timeline;
+        var sel = document.getElementById("trim-zoomsel");
+        if (sel) { sel.classList.remove("trim-zoomsel-active"); sel.style.width = ""; sel.style.left = ""; }
+        if (box.hi - box.lo > 0.02) {
+          zoomInto(timeline, box.lo, box.hi);
+        }
+        box = null;
+        disarmZoom();
+      }
+    });
+    document.addEventListener("pointercancel", function () {
+      drag = null;
+      if (box) {
+        var sel = document.getElementById("trim-zoomsel");
+        if (sel) { sel.classList.remove("trim-zoomsel-active"); sel.style.width = ""; sel.style.left = ""; }
+        box = null;
+      }
+    });
+
+    // --- Zoom window helpers ------------------------------------------------
+    // Zoom changes animate a short ease-out graduation on the window edges
+    // (the box-select's release eases into the target instead of jumping).
+    // Interpolating `view` directly gives the repaint a cheap animated frame.
+    var zoomAnim = null;
+    function setView(nfrom, nto, dur) {
+      if (nto - nfrom < 0.05) return;
+      if (zoomAnim) { cancelAnimationFrame(zoomAnim); zoomAnim = null; }
+      var target = (nfrom <= 0 && nto >= dur) ? null
+        : { from: Math.max(0, nfrom), to: Math.min(dur, nto) };
+      var start = view ? { from: view.from, to: view.to } : { from: 0, to: dur };
+      var t0 = performance.now();
+      function frame(now) {
+        var k = Math.min(1, (now - t0) / 200);
+        var e = 1 - Math.pow(1 - k, 3);
+        if (target === null) {
+          if (e >= 1) view = null;
+          else view = { from: start.from + (0 - start.from) * e, to: start.to + (dur - start.to) * e };
+        } else {
+          view = { from: start.from + (target.from - start.from) * e,
+                   to: start.to + (target.to - start.to) * e };
+        }
+        // Clear the animation flag BEFORE repainting so the final frame's
+        // drawWave sees a settled zoom and can kick off a windowed fetch.
+        if (e >= 1) zoomAnim = null;
+        var timeline = document.querySelector(".trim-timeline");
+        if (timeline) drawTarget(timeline);
+        if (e < 1) zoomAnim = requestAnimationFrame(frame);
+        else zoomAnim = null;
+      }
+      zoomAnim = requestAnimationFrame(frame);
+    }
+    function zoomInto(timeline, f0, f1) {
+      var st = expand(stateOf(timeline));
+      var from = view ? view.from : 0, to = view ? view.to : st.duration;
+      setView(from + (to - from) * f0, from + (to - from) * f1, st.duration);
+    }
+    function zoomStep(dir) {
+      var timeline = document.querySelector(".trim-timeline");
+      if (!timeline) return;
+      var st = expand(stateOf(timeline));
+      var from = view ? view.from : 0, to = view ? view.to : st.duration;
+      var span = to - from;
+      if (dir < 0) { from += span * 0.25; to -= span * 0.25; }
+      else { from -= span * 0.5; to += span * 0.5; }
+      setView(from, to, st.duration);
+    }
+    function disarmZoom() {
+      zoomMode = false;
+      var t = document.querySelector(".trim-timeline");
+      if (t) t.classList.remove("trim-zoom-active");
+      var b = document.getElementById("trim-zoom");
+      if (b) b.setAttribute("aria-pressed", "false");
+    }
+
+    // Zoomed in: rolling the wheel over the waveform pans the view window
+    // left/right across the file (there is no page scroll underneath the
+    // fixed inspector, so the event is captured instead of bubbling).
+    document.addEventListener("wheel", function (e) {
+      var targ = e.target instanceof Element ? e.target : null;
+      if (!targ) return;
+      var timeline = targ.closest(".trim-timeline");
+      if (!timeline || !view) return;
+      var dur = parseFloat(timeline.dataset.duration);
+      var span = view.to - view.from;
+      if (!(dur > 0) || !(span > 0) || span >= dur - 0.05) return;
+      e.preventDefault();
+      if (zoomAnim) { cancelAnimationFrame(zoomAnim); zoomAnim = null; }
+      var delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (e.deltaMode === 1) delta *= 16;
+      else if (e.deltaMode === 2) delta *= 100;
+      var shift = delta * span / 600;
+      var nfrom = view.from + shift, nto = view.to + shift;
+      if (nfrom < 0) { nto -= nfrom; nfrom = 0; }
+      if (nto > dur) { nfrom -= nto - dur; nto = dur; }
+      if (nfrom < 0) nfrom = 0;
+      view = { from: nfrom, to: nto };
+      drawTarget(timeline);
+    }, { passive: false });
+
+    // Media-info grid: the tab body must never scroll internally, so when the
+    // info list would overflow the inspector's visible area it doubles from
+    // one aligned label:value column into two (`.media-cols-2`). The pane
+    // itself grows with its content, so fit is measured against the visible
+    // viewport (the #cueinspector-collapse scroll area), not the pane.
+    function fitMediaGrid() {
+      var grid = document.querySelector(".media-info-grid");
+      if (!grid) return;
+      var pane = grid.closest(".inspector-tabpane");
+      if (!pane || pane.getBoundingClientRect().height <= 0) return;
+      var scroll = grid.closest("#cueinspector-collapse");
+      var avail = 0;
+      if (scroll) {
+        avail = Math.round(scroll.getBoundingClientRect().bottom - pane.getBoundingClientRect().top - 10);
+      }
+      if (avail <= 0) return;
+      // Measure the single-column height first: the live class would make
+      // grid.scrollHeight under-report.
+      grid.classList.remove("media-cols-2");
+      var one = grid.scrollHeight;
+      grid.classList.toggle("media-cols-2", one > avail + 1);
+    }
+    window.__fitMediaGrid = fitMediaGrid;
+    // The inspector is resizable + the panel swaps content; re-fit whenever
+    // either changes (cheap layout measurement, no animation).
+    window.addEventListener("resize", function () { fitMediaGrid(); });
+
+    // A click on the waveform is otherwise inert: only the explicit controls
+    // below change trim points or the zoom window.
+
+    // Clear-trim + zoom buttons.
+    document.addEventListener("click", function (e) {
+      if (!e.target || !(e.target instanceof Element)) return;
+      var btn = e.target.closest("#trim-clear, #trim-zoom, #trim-zoom-in, #trim-zoom-out, #trim-zoom-reset");
+      if (!btn) return;
+      var timeline = document.querySelector(".trim-timeline");
+      if (!timeline) return;
+      if (btn.id === "trim-clear") {
+        var st = expand(stateOf(timeline));
+        st.posStart = 0; st.posEnd = st.duration;
+        update(timeline, st);
+        save();
+      } else if (btn.id === "trim-zoom") {
+        zoomMode = !zoomMode;
+        timeline.classList.toggle("trim-zoom-active", zoomMode);
+        btn.setAttribute("aria-pressed", zoomMode ? "true" : "false");
+        if (!zoomMode) disarmZoom();
+      } else if (btn.id === "trim-zoom-in") {
+        zoomStep(-1);
+      } else if (btn.id === "trim-zoom-out") {
+        zoomStep(1);
+      } else if (btn.id === "trim-zoom-reset") {
+        var st2 = expand(stateOf(timeline));
+        setView(0, st2.duration, st2.duration);
+        disarmZoom();
+      }
+    });
+
+    // Initial paint (only) for a timeline present at script run time. Must
+    // carry REAL state from the dataset: posEnd 0 means "no trim out" (shown
+    // at full duration); an empty state would paint NaN positions/markers.
+    drawTarget(document.getElementById("trim-timeline"));
+    fitMediaGrid();
+
+    // Inspector swaps may replace the timeline AFTER the inline script ran
+    // (htm4 evaluates fragments' scripts around the swap), so repaint from
+    // the freshly swapped markup whenever the panel settles. Delegated, once.
+    document.body.addEventListener("htmx:after:swap", function (e) {
+      const t = e.detail && e.detail.ctx && e.detail.ctx.target;
+      if (!t || (t.id !== "cueinspector-body" && t.id !== "cueinspector-collapse")) return;
+      Promise.resolve().then(function () {
+        drawTarget(document.getElementById("trim-timeline"));
+        fitMediaGrid();
+      });
+    });
   })();
 </script>
+</div>
 
 {{ end }}

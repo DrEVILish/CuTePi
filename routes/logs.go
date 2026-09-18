@@ -1,7 +1,9 @@
 package routes
 
 import (
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -34,5 +36,16 @@ func Logs(rg *gin.RouterGroup) {
 	rg.DELETE("/logs", func(c *gin.Context) {
 		logs.Clear()
 		c.Status(http.StatusOK)
+	})
+
+	// Browser-side failures (failed requests, JS exceptions) are reported by
+	// the page as a tiny text blob so they land in the same viewer as the
+	// server events instead of living only in the user's devtools.
+	rg.POST("/logs/client", func(c *gin.Context) {
+		body, err := io.ReadAll(io.LimitReader(c.Request.Body, 512))
+		if err == nil {
+			logs.PrintfWarn("CLIENT", "browser error: %s", strings.TrimSpace(string(body)))
+		}
+		c.Status(http.StatusNoContent)
 	})
 }

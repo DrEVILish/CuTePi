@@ -396,6 +396,47 @@ func containsFilename(medias []Media, filename string) bool {
 	return false
 }
 
+// Renaming media must reconcile both the pool row and every cue that
+// references the old filename, and must refuse a collision.
+func TestRenameMedia(t *testing.T) {
+	mustRegisterMedia(t, "rename-old.mp4")
+	if err := AddCue("rename-old.mp4", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+
+	if err := RenameMedia("rename-old.mp4", "rename-new.mp4"); err != nil {
+		t.Fatalf("RenameMedia: %v", err)
+	}
+	pool, err := GetMediapool()
+	if err != nil {
+		t.Fatalf("GetMediapool: %v", err)
+	}
+	if containsFilename(pool.Medias, "rename-old.mp4") || !containsFilename(pool.Medias, "rename-new.mp4") {
+		t.Fatalf("pool not renamed: %+v", pool.Medias)
+	}
+	sheet, err := GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	found := false
+	for _, c := range sheet.Cues {
+		if c.Filename == "rename-new.mp4" {
+			found = true
+		}
+		if c.Filename == "rename-old.mp4" {
+			t.Fatal("cue still references the old filename")
+		}
+	}
+	if !found {
+		t.Fatal("no cue references the renamed file")
+	}
+
+	mustRegisterMedia(t, "rename-taken.mp4")
+	if err := RenameMedia("rename-new.mp4", "rename-taken.mp4"); err == nil {
+		t.Fatal("renaming onto an existing pool filename must fail")
+	}
+}
+
 // Time parsing tests
 func TestParseTime(t *testing.T) {
 	tests := []struct {
@@ -524,16 +565,13 @@ func TestMoveCueUpDown(t *testing.T) {
 		t.Fatalf("initial order wrong: %+v", sheet.Cues)
 	}
 
-	// Move c (pos 3) up -> should be at pos 2, b at 3
+	// Move c (pos 3) up -> visual order a, c, b (cuePos is identity now).
 	if err := MoveCueUp("3"); err != nil {
 		t.Fatalf("MoveCueUp: %v", err)
 	}
 	sheet, _ = GetCuesheet()
-	if sheet.Cues[0].CuePos != 1 || sheet.Cues[1].CuePos != 2 || sheet.Cues[2].CuePos != 3 {
-		t.Fatalf("after MoveCueUp(3): %+v", sheet.Cues)
-	}
 	if sheet.Cues[1].Media.Filename != "move-c.mp4" || sheet.Cues[2].Media.Filename != "move-b.mp4" {
-		t.Fatalf("expected c at pos 2, b at 3: %+v", sheet.Cues)
+		t.Fatalf("expected visual order a,c,b: %+v", sheet.Cues)
 	}
 
 	// Move a (pos 1) up -> should stay at 1 (already at top)
@@ -554,13 +592,13 @@ func TestMoveCueUpDown(t *testing.T) {
 		t.Fatalf("MoveCueDown(3) should not move: %+v", sheet.Cues)
 	}
 
-	// Move c (pos 2) down -> should go to pos 3, b to 2
+	// Move b (pos 2) down -> should go to pos 3, c to 2
 	if err := MoveCueDown("2"); err != nil {
 		t.Fatalf("MoveCueDown(2): %v", err)
 	}
 	sheet, _ = GetCuesheet()
-	if sheet.Cues[1].Media.Filename != "move-b.mp4" || sheet.Cues[2].Media.Filename != "move-c.mp4" {
-		t.Fatalf("expected b at pos 2, c at 3: %+v", sheet.Cues)
+	if sheet.Cues[1].Media.Filename != "move-c.mp4" || sheet.Cues[2].Media.Filename != "move-b.mp4" {
+		t.Fatalf("expected visual order a,c,b: %+v", sheet.Cues)
 	}
 
 	// Move c (pos 3) up twice -> should go to pos 1
@@ -721,8 +759,11 @@ func TestCueOrderAndSelectionStayConsistentAfterChanges(t *testing.T) {
 	if len(sheet.Cues) != 2 || sheet.Cues[0].CuePos != 1 || sheet.Cues[1].CuePos != 2 {
 		t.Fatalf("cue positions after delete = %+v, want contiguous 1..2", sheet.Cues)
 	}
-	if selected, _ := SelectedCuePos(); selected != 1 {
-		t.Fatalf("selected cue after deleting earlier cue = %d, want 1", selected)
+	// Selection follows its cue: it was cue b (cuePos 2, row-sticky after
+	// the move), which reindexes 2->2 — not 1. (The old code subtracted 1
+	// on top of the reindex map and landed on cue c.)
+	if selected, _ := SelectedCuePos(); selected != 2 {
+		t.Fatalf("selected cue after deleting earlier cue = %d, want 2", selected)
 	}
 }
 
@@ -1003,5 +1044,55 @@ func TestMediaRegistered(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("MediaRegistered returned false after registration")
+	}
+}
+
+// TestReorderCuesBeyondThousand is the runnable check for the reindex
+// collision: the old fixed +1000 bump collided with live cuePos values under
+// the UNIQUE constraint once a show exceeded 1000 cues. The offset is now N
+// (the number of cues), which is always disjoint from the compact 1..N range,
+// so reordering must succeed at any show size.
+func TestReorderCuesBeyondThousand(t *testing.T) {
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	_ = setSelectedCuePos(0)
+	const n = 1005
+	names := make([]string, n)
+	for i := 0; i < n; i++ {
+		names[i] = fmt.Sprintf("reorder-%d.mp4", i)
+		mustRegisterMedia(t, names[i])
+		if err := AddCue(names[i], ""); err != nil {
+			t.Fatalf("AddCue(%d): %v", i, err)
+		}
+	}
+	sheet, err := GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	order := make([]int, n)
+	for i, c := range sheet.Cues {
+		order[i] = c.CuePos
+	}
+	// Reverse every position; the pre-fix broken bump died here.
+	for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
+		order[i], order[j] = order[j], order[i]
+	}
+	if _, err := ReorderCues(order); err != nil {
+		t.Fatalf("ReorderCues(%d cues): %v", n, err)
+	}
+	got, err := GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet after reorder: %v", err)
+	}
+	if len(got.Cues) != n {
+		t.Fatalf("after reorder: %d cues, want %d", len(got.Cues), n)
+	}
+	// Positions reindexed 1..N and the new first row is the old last one.
+	if got.Cues[0].Title != names[n-1] {
+		t.Fatalf("first cue after reversal = %q, want %q", got.Cues[0].Title, names[n-1])
+	}
+	if got.Cues[n-1].CuePos != n {
+		t.Fatalf("last cuePos = %d, want %d (1..N reindex)", got.Cues[n-1].CuePos, n)
 	}
 }

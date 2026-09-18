@@ -3,7 +3,7 @@
 <form
   id="updateValue"
   hx-trigger="updateValue"
-  hx-put="/api/cue/{{ .cuePos }}/edit/{{ .col }}"
+  hx-put="{{ .action }}"
   hx-target="#cuesheet"
   hx-swap="outerHTML"
 >

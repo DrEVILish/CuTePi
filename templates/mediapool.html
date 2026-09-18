@@ -1,31 +1,31 @@
 {{ define "mediapool.html" }}
 
-<!-- <script>
-  var formatBytes = function (bytes, decimals = 0) {
-    if (!+bytes) return '0 Bytes';
-
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
-
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
-  };
-</script> -->
-
 <div id="mediapool" class="d-flex flex-column h-100 position-relative">
-  <button
-    type="button"
-    class="btn btn-sm btn-outline-secondary"
-    id="mediapool-collapse-btn"
-    title="Collapse the media pool"
-    aria-label="Collapse the media pool"
-  >
-    <i class="bi bi-chevron-double-left"></i>
-  </button>
   <div class="d-flex align-items-center justify-content-between mb-3">
     <h5 class="mb-0">Mediapool</h5>
+    <div class="d-flex gap-2">
+      <div class="btn-group btn-group-sm" role="group" aria-label="Add media">
+        <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#uploadModal" title="Upload" aria-label="Upload">
+          <i class="bi bi-cloud-upload-fill"></i>
+        </button>
+        <a class="btn btn-outline-primary" href="/upload" title="Open the upload page" aria-label="Open the upload page">
+          <i class="bi bi-box-arrow-up-right"></i>
+        </a>
+        <button type="button" class="btn btn-danger btn-youtube" data-bs-toggle="modal" data-bs-target="#ytdlModal" title="Download from URL" aria-label="Download from URL">
+          <i class="bi bi-youtube"></i>
+        </button>
+        <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#qrModal" title="Show QR for mobile upload" aria-label="Show QR for mobile upload">
+          <i class="bi bi-qr-code"></i>
+        </button>
+      </div>
+      <div class="btn-group btn-group-sm" role="group" aria-label="Thumbnail columns"
+        title="Number of thumbnail columns">
+        <button type="button" class="btn btn-outline-secondary" id="media-cols-less"
+          title="Fewer columns" aria-label="Fewer columns">&minus;</button>
+        <button type="button" class="btn btn-outline-secondary" id="media-cols-more"
+          title="More columns" aria-label="More columns">+</button>
+      </div>
+    </div>
   </div>
 
   {{ if .Mediapool }}
@@ -51,108 +51,41 @@
     </select>
   </div>
   <div class="media-grid">
-    <!-- Assuming mediapool is dynamically populated -->
     {{ range .Mediapool }}
       {{ $type := "other" }}
-      {{ if hasPrefix .Mimetype "video" }}{{ $type = "video" }}
-      {{ else if hasPrefix .Mimetype "image" }}{{ $type = "image" }}
-      {{ else if hasPrefix .Mimetype "audio" }}{{ $type = "audio" }}{{ end }}
+      {{ $icon := "?" }}
+      {{ if hasPrefix .Mimetype "video" }}{{ $type = "video" }}{{ $icon = "bi-film" }}
+      {{ else if hasPrefix .Mimetype "audio" }}{{ $type = "audio" }}{{ $icon = "bi-music-note-beamed" }}
+      {{ else if hasPrefix .Mimetype "image" }}{{ $type = "image" }}{{ $icon = "bi-image" }}{{ end }}
       {{ $thumb := .Thumbnail }}
       {{ if not $thumb }}{{ $thumb = printf "/img/placeholder-%s.svg" $type }}{{ end }}
-
-      <div class="media-tile" data-media-type="{{ $type }}" data-media-name="{{ .Filename }}">
-        <div class="media_thumbnail position-relative img-thumbnail w-100 h-100 ratio ratio-16x9"
-          style="background-image:url('{{ $thumb }}');"
-          draggable="true"
-          data-media-filename="{{ .Filename }}"
-          alt="Thumbnail">
+      <figure class="media-tile" data-media-type="{{ $type }}" data-media-name="{{ .Filename }}"
+        tabindex="0" aria-label="{{ .Filename }}: double-click or press Enter to add to the cuesheet">
+        <div class="media-thumbnail" style="background-image:url('{{ $thumb }}')"
+          draggable="true" data-media-filename="{{ .Filename }}" role="img" aria-label="Thumbnail for {{ .Filename }}">
           {{ if .Missing }}
-          <i class="bi bi-exclamation-triangle-fill text-warning position-absolute top-0 start-0 m-1 z-3 fs-5"
+          <i class="bi bi-exclamation-triangle-fill media-missing"
             title="Source file missing from disk" aria-label="Source file missing from disk"></i>
           {{ end }}
-          <div class="media_text position-absolute top-50 start-50 translate-middle text-bottom text-light bg-dark bg-opacity-75 p-2 rounded z-1">
-            <p class="mb-0">{{ .Filename }}</p>
-            <div class="position-absolute bottom-0 start-0 m-2">
-              {{ if hasPrefix .Mimetype "image" }}
-              <!-- if(media.mimetype.startsWith('image')) -->
-                <i class="bi bi-image"></i>
-              {{ else }}
-              <!-- else if(media.mimetype.startsWith('video')) -->
-                <i class="bi bi-film"></i>
-              {{ end }}
-              {{ .Size }}
-              <!-- formatBytes(media.size) -->
-              <span class="ms-1 small opacity-75">{{ .DateAdded }}</span>
-            </div>
+          <!-- Detailed info panel: hover reveals type, size, date added. -->
+          <div class="media-info">
+            <span class="media-info-name" title="{{ .Filename }}">{{ .Filename }}</span>
+            <span class="media-info-row"><i class="bi {{ $icon }}"></i> {{ .Mimetype }}</span>
+            <span class="media-info-row">Size: {{ .Size }}</span>
+            <span class="media-info-row">Added: {{ .DateAdded }}</span>
           </div>
-          <div class="dropdown position-absolute bottom-0 end-0 z-3">
-            <button
-              class="btn btn-secondary media-menu-toggle"
-              type="button"
-              draggable="false"
-              data-bs-toggle="dropdown"
-              data-bs-boundary="viewport"
-              aria-expanded="false">
-              <i class="bi bi-three-dots"></i>
-            </button>
-            <ul class="dropdown-menu dropdown-menu-end">
-              <li>
-                <button
-                  class="dropdown-item"
-                  hx-post="/api/play/{{ urlPath .Filename }}"
-                  hx-swap="none">
-                  Play
-                </button>
-              </li>
-              <li>
-                <button
-                  class="dropdown-item"
-                  hx-post="/api/load/{{ urlPath .Filename }}"
-                  hx-swap="none">
-                  Load
-                </button>
-              </li>
-              <li>
-                <button
-                  class="dropdown-item"
-                  hx-post="/api/cue/add/{{ urlPath .Filename }}"
-                  hx-target="#cuesheet"
-                  hx-swap="outerHTML">
-                  Add
-                </button>
-              </li>
-              <li>
-                <button
-                  class="dropdown-item"
-                  type="button"
-                  data-media-delete="{{ .Filename }}">
-                  Delete
-                </button>
-              </li>
-              <li>
-                <button
-                  class="dropdown-item"
-                  hx-post="/api/media/{{ urlPath .Filename }}/refreshThumbnail"
-                  hx-swap="none">
-                  Refresh thumbnail
-                </button>
-              </li>
-              <li>
-                <button
-                  class="dropdown-item"
-                  hx-post="/api/media/{{ urlPath .Filename }}/analyse"
-                  hx-swap="none"
-                  title="Analyse audio to build the waveform for the trim timeline">
-                  Analyse
-                </button>
-              </li>
-            </ul>
-          </div>
+          <button class="media-menu-toggle" type="button" draggable="false"
+            aria-label="Menu for {{ .Filename }}" data-media-menu="{{ .Filename }}">
+            <i class="bi bi-three-dots"></i>
+          </button>
         </div>
-      </div>
+      </figure>
 
     {{ end }}
-  </div>
+    </div>
+    <p id="media-no-match" class="text-muted small text-center my-3" hidden>
+      No media matches the filter.
+    </p>
   {{ else }}
   <div class="mediapool-empty text-center p-4 border border-secondary rounded">
     <i class="bi bi-cloud-arrow-up fs-1 d-block mb-3"></i>

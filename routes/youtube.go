@@ -2,12 +2,16 @@ package routes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,18 +19,19 @@ import (
 	"CuTePi/config"
 	"CuTePi/ctp"
 	"CuTePi/logs"
-	"CuTePi/media"
 )
 
 func Youtube(rg *gin.RouterGroup) {
-	rg.GET("/", func(c *gin.Context) {
-		c.String(http.StatusOK, "youtube pong")
-	})
-
 	rg.POST("", handleYoutubeDownload)
 	rg.POST("/", handleYoutubeDownload)
+	rg.POST("/rename", handleYoutubeRename)
 }
 
+// handleYoutubeDownload streams the download as a newline-delimited JSON
+// event stream: {"stage":"resolving"}, {"stage":"download","pct":45.3,
+// "speed":"2.1MiB/s","eta":"00:04"}, ..., {"done":true,"filename":...} or
+// {"error":"..."}. The client renders these live; on done it refreshes the
+// media pool itself (its own re-render follows the yt-dlp title anyway).
 func handleYoutubeDownload(c *gin.Context) {
 	url := strings.TrimSpace(c.PostForm("url"))
 	logs.Printf(logs.YDLRequest, "stage=request method=%s path=%s url=%q", c.Request.Method, c.Request.URL.Path, url)
@@ -36,78 +41,106 @@ func handleYoutubeDownload(c *gin.Context) {
 		return
 	}
 
-	logs.Printf(logs.YDLResolve, "stage=start url=%q media_dir=%q", url, config.MediaLocation())
-	tmpDir, filename, err := downloadWithYtDlp(url)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	writeLine := func(msg map[string]any) bool {
+		body, _ := json.Marshal(msg)
+		_, err := c.Writer.Write(append(body, '\n'))
+		c.Writer.Flush()
+		return err == nil
+	}
+	stage := func(s string) { writeLine(map[string]any{"stage": s}) }
+	fail := func(code string, msg string) {
+		logs.PrintfWarn(code, "url=%q error=%s", url, msg)
+		writeLine(map[string]any{"error": msg})
+	}
+
+	stage("resolving")
+	th := &pctThrottle{every: 250 * time.Millisecond}
+	tmpDir, filename, err := downloadWithYtDlp(url, func(line string) {
+		if msg := parseYtDlpLine(line, th); msg != nil {
+			writeLine(msg)
+		}
+	})
 	if err != nil {
-		logs.Printf(logs.YDLFailed, "stage=resolve_or_download url=%q error=%v", url, err)
-		c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{
-			"error": fmt.Sprintf("download failed: %v", err),
-		})
+		fail(logs.YDLFailed, fmt.Sprintf("download failed: %v", err))
 		return
 	}
-	// The download lands in a temp subdir of the media dir and only moves
-	// into place after probe/verify/registration succeed (same reason as the
-	// upload path: yt-dlp's own filename may collide with existing media,
-	// and a failed validation must not leave the original clobbered).
 	defer os.RemoveAll(tmpDir)
 	dlPath := filepath.Join(tmpDir, filename)
 	logs.Printf(logs.YDLDownload, "stage=complete filename=%q", filename)
 
-	destPath := filepath.Join(config.MediaLocation(), filename)
+	stage("importing")
 	logs.Printf(logs.YDLProbe, "stage=start filename=%q path=%q", filename, dlPath)
-	meta, err := media.Probe(dlPath)
-	if err != nil {
-		logs.Printf(logs.YDLFailed, "stage=probe filename=%q error=%v", filename, err)
-		c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{"error": err.Error()})
+	if err := importMedia(filename, dlPath); err != nil {
+		fail(logs.YDLFailed, err.Error())
 		return
 	}
+	logs.Printf(logs.YDLRender, "stage=complete filename=%q", filename)
+	writeLine(map[string]any{"done": true, "filename": filename})
+}
 
-	// Import-time playability probe: reject undecodable/corrupt downloads
-	// here rather than failing at cue time. Images are excluded (ffprobe +
-	// the thumbnail copy already prove them).
-	if meta.Kind == media.KindVideo || meta.Kind == media.KindAudio {
-		if err := media.VerifyPlayable(dlPath); err != nil {
-			logs.Printf(logs.YDLFailed, "stage=playability filename=%q error=%v", filename, err)
-			c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{"error": err.Error()})
-			return
-		}
-	}
+// parseYtDlpLine maps one yt-dlp console line to a progress event. Lines
+// without meaningful state yield nil (dropped). pct events are throttled so
+// the DOM is not redrawn at yt-dlp's full line rate (~10/s).
+var (
+	rePct     = regexp.MustCompile(`\[download\]\s+(\d{1,3}(?:\.\d+)?)%`)
+	reSpeed   = regexp.MustCompile(` at ([\d.]+\s?(?:KiB|MiB|GiB|kB|MB|GB))/s`)
+	reEta     = regexp.MustCompile(` ETA (\d+:\d+)`)
+	reMerge   = regexp.MustCompile(`\[(Merger|VideoRemuxer|ExtractAudio|Metadata|VideoConvertor)\]`)
+	reYtTitle = regexp.MustCompile(`\[(?:youtube|youtu)\]\s+[A-Za-z0-9_-]+:\s+(.+)`)
+)
 
-	info, err := os.Stat(dlPath)
-	if err != nil {
-		logs.Printf(logs.YDLFailed, "stage=stat filename=%q error=%v", filename, err)
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
-		return
-	}
-	size := info.Size()
-	if err != nil {
-		logs.Printf(logs.YDLFailed, "stage=stat filename=%q error=%v", filename, err)
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
-		return
-	}
+// pctThrottle admits at most one percent event per interval (final 100%
+// always passes). Safe for concurrent use; yt-dlp writes from a pipe goroutine.
+type pctThrottle struct {
+	mu    sync.Mutex
+	last  time.Time
+	every time.Duration
+}
 
-	title := strings.TrimSuffix(filename, filepath.Ext(filename))
-	logs.Printf(logs.YDLRegister, "stage=start filename=%q title=%q size=%d mimetype=%q duration=%.3f", filename, title, size, meta.Mimetype, meta.Duration)
-	if err := ctp.RegisterMedia(filename, size, meta, title); err != nil {
-		logs.Printf(logs.YDLFailed, "stage=register filename=%q error=%v", filename, err)
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
-		return
+func (t *pctThrottle) allow(done bool) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	every := t.every
+	if every == 0 {
+		every = 250 * time.Millisecond
 	}
+	if done || time.Since(t.last) >= every {
+		t.last = time.Now()
+		return true
+	}
+	return false
+}
 
-	if err := os.Rename(dlPath, destPath); err != nil {
-		logs.Printf(logs.YDLFailed, "stage=move filename=%q error=%v", filename, err)
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
-		return
+func parsePct(line string, th *pctThrottle) map[string]any {
+	m := rePct.FindStringSubmatch(line)
+	if m == nil {
+		return nil
 	}
+	pct, _ := strconv.ParseFloat(m[1], 64)
+	if !th.allow(pct >= 100) {
+		return nil
+	}
+	msg := map[string]any{"stage": "download", "pct": pct}
+	if sp := reSpeed.FindStringSubmatch(line); sp != nil {
+		msg["speed"] = sp[1] + "/s"
+	}
+	if et := reEta.FindStringSubmatch(line); et != nil {
+		msg["eta"] = et[1]
+	}
+	return msg
+}
 
-	mediapool, err := mediapoolView()
-	if err != nil {
-		logs.Printf(logs.YDLFailed, "stage=render filename=%q error=%v", filename, err)
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
-		return
+func parseYtDlpLine(line string, th *pctThrottle) map[string]any {
+	// Stage lines that carry text.
+	if reMerge.MatchString(line) {
+		return map[string]any{"stage": "processing"}
 	}
-	logs.Printf(logs.YDLRender, "stage=complete filename=%q media_count=%d", filename, len(mediapool))
-	c.HTML(http.StatusOK, "mediapool.html", gin.H{"Mediapool": mediapool})
+	if m := reYtTitle.FindStringSubmatch(line); m != nil && !strings.Contains(line, "Extracting URL") {
+		return map[string]any{"stage": "resolved", "title": strings.TrimSpace(m[1])}
+	}
+	return parsePct(line, th)
 }
 
 // ytDlpResolveTimeout bounds the filename-resolution invocation; the
@@ -123,8 +156,10 @@ var (
 // filename. Both invocations run under exec.CommandContext so a hung
 // yt-dlp (network black hole, spinner) fails the request after the timeout
 // instead of pinning the HTTP handler forever. The download lands in a
-// temp subdir - never directly over an existing media file.
-func downloadWithYtDlp(url string) (string, string, error) {
+// temp subdir - never directly over an existing media file. Every progress
+// line from the second (download) invocation is passed to onLine, so a
+// streaming handler can mirror yt-dlp's own percentage/speed/ETA.
+func downloadWithYtDlp(url string, onLine func(string)) (string, string, error) {
 	outputTemplate := "%(title)s.%(ext)s"
 	// The default web client currently returns YouTube's "page needs to be
 	// reloaded" response in the target environment. Android remains the
@@ -138,7 +173,7 @@ func downloadWithYtDlp(url string) (string, string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), ytDlpResolveTimeout)
 	defer cancel()
-	printCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", url)
+	printCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", "--", url)
 	printCmd.Dir = tmpDir
 	nameOut, err := printCmd.CombinedOutput()
 	if err != nil {
@@ -152,14 +187,27 @@ func downloadWithYtDlp(url string) (string, string, error) {
 	}
 
 	// Keep the two-step flow so the final path is known before probing, but
-	// force the same single-video selection in both invocations.
+	// force the same single-video selection in both invocations. --newline
+	// makes yt-dlp print progress once per line (one line per tick instead of
+	// \r-updated), so a line-based parser sees live percentages.
 	ctx, cancel = context.WithTimeout(context.Background(), ytDlpDownloadTimeout)
 	defer cancel()
-	dlCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "--no-progress", "-o", outputTemplate, url)
+	dlCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "--newline", "--progress", "-o", outputTemplate, "--", url)
 	dlCmd.Dir = tmpDir
-	if out, err := dlCmd.CombinedOutput(); err != nil {
+
+	var tail strings.Builder
+	if onLine != nil {
+		// One line-writer per stream so a partial line in stdout can never
+		// be spliced with a mid-line stderr write; progress (stdout) and
+		// stage lines (stderr) share the tail for errors.
+		wout := &lineWriter{onLine: onLine, tail: &tail, max: 8 << 10}
+		werr := &lineWriter{onLine: onLine, tail: &tail, max: 8 << 10}
+		dlCmd.Stdout = wout
+		dlCmd.Stderr = werr
+	}
+	if err := dlCmd.Run(); err != nil {
 		os.RemoveAll(tmpDir)
-		return "", "", fmt.Errorf("%w: %s", err, out)
+		return "", "", fmt.Errorf("%w: %s", err, strings.TrimSpace(tail.String()))
 	}
 	if _, err := os.Stat(filepath.Join(tmpDir, filename)); err != nil {
 		os.RemoveAll(tmpDir)
@@ -169,10 +217,110 @@ func downloadWithYtDlp(url string) (string, string, error) {
 	return tmpDir, filename, nil
 }
 
-func fileSize(path string) (int64, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0, err
+// lineWriter is exec-friendly stdout/stderr plumbing: complete lines are
+// handed to onLine (buffering partial writes); a bounded tail keeps the last
+// output for error text.
+type lineWriter struct {
+	mu     sync.Mutex
+	buf    string
+	onLine func(string)
+	tail   *strings.Builder
+	max    int
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	s := string(p)
+	if w.tail != nil {
+		w.tail.WriteString(s)
+		if w.tail.Len() > w.max {
+			t := w.tail.String()
+			w.tail.Reset()
+			w.tail.WriteString("…" + t[len(t)-w.max:])
+		}
 	}
-	return info.Size(), nil
+	w.mu.Lock()
+	w.buf += s
+	var lines []string
+	for {
+		i := strings.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		lines = append(lines, strings.TrimSpace(w.buf[:i]))
+		w.buf = w.buf[i+1:]
+	}
+	w.mu.Unlock()
+	if w.onLine != nil {
+		for _, l := range lines {
+			if l != "" {
+				w.onLine(l)
+			}
+		}
+	}
+	return len(p), nil
+}
+
+// handleYoutubeRename renames a just-downloaded media file: on-disk rename
+// plus pool/cuesheet reconciliation, returning the refreshed media pool
+// partial. The extension is preserved when the operator types a bare name.
+func handleYoutubeRename(c *gin.Context) {
+	old := strings.TrimSpace(c.PostForm("old"))
+	name := strings.TrimSpace(c.PostForm("name"))
+	if old == "" || name == "" {
+		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "original and new names are required"})
+		return
+	}
+	base := filepath.Base(name)
+	if base == "." || base == "" {
+		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "invalid filename"})
+		return
+	}
+	if base == old {
+		oldPath := filepath.Join(config.MediaLocation(), old)
+		if _, err := os.Stat(oldPath); err != nil {
+			c.HTML(http.StatusNotFound, "error.html", gin.H{"error": "source file not found on disk"})
+			return
+		}
+		// No-op: no rename to make, just refresh the pool.
+		mediapool, err := mediapoolView()
+		if err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		c.HTML(http.StatusOK, "mediapool.html", gin.H{"Mediapool": mediapool})
+		return
+	}
+	if filepath.Ext(old) != "" && !strings.Contains(base, ".") {
+		base += filepath.Ext(old)
+	}
+	mediaDir := config.MediaLocation()
+	oldPath := filepath.Join(mediaDir, base)
+	oldFile := filepath.Join(mediaDir, filepath.Base(old))
+	if _, err := os.Stat(oldFile); err != nil {
+		c.HTML(http.StatusNotFound, "error.html", gin.H{"error": "source file not found on disk"})
+		return
+	}
+	if _, err := os.Stat(oldPath); err == nil {
+		c.HTML(http.StatusConflict, "error.html", gin.H{"error": fmt.Sprintf("a file named %q already exists", base)})
+		return
+	}
+	if err := os.Rename(oldFile, oldPath); err != nil {
+		logs.PrintfWarn(logs.YDLRename, "old=%q new=%q error=%v", old, base, err)
+		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": "could not rename file on disk: " + err.Error()})
+		return
+	}
+	if err := ctp.RenameMedia(filepath.Base(old), base); err != nil {
+		// Roll the file back so DB and disk stay consistent.
+		_ = os.Rename(oldPath, oldFile)
+		logs.PrintfWarn(logs.YDLRename, "old=%q new=%q revert=%t error=%v", old, base, true, err)
+		c.HTML(http.StatusConflict, "error.html", gin.H{"error": err.Error()})
+		return
+	}
+	logs.Printf(logs.YDLRename, "old=%q new=%q done", old, base)
+	mediapool, err := mediapoolView()
+	if err != nil {
+		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+		return
+	}
+	c.HTML(http.StatusOK, "mediapool.html", gin.H{"Mediapool": mediapool})
 }

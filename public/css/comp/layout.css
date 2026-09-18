@@ -33,21 +33,152 @@ body.upload-body {
   flex-direction: column;
 }
 
+/* Full-bleed console: Bootstrap's .container-fluid 12px gutters read as a
+   weird floating inset around the panes (the resizer gap and pane hairlines
+   already do the separating). Panes butt to the viewport edge; the media
+   pool carries its own interior padding instead. Two classes to out-rank
+   Bootstrap's own .container-fluid rule. */
+.app-content.container-fluid {
+  padding: 0;
+}
+
 .navbar .container-fluid {
   flex-wrap: wrap;
   gap: 0.5rem;
 }
 
 .navbar #mediainfo {
+  flex: 1 1 34rem;
   min-width: 0;
-  flex: 1 1 10rem;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+/* GO cluster: what fires + what follows, always visible. */
+.header-status .go-cluster {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0;
+}
+/* The GO button spans the mediapool pane's width so its right edge — and
+   the go-now text that starts flush against it — lines up with the pane
+   splitter below (same --mediapool-width var the resizer writes). The 7rem
+   compensates the fixed left navbar content (status dot, clock, gaps). */
+#go-btn {
+  width: max(9rem, calc(var(--mediapool-width, 320px) - 7rem));
+  justify-content: center;
+  flex: none;
+}
+/* What GO fires: bordered box so a cue colour can frame it (inline
+   border-color when the selected cue/group has one). */
+.go-now {
+  border: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  border-radius: var(--ctp-radius, 0.2rem);
+  padding: 0.15rem 0.5rem;
+}
+/* A scheduled cue fires within the minute: pulse the GO button. */
+@keyframes go-imminent {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--ctp-danger, #ff5f87) 60%, transparent),
+      0 0 22px 6px color-mix(in srgb, var(--ctp-danger, #ff5f87) 80%, transparent);
+  }
+}
+#go-btn.go-imminent {
+  animation: go-imminent 1s ease-in-out infinite;
+  border-color: var(--ctp-danger, #ff5f87);
+}
+
+/* Remaining time indicator: slow pulse (≥30s), fast pulse (≤10s), never fully faded. */
+@keyframes rem-pulse-slow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+@keyframes rem-pulse-fast {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+#now-remaining {
+  opacity: 1;
+  transition: color 0.3s ease, opacity 0.3s ease;
+}
+#now-remaining.remaining-slow {
+  color: #ffd93d; /* amber */
+  animation: rem-pulse-slow 2s ease-in-out infinite;
+}
+#now-remaining.remaining-fast {
+  color: #ff6b6b; /* red */
+  animation: rem-pulse-fast 1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  #now-remaining.remaining-slow,
+  #now-remaining.remaining-fast {
+    animation: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #go-btn.go-imminent { animation: none; }
+}
+.header-status .go-now {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.header-status .go-now .go-title,
+.header-status .go-next {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.header-status .go-next {
+  max-width: 16rem;
+}
+/* Now Playing cluster: identity + scrubber + pause. */
+.header-status .now-cluster {
+  flex: 0 1 24rem;
+  min-width: 12rem;
+  text-align: left;
+}
+.header-status .now-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
 
 .navbar .container-fluid > .d-flex.gap-2 {
   flex-wrap: wrap;
+}
+
+/* WebSocket live-status dot in the topbar: cyan = socket up (push updates),
+   red = socket down (slow poller fallback in effect). Sized to 75% of the
+   adjacent topbar .btn height (1.5rem line + 0.75rem padding + 2px border). */
+.ws-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: calc((2.375rem + 2px) * 0.75);
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--bs-danger, #dc3545);
+  opacity: 0.9;
+}
+.ws-status.ws-status-on {
+  color: var(--ctp-accent, #2fd6ff);
+}
+
+/* Topbar wall clock: muted readout, tabular numerals with a fixed reserve
+   so the HH:MM:SS tick never reflows the neighbouring buttons. */
+.topbar-clock {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ctp-muted, #7ca6c3);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+  min-width: 5.5ch;
+  text-align: center;
+  align-self: center;
 }
 
 .app-content > .row {
@@ -73,21 +204,33 @@ body.upload-body {
 #mediapool-pane {
   flex: 0 0 var(--mediapool-width, 320px);
   min-width: 0;
-  border-right: 1px solid var(--bs-secondary-color, #6c757d);
+  border-right: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
   background-color: rgba(0, 0, 0, 0.15);
 }
 
-/* Draggable splitter between the two panes. */
+/* Interior padding lives on the pane content (the container is full-bleed
+   now), on the same 0.5rem spacing rhythm as the grid gap. */
+#mediapool {
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+
+/* Draggable splitter between the two panes: a centred hairline so the gap
+   reads as a divider, not dead space; hover/active floods it with the flare
+   accent (drag affordance). */
 #mediapool-resizer {
   flex: 0 0 6px;
   cursor: col-resize;
   touch-action: none;
-  background: transparent;
+  background: linear-gradient(90deg,
+    transparent calc(50% - 0.5px),
+    var(--ctp-hairline, var(--ctp-border, #176095)) calc(50% - 0.5px),
+    var(--ctp-hairline, var(--ctp-border, #176095)) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px));
   transition: background-color 0.2s;
 }
 #mediapool-resizer:hover,
 #mediapool-resizer:active {
-  background-color: var(--bs-purple, #a855f7);
+  background: var(--ctp-flare, #d85cff);
 }
 
 /* Collapse button hugs the RIGHT edge of the media pool pane (on the
@@ -182,15 +325,389 @@ body.mediapool-collapsed #mediapool-expand-btn:hover i {
 
 /* OS file drag-and-drop landing on the media pool pane. */
 .app-pane.dnd-dragover {
-  outline: 3px dashed var(--bs-purple, #a855f7);
+  outline: 3px dashed var(--ctp-flare, #d85cff);
   outline-offset: -3px;
   background-color: rgba(168, 85, 247, 0.08);
 }
 
 /* Drop-position indicator line shown while dragging a media pool item
-   over the cuesheet. */
+   over the cuesheet. A line parked against a group header means a top-level
+   "between" drop and renders in the accent; in-group lines keep the flare. */
 tr.cue-drop-indicator td {
   height: 0;
   padding: 0;
-  border-top: 3px solid var(--bs-purple, #a855f7);
+  border-top: 3px solid var(--ctp-flare, #d85cff);
+}
+tr.cue-drop-indicator.cue-drop-top td {
+  border-top-color: var(--ctp-accent, #2fd6ff);
+}
+/* In-group drop line: indented to the member-name level (§5.4). The line
+   carries the target group's depth inline, so where the cue will land is
+   unmistakable during the drag. */
+tr.cue-drop-indicator.cue-drop-in td {
+  padding-left: calc(1.5rem + (var(--drop-depth, 1) - 1) * 1.1rem);
+}
+
+/* --- Cue Inspector: docked bottom panel (mirrors the mediapool pane) ---- */
+/* (.app-content flex column is defined once, near the top of this file.) */
+
+/* The bottom panel has a user-resizable height (grab-bar on its top edge);
+   collapsed it disappears entirely and a floating expand button appears at
+   the bottom-right edge, like the mediapool's left-edge one. */
+#cueinspector-panel {
+  flex: 0 0 var(--cueinspector-height, 320px);
+  min-height: 0;
+  border-top: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  /* The one glow moment: a soft cyan edge-light on the inspector, marking
+     it as the live console strip. */
+  box-shadow: 0 -6px 14px -10px color-mix(in srgb, var(--ctp-accent, #2fd6ff) 55%, transparent);
+  background-color: color-mix(in srgb, var(--ctp-bg, #212529) 40%, var(--bs-body-bg, #212529));
+  display: flex;
+  flex-direction: column;
+}
+.inspector-header {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--bs-secondary-color, #6c757d);
+}
+.inspector-collapse {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* The inspector tab content is laid out to always fit the panel, so no
+     scrollbar is ever shown - a scrollbar would indicate overflow that the
+     panes are designed to absorb instead (compact rows, media info split). */
+  overflow: hidden;
+}
+.cueinspector-body {
+  min-height: 100%;
+}
+.inspector-tabs .nav-link {
+  padding: 0.15rem 0.8rem;
+  font-size: 0.85rem;
+}
+.inspector-tabpane {
+  display: none;
+}
+.inspector-tabpanes[data-active-tab="time"] .inspector-tabpane[data-tabpane="time"],
+.inspector-tabpanes[data-active-tab="video"] .inspector-tabpane[data-tabpane="video"],
+.inspector-tabpanes[data-active-tab="audio"] .inspector-tabpane[data-tabpane="audio"],
+.inspector-tabpanes[data-active-tab="auto"] .inspector-tabpane[data-tabpane="auto"],
+.inspector-tabpanes[data-active-tab="media"] .inspector-tabpane[data-tabpane="media"],
+.inspector-tabpanes[data-active-tab="advanced"] .inspector-tabpane[data-tabpane="advanced"] {
+  display: block;
+}
+body.inspector-groupview .inspector-tabpane[data-tabpane="trim"],
+body.inspector-groupview .inspector-tabpane[data-tabpane="audio"] {
+  display: none;
+}
+body.inspector-groupview .inspector-tabs {
+  pointer-events: none;
+  opacity: 0.35;
+}
+body.ctp-no-audio-tab [data-inspector-tab="audio"] {
+  display: none;
+}
+.inspector-identity {
+  border-bottom: 1px solid var(--bs-border-color, #444);
+  padding-bottom: 0.3rem;
+}
+.inspector-identity-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+.inspector-tabform {
+  padding: 0 0.75rem 0.75rem;
+}
+
+/* Time tab: number fields stack in one narrow column to the left of the
+   waveform timeline. Labels are half the old .form-label.small (0.875em). */
+.insp-time-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.9rem;
+}
+.insp-time-fields {
+  flex: 0 0 11rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-height: 0;
+}
+.insp-time-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+.insp-field-label {
+  font-size: 0.8em;
+  line-height: 1.05;
+  color: var(--ctp-muted, #adb5bd);
+  white-space: nowrap;
+  margin-bottom: 0;
+}
+.insp-time-field .form-control-sm,
+.insp-time-field .form-select-sm {
+  height: 1.45rem;
+  padding: 0.01rem 0.3rem;
+  font-size: 0.78rem;
+}
+#insp-fadeaction,
+#insp-fadeout {
+  height: 1.45rem;
+  min-height: 1.45rem;
+}
+.insp-time-right {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.insp-time-buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.insp-time-buttons .btn-sm {
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+.insp-time-checks {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.1rem;
+  margin-top: 0.25rem;
+}
+.insp-time-right .insp-time-checks {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+.insp-time-checks .form-check-input {
+  margin-top: 0;
+}
+.insp-time-checks .form-control-sm,
+.insp-time-checks .form-select-sm {
+  height: 1.45rem;
+  padding: 0.01rem 0.3rem;
+  font-size: 0.78rem;
+}
+.insp-time-options { display: flex; align-items: flex-start; gap: 1.5rem; }
+.insp-rate { display: flex; flex-direction: column; gap: 0.2rem; max-width: 12rem; margin-top: 0.25rem; }
+.insp-rate .btn { align-self: flex-start; padding: 0 0.5rem; }
+.insp-fadein { max-width: 11rem; }
+.insp-audio-wrap { display: flex; gap: 3rem; align-items: flex-start; justify-content: flex-start; padding-top: 0.75rem; }
+.insp-audio-settings { display: flex; flex-direction: column; gap: 0.45rem; }
+.insp-audio-settings input[type="range"] { min-width: 0; }
+.insp-rate input, .insp-audio-settings input { accent-color: var(--ctp-accent); }
+
+.inspector-tabpanes[data-active-tab="audio"] .inspector-tabpane[data-tabpane="audio"] {
+  display: block;
+}
+
+/* Silent save indicator: a small square that pulses on every commit. */
+.inspector-save-flash {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 0.15rem;
+  background: var(--bs-success, #198754);
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+  flex: 0 0 auto;
+}
+.inspector-save-flash.saved {
+  opacity: 1;
+}
+
+/* Resizer strip along the panel's top edge. */
+#cueinspector-resizer {
+  height: 0.35rem;
+  cursor: ns-resize;
+  background: linear-gradient(to bottom, transparent, var(--bs-secondary-color, #6c757d));
+  flex: 0 0 auto;
+}
+
+/* Collapsed: fully hidden, only the floating expand button at the edge. */
+body.cueinspector-collapsed #cueinspector-panel {
+  flex-basis: 0;
+  overflow: hidden;
+}
+body.cueinspector-collapsed #cueinspector-resizer {
+  display: none;
+}
+#cueinspector-expand-btn {
+  display: none;
+}
+body.cueinspector-collapsed #cueinspector-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: fixed;
+  bottom: 4px;
+  right: 4px;
+  z-index: 10;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border-width: 2px;
+  border-color: var(--bs-success, #198754);
+  background-color: var(--bs-body-bg, #212529);
+}
+body.cueinspector-collapsed #cueinspector-expand-btn i {
+  font-size: 1.1rem;
+  color: var(--bs-success, #198754);
+  font-weight: 700;
+}
+/* The CuTePi logo doubles as the inspector's open/close icon. */
+.inspector-logo {
+  height: 1rem;
+  width: auto;
+  display: inline-block;
+  vertical-align: -0.125rem;
+}
+.inspector-header h6 .inspector-logo {
+  margin-right: 0.4rem;
+}
+body.cueinspector-collapsed #cueinspector-expand-btn:hover {
+  background-color: var(--bs-success, #198754);
+  border-color: var(--bs-success, #198754);
+}
+body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
+  color: #fff;
+}
+/* Trim timeline: the panel default (320px) fits header + identity + timeline
+   + two field rows exactly; no scrollbars. */
+.inspector-collapse .trim-timeline {
+  height: 6.75rem;
+}
+/* Media info: one aligned label:value column; `.media-cols-2` (toggled by JS
+   when the list would overflow the inspector) doubles it into two aligned
+   columns so the info uses horizontal space instead of forcing a scroll. */
+.media-info-grid {
+  display: grid;
+  grid-auto-flow: row;
+  /* Label columns fit their text (max-content) so labels never wrap below
+     the value; values take the leftover width and wrap within it. */
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.3rem 1.25rem;
+  align-items: baseline;
+}
+.media-info-grid.media-cols-2 {
+  /* Two aligned label:value pairs per row; auto-placement then pairs the
+     children sequentially, so no wrapper rows are needed. */
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+}
+.media-info-grid .media-info-label {
+  white-space: nowrap;
+}
+.media-info-grid .media-info-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+
+
+/* GO cluster separator: interpoint between cue number and cue name. */
+.go-sep {
+  color: var(--ctp-muted, #7ca6c3);
+  margin: 0 0.15rem;
+}
+
+/* --- Sticky footer: panel toggles, Tests, Settings, Edit/Show mode ------ */
+#app-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  background-color: var(--ctp-surface, #07172a);
+  overflow-x: auto;
+}
+/* The panel buttons were floating overlays; in the footer they are plain
+   static buttons. Visibility still follows the body collapse classes. */
+#app-footer #mediapool-collapse-btn,
+#app-footer #mediapool-expand-btn,
+#app-footer #cueinspector-collapse-btn,
+#app-footer #cueinspector-expand-btn {
+  position: static;
+  transform: none;
+  width: auto;
+  height: auto;
+}
+#app-footer #mediapool-expand-btn,
+#app-footer #cueinspector-expand-btn {
+  display: none;
+}
+body.mediapool-collapsed #app-footer #mediapool-expand-btn,
+body.cueinspector-collapsed #app-footer #cueinspector-expand-btn {
+  display: inline-flex;
+}
+body.mediapool-collapsed #app-footer #mediapool-collapse-btn,
+body.cueinspector-collapsed #app-footer #cueinspector-collapse-btn {
+  display: none;
+}
+/* Test output is a Show-mode affordance: dimmed but visible in Edit. */
+body:not(.show-mode) #showTestBtn {
+  opacity: 0.45;
+}
+/* The Cue Inspector is an Edit-mode tool: in Show mode the panel and its
+   resizer are hidden and the footer expand button is disabled, so there is
+   no way to open or edit cues mid-show. */
+body.show-mode #cueinspector-panel,
+body.show-mode #cueinspector-resizer {
+  display: none !important;
+}
+body.show-mode #app-footer #cueinspector-expand-btn {
+  opacity: 0.45;
+  pointer-events: none;
+}
+/* Edit/Show visual toggle: pill track with a sliding knob + mode label.
+   Token-driven so every theme re-skins it without extra rules. */
+.mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  background: transparent;
+  border: 1px solid var(--ctp-border, #176095);
+  border-radius: 999px;
+  padding: 0.2em 0.7em 0.2em 0.3em;
+  color: var(--ctp-muted, #7ca6c3);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  flex: none;
+}
+.mode-switch .mode-knob {
+  width: 2em;
+  height: 1.1em;
+  border-radius: 999px;
+  background: var(--ctp-surface-2, #0d2440);
+  border: 1px solid var(--ctp-border, #176095);
+  position: relative;
+  flex: none;
+}
+.mode-switch .mode-knob::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 0.8em;
+  height: 0.8em;
+  border-radius: 50%;
+  background: var(--ctp-muted, #7ca6c3);
+  transition: left 0.15s ease, background 0.15s ease;
+}
+.mode-switch[aria-checked="true"] {
+  color: var(--ctp-accent, #2fd6ff);
+  border-color: var(--ctp-accent, #2fd6ff);
+}
+.mode-switch[aria-checked="true"] .mode-knob::after {
+  left: calc(100% - 0.8em - 1px);
+  background: var(--ctp-accent, #2fd6ff);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mode-switch .mode-knob::after { transition: none; }
 }

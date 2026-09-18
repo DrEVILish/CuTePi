@@ -1,64 +1,167 @@
-.media_thumbnail{
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
+/* Media pool: one rule-set per element, no duplicated overlay logic.
+   Class names here are the tile contract consumed by dnd.js
+   ([data-media-filename]), ui.js (.media-tile) and the themes.
 
-.media_text{
-  opacity: 0;
-  transition: opacity 0.4s;
-  font-size: 0.7rem;
-  pointer-events: none;
-}
-
-.media_thumbnail:hover .media_text{
-  opacity: 1;
-}
-
-/* The whole 3-dot menu box sits in the tile's bottom-right corner, clear of
-   the caption overlay. The toggle icon stays centred in its own box. */
-.media_thumbnail > .dropdown {
-  right: 0.4rem !important;
-  bottom: 0.4rem !important;
-  margin: 0 !important;
-}
-
-.media_thumbnail > .dropdown > .dropdown-menu {
-  right: 0;
-  left: auto;
-}
-
-.media-menu-toggle {
-  width: 1.5rem;
-  height: 1.5rem;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.7rem;
-  line-height: 1;
-  border-radius: 0.35rem;
-}
-
-/* Fixed 2-column thumbnail gallery (per spec). Always exactly two columns
-   regardless of viewport width. The grid grows to fill the pane's remaining
-   height (below the header/filter); the pane owns scrolling so menus are not
-   clipped by an inner overflow container. */
+  Tile anatomy:
+    figure.media-tile
+      div.media-thumbnail   (16:9 image, drag source)
+        div.media-info      (hover overlay: name, type, size, added)
+        div.media-menu      (3-dot button, bottom-right)
+*/
 .media-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(var(--media-cols, 2), 1fr);
   gap: 1rem;
   align-content: start;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: visible;
   scrollbar-gutter: stable;
 }
 
-/* The pane owns scrolling so a dropdown can escape the grid's bounds. */
+.media-tile {
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+/* Tiles are focusable (Enter adds the cue); keep the ring on the thumbnail
+   so it hugs the visual edge, not the empty caption space below. */
+.media-tile:focus-visible {
+  outline: none;
+}
+.media-tile:focus-visible .media-thumbnail {
+  outline: 2px solid var(--ctp-accent, #2fd6ff);
+  outline-offset: 2px;
+}
+.media-thumbnail:hover {
+  border-color: color-mix(in srgb, var(--ctp-accent, #2fd6ff) 55%, var(--ctp-hairline, transparent));
+}
+
+.media-thumbnail {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--bs-border-radius, 0.375rem);
+  border: 1px solid var(--bs-secondary-color, #6c757d);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-color: color-mix(in srgb, var(--ctp-surface, #000) 60%, transparent);
+  cursor: grab;
+  overflow: hidden; /* the hover overlay must never spill outside the tile */
+}
+
+/* Hover popout (§5.3): when the tile is too small for the info overlay the
+   details render in this floating card instead — same content, correct
+   geometry. Positioned by ui.js on the overflowing hover. */
+.media-info-popout {
+  position: fixed;
+  z-index: 1080;
+  max-width: 17rem;
+  padding: 0.45rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--ctp-text, #dff4ff);
+  background: color-mix(in srgb, var(--ctp-surface-2, #0d2440) 92%, transparent);
+  border: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  border-radius: var(--ctp-radius, 0.2rem);
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+/* Suppress the in-tile overlay while the popout is showing. */
+.media-thumbnail.media-popout-active .media-info {
+  opacity: 0 !important;
+}
+
+/* Detailed info panel shown on hover: gradient backdrop + rows. */
+.media-info {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.5rem 2.6rem 0.4rem 0.5rem; /* right padding clears the 3-dot */
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0) 85%);
+  color: var(--bs-body-color, #fff);
+  font-size: 0.68rem;
+  line-height: 1.4;
+  border-radius: 0 0 var(--bs-border-radius, 0.375rem) var(--bs-border-radius, 0.375rem);
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+  min-width: 0;
+}
+.media-thumbnail:hover .media-info {
+  opacity: 1;
+}
+.media-info-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.media-info-row {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+.media-info-row i {
+  margin-right: 0.2rem;
+}
+
+.media-missing {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.35rem;
+  font-size: 1.05rem;
+}
+
+#media-context-menu button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+#media-context-menu button:hover,
+#media-context-menu button:focus-visible { background: rgba(216, 92, 255, 0.15); }
+#media-context-menu .cue-context-danger { color: var(--bs-danger, #f87171); }
+
+/* The 3-dot toggle anchored to the thumbnail's bottom-right corner. */
+.media-menu-toggle {
+  position: absolute;
+  right: 0.4rem;
+  bottom: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  font-size: 0.7rem;
+  line-height: 1;
+  border-radius: 0.35rem;
+  color: var(--bs-body-color, #fff);
+  background-color: color-mix(in srgb, var(--ctp-bg, #000) 55%, transparent);
+  border: 1px solid var(--bs-secondary-color, #6c757d);
+}
+
+
+/* The pane owns scrolling so a dropdown can escape the grid's bounds. No
+   horizontal scrolling ever: captions and menus stay inside the pane width. */
 #mediapool-pane {
   overflow-y: scroll;
-  overflow-x: visible;
+  overflow-x: hidden;
   scrollbar-gutter: stable;
 }
 
@@ -70,4 +173,21 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+}
+
+/* Generic hover popout (connection info etc.) — same card look as the media
+   info popout. */
+.hover-popout {
+  position: fixed;
+  z-index: 1080;
+  min-width: 14rem;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ctp-text, #dff4ff);
+  background: color-mix(in srgb, var(--ctp-surface-2, #0d2440) 92%, transparent);
+  border: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  border-radius: var(--ctp-radius, 0.2rem);
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
 }

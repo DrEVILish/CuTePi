@@ -13,7 +13,7 @@ WorkingDirectory=/opt/cutepi
 # back to living under WORKING_DIR, so setting this one var relocates them all.
 Environment=WORKING_DIR=/opt/cutepi/data
 # Listen on all interfaces so the control UI is reachable over the network.
-Environment=PORT=3001
+Environment=PORT=3000
 # So the UI's Restart button runs `systemctl restart cutepi` under this unit.
 Environment=CUTEPI_SERVICE=cutepi
 

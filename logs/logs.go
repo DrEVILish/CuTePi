@@ -74,10 +74,10 @@ const bufferSize = 1000
 const auditCapacity = 10000
 
 var (
-	mu     sync.Mutex
-	level  = LevelInfo
-	buf    = make([]Entry, 0, bufferSize)
-	audit  []AuditEvent // full structured audit trail for exports
+	mu    sync.Mutex
+	level = LevelInfo
+	buf   = make([]Entry, 0, bufferSize)
+	audit []AuditEvent // full structured audit trail for exports
 )
 
 // CurrentLevel returns the current recording level.
@@ -203,6 +203,7 @@ const (
 	YDLRegister = "YDL-E440" // mediapool registration
 	YDLRender   = "YDL-E450" // mediapool response rendering
 	YDLFailed   = "YDL-E490" // YouTube import failure
+	YDLRename   = "YDL-E460" // YouTube download rename (post-import)
 )
 
 // RTE - HTTP route actions (routes/api.go).

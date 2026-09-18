@@ -50,18 +50,9 @@ func setupTestServer(t *testing.T) *gin.Engine {
 	r := gin.New()
 	r.Use(AuthMiddleware()) // mirrors main.go; no-op unless a password is set
 	r.Use(LimitBody())      // mirrors main.go
-	extendedFuncs := map[string]any{
-		"contains":    strings.Contains,
-		"hasPrefix":   strings.HasPrefix,
-		"hasSuffix":   strings.HasSuffix,
-		"formatTime":  ctp.FormatTime,
-		"urlPath":     url.PathEscape,
-		"typeIcon":    TypeIcon,
-		"displayTime": DisplayTime,
-		"progressPct": ProgressPct,
-		"div":         func(a, b int) int { return a / b },
-	}
-	r.SetHTMLTemplate(template.Must(template.New("").Funcs(extendedFuncs).ParseGlob("../templates/*")))
+	// Same function map as the server (TemplateFuncs) — the two must never
+	// drift apart or templates parse in one and panic in the other.
+	r.SetHTMLTemplate(template.Must(template.New("").Funcs(TemplateFuncs()).ParseGlob("../templates/*")))
 
 	Index(r.Group("/"))
 	Api(r.Group("/api"))
@@ -120,6 +111,15 @@ func del(t *testing.T, r *gin.Engine, path string) *httptest.ResponseRecorder {
 	return w
 }
 
+func postJSON(t *testing.T, r *gin.Engine, path string, payload string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", path, bytes.NewReader([]byte(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	return w
+}
+
 // Regression test for the bug found during live manual testing:
 // cuesheet.html did `{{ range .Cuesheet }}` instead of
 // `{{ range .Cuesheet.Cues }}`, which made html/template raise "range
@@ -147,11 +147,12 @@ func TestYoutubeModalHasWorkingSubmitAndFeedback(t *testing.T) {
 	body := get(t, r, "/").Body.String()
 	for _, want := range []string{
 		`id="youtube-dl"`,
-		`hx-post="/youtube"`,
 		`name="url"`,
 		`required`,
 		`type="submit"`,
-		`id="info"`,
+		`id="ytdl-status"`,
+		`id="ytdl-progress"`,
+		`id="ytdl-rename"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected YouTube modal to contain %q, got:\n%s", want, body)
@@ -170,6 +171,36 @@ func TestYoutubeRejectsMissingURL(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "no URL provided") {
 		t.Fatalf("expected missing URL error, got: %s", w.Body.String())
+	}
+}
+
+// Renaming a downloaded file: on-disk rename, pool/cuesheet reconciliation,
+// and a refreshed mediapool partial with the new name.
+func TestYoutubeRename(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("ytd-old.mp4", 42, media.Metadata{Mimetype: "video/mp4"}, "ytd-old"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(config.MediaLocation(), "ytd-old.mp4"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("writing source: %v", err)
+	}
+	form := url.Values{"old": {"ytd-old.mp4"}, "name": {"renamed clip"}}
+	req := httptest.NewRequest(http.MethodPost, "/youtube/rename", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("rename = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// Extension preserved: "renamed clip" -> "renamed clip.mp4".
+	if !strings.Contains(w.Body.String(), `data-media-name="renamed clip.mp4"`) {
+		t.Fatalf("mediapool partial missing renamed file:\n%s", w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(config.MediaLocation(), "renamed clip.mp4")); err != nil {
+		t.Fatalf("file not renamed on disk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(config.MediaLocation(), "ytd-old.mp4")); err == nil {
+		t.Fatal("old file still present after rename")
 	}
 }
 
@@ -415,7 +446,7 @@ func TestGroupRoutesCreateAssignUpdateDelete(t *testing.T) {
 	}
 
 	// Turn on slideshow settings.
-	w = putForm(t, r, "/api/group/1", "name", "Route Group", "slideshow", "true", "shuffle", "true", "loop", "true", "fadeMs", "500", "durationMs", "3000")
+	w = putForm(t, r, "/api/group/1", "name", "Route Group", "slideshow", "true", "shuffle", "true", "loop", "true", "fadeSecs", "5", "durationSecs", "30")
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT /api/group/1 = %d: %s", w.Code, w.Body.String())
 	}
@@ -423,7 +454,8 @@ func TestGroupRoutesCreateAssignUpdateDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetGroup: %v", err)
 	}
-	if !g.Slideshow || !g.Shuffle || !g.Loop || g.FadeMS != 500 || g.DurationMS != 3000 {
+	// Seconds in, milliseconds out (the inspector form labels say "(s)").
+	if !g.Slideshow || !g.Shuffle || !g.Loop || g.FadeMS != 5000 || g.DurationMS != 30000 {
 		t.Fatalf("group settings not applied: %+v", g)
 	}
 
@@ -436,6 +468,7 @@ func TestGroupRoutesCreateAssignUpdateDelete(t *testing.T) {
 		t.Fatalf("collapsed group should hide members, got:\n%s", w.Body.String())
 	}
 
+
 	// Deleting the group releases the cue.
 	w = del(t, r, "/api/group/1")
 	if w.Code != http.StatusOK {
@@ -446,6 +479,181 @@ func TestGroupRoutesCreateAssignUpdateDelete(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `data-cue-pos="1"`) {
 		t.Fatalf("released cue should still render, got:\n%s", w.Body.String())
+	}
+}
+
+func TestGroupJoinFirstPutsCueFirst(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("joinfirst.mp4", 100, media.Metadata{
+		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
+	}, "joinfirst.mp4"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := ctp.AddCue("joinfirst.mp4", ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	if w := postForm(t, r, "/api/group/add", "name", "Join Group", "parentGroupID", "0"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/group/add = %d: %s", w.Code, w.Body.String())
+	}
+	// Two members join normally (end of group).
+	if w := postForm(t, r, "/api/cue/1/group", "groupId", "1"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/1/group = %d: %s", w.Code, w.Body.String())
+	}
+	if w := postForm(t, r, "/api/cue/2/group", "groupId", "1"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/2/group = %d: %s", w.Code, w.Body.String())
+	}
+	// Expanded-header drop (§5.4): first=1 makes cue 3 the FIRST member.
+	if w := postForm(t, r, "/api/cue/3/group", "groupId", "1", "first", "1"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/3/group first=1 = %d: %s", w.Code, w.Body.String())
+	}
+	members, err := ctp.GroupCuePositions(1)
+	if err != nil {
+		t.Fatalf("GroupCuePositions: %v", err)
+	}
+	if len(members) != 3 || members[0] != 3 {
+		t.Fatalf("join-first should lead the group, got members %v", members)
+	}
+}
+
+func TestGroupJoinLastKeepsOrder(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("joinlast.mp4", 100, media.Metadata{
+		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
+	}, "joinlast.mp4"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := ctp.AddCue("joinlast.mp4", ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	if w := postForm(t, r, "/api/group/add", "name", "Join Group", "parentGroupID", "0"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/group/add = %d: %s", w.Code, w.Body.String())
+	}
+	// Default join (collapsed highlight, §5.4) appends to the group's end.
+	if w := postForm(t, r, "/api/cue/1/group", "groupId", "1"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/1/group = %d: %s", w.Code, w.Body.String())
+	}
+	if w := postForm(t, r, "/api/cue/2/group", "groupId", "1"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/2/group = %d: %s", w.Code, w.Body.String())
+	}
+	members, err := ctp.GroupCuePositions(1)
+	if err != nil {
+		t.Fatalf("GroupCuePositions: %v", err)
+	}
+	if len(members) != 2 || members[0] != 1 || members[1] != 2 {
+		t.Fatalf("join-last should append in order, got members %v", members)
+	}
+}
+
+func TestGroupJoinFirstInvalidGroup(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("joinbad.mp4", 100, media.Metadata{
+		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
+	}, "joinbad.mp4"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if err := ctp.AddCue("joinbad.mp4", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	if w := postForm(t, r, "/api/cue/1/group", "groupId", "999", "first", "1"); w.Code == http.StatusOK {
+		t.Fatalf("join-first to a missing group should fail, got %d", w.Code)
+	}
+}
+
+func TestSheetDropJoinFirstBlock(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("dropfirst.mp4", 100, media.Metadata{
+		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
+	}, "dropfirst.mp4"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := ctp.AddCue("dropfirst.mp4", ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	if w := postForm(t, r, "/api/group/add", "name", "Drop Group", "parentGroupID", "0"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/group/add = %d: %s", w.Code, w.Body.String())
+	}
+	if w := postForm(t, r, "/api/cue/1/group", "groupId", "1"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/1/group = %d: %s", w.Code, w.Body.String())
+	}
+	// /sheet/drop joinFirst moves a block to the head of the group.
+	w := postJSON(t, r, "/api/sheet/drop", `{"cues":[2,3],"beforeKind":"group","beforeId":1,"join":true,"joinFirst":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/sheet/drop joinFirst = %d: %s", w.Code, w.Body.String())
+	}
+	members, err := ctp.GroupCuePositions(1)
+	if err != nil {
+		t.Fatalf("GroupCuePositions: %v", err)
+	}
+	if len(members) != 3 || members[0] != 2 || members[1] != 3 || members[2] != 1 {
+		t.Fatalf("joinFirst block should lead the group in order, got %v", members)
+	}
+}
+
+func TestBulkEditColorGroupDelete(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("bulkops.mp4", 100, media.Metadata{
+		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
+	}, "bulkops.mp4"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := ctp.AddCue("bulkops.mp4", ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	// Bulk colour applies to every position in one call.
+	w := postJSON(t, r, "/api/cue/bulk", `{"op":"color","value":"#ff0000","positions":[1,2]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/bulk color = %d: %s", w.Code, w.Body.String())
+	}
+	for _, pos := range []int{1, 2} {
+		cue, err := ctp.GetCue(strconv.Itoa(pos))
+		if err != nil {
+			t.Fatalf("GetCue %d: %v", pos, err)
+		}
+		if cue.Color != "#ff0000" {
+			t.Fatalf("cue %d color = %q, want #ff0000", pos, cue.Color)
+		}
+	}
+	// Bulk group assigns the whole selection (the context menu's Apply group
+	// sends the picked group id as value).
+	if w := postForm(t, r, "/api/group/add", "name", "Bulk Group", "parentGroupID", "0"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/group/add = %d: %s", w.Code, w.Body.String())
+	}
+	w = postJSON(t, r, "/api/cue/bulk", `{"op":"group","value":"1","positions":[1,2]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/bulk group = %d: %s", w.Code, w.Body.String())
+	}
+	members, err := ctp.GroupCuePositions(1)
+	if err != nil {
+		t.Fatalf("GroupCuePositions: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("bulk group should assign 2 members, got %v", members)
+	}
+	// Bulk group with an empty value (no target picked) must fail, not
+	// silently assign group 0.
+	w = postJSON(t, r, "/api/cue/bulk", `{"op":"group","value":"","positions":[1,2]}`)
+	if w.Code == http.StatusOK {
+		t.Fatalf("bulk group with empty value should fail, got %d", w.Code)
+	}
+	// Bulk delete removes the cues and the sheet re-renders.
+	w = postJSON(t, r, "/api/cue/bulk", `{"op":"delete","value":"","positions":[1,2]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/cue/bulk delete = %d: %s", w.Code, w.Body.String())
+	}
+	sheet, err := ctp.GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	if len(sheet.Cues) != 1 {
+		t.Fatalf("after bulk delete: %d cues, want 1", len(sheet.Cues))
 	}
 }
 
@@ -490,11 +698,14 @@ func TestMediapoolClickDoesNotTriggerRefresh(t *testing.T) {
 	if strings.Contains(body, `hx-get="/mediapool"`) {
 		t.Fatalf("mediapool must not refresh on every click, got:\n%s", body)
 	}
-	if !strings.Contains(body, `data-bs-toggle="dropdown"`) {
-		t.Fatalf("expected the three-dot dropdown markup, got:\n%s", body)
+	if !strings.Contains(body, `data-media-menu="dropdown-route.mp4"`) {
+		t.Fatalf("expected the three-dot menu button, got:\n%s", body)
 	}
-	if !strings.Contains(body, `data-bs-boundary="viewport"`) || !strings.Contains(body, `class="dropdown-menu dropdown-menu-end"`) {
-		t.Fatalf("expected the media dropdown to stay within the viewport, got:\n%s", body)
+	// The menu button is a custom context menu toggle (not a Bootstrap
+	// dropdown), so it carries data-media-menu and the media-menu-toggle
+	// class.
+	if !strings.Contains(body, `class="media-menu-toggle"`) {
+		t.Fatalf("expected the media-menu-toggle button, got:\n%s", body)
 	}
 }
 
@@ -507,9 +718,8 @@ func TestMediapoolEscapesMediaActionPaths(t *testing.T) {
 		t.Fatalf("RegisterMedia: %v", err)
 	}
 	body := get(t, r, "/mediapool").Body.String()
-	escaped := url.PathEscape(filename)
-	if !strings.Contains(body, `hx-post="/api/play/`+escaped+`"`) || !strings.Contains(body, `hx-post="/api/cue/add/`+escaped+`"`) {
-		t.Fatalf("expected media action paths to escape %q as %q, got:\n%s", filename, escaped, body)
+	if !strings.Contains(body, `data-media-menu="`+filename+`"`) || !strings.Contains(body, `data-media-name="`+filename+`"`) {
+		t.Fatalf("expected media filenames for client-side URL encoding, got:\n%s", body)
 	}
 }
 
@@ -564,8 +774,8 @@ func TestCuesheetRendersColumnResizeMarkers(t *testing.T) {
 		t.Fatalf("expected a media-type icon cell, got:\n%s", body)
 	}
 	// Cue No column: content-fixed, only the header title width.
-	if !strings.Contains(body, `class="col-cue-num" title="Cue number">Cue No<`) {
-		t.Fatalf("expected the content-fixed Cue No header, got:\n%s", body)
+	if !strings.Contains(body, `class="col-cue-num" title="Cue number">Number<`) {
+		t.Fatalf("expected the content-fixed Number header, got:\n%s", body)
 	}
 	if strings.Contains(body, `data-column-resize="position"`) || strings.Contains(body, ">Position<") {
 		t.Fatalf("position row-order column should not be displayed, got:\n%s", body)
@@ -578,6 +788,17 @@ func TestCuesheetRendersColumnResizeMarkers(t *testing.T) {
 	for _, want := range []string{`hx-trigger="dblclick"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected cuesheet edit markup %q to still render, got:\n%s", want, body)
+		}
+	}
+	// Inline-edit cells must resolve their own swap target (the cell), not
+	// inherit the row's #cuesheet target - otherwise the editor form would
+	// replace the whole sheet. The row's select trigger is delayed and
+	// cancellable (justEdited) so a single-click selection still works but
+	// can't re-render the sheet out from under the editor opened by the
+	// double-click that just happened.
+	for _, want := range []string{`class="cue-inline-edit" hx-target="this" hx-trigger="dblclick"`, `click delay:250ms[!justEdited()]`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected inline-edit markup %q to render, got:\n%s", want, body)
 		}
 	}
 	for _, gone := range []string{`cue-loop-toggle`, `data-cue-delete="`, `hx-post="/api/cue/1/move/up"`, `hx-post="/api/cue/1/play"`} {
@@ -709,12 +930,13 @@ func TestHtmxCompatFlagsRemoved(t *testing.T) {
 		t.Fatalf("expected the htmx-config compat meta to be removed, got:\n%s", body)
 	}
 	// The non-selected cue row explicitly targets the #cuesheet swap target
-	// (htmx v4 attribute; the old Alpine `hx-target:inherited` is gone).
+	// (htmx v4 attribute), and its inversion cells inherit that target via the
+	// v4 `hx-target:inherited` colon-modifier (the v2 config-flag hack is gone).
 	if !strings.Contains(body, `hx-target="#cuesheet"`) {
 		t.Fatalf("expected the cue row to carry hx-target='#cuesheet', got:\n%s", body)
 	}
-	if strings.Contains(body, `hx-target:inherited="#cuesheet"`) {
-		t.Fatalf("expected the invalid hx-target:inherited to be removed, got:\n%s", body)
+	if !strings.Contains(body, `hx-target:inherited="#cuesheet"`) {
+		t.Fatalf("expected the cue row to carry hx-target:inherited='#cuesheet', got:\n%s", body)
 	}
 }
 
@@ -866,10 +1088,9 @@ func TestIndexRendersTestModal(t *testing.T) {
 	body := get(t, r, "/").Body.String()
 	for _, want := range []string{
 		`id="testModal"`,
-		`Test is loaded`,
+		`test-pattern-grid`,
 		`hx-post="/api/stop"`,
 		`Hide Test`,
-		`data-test-open`,
 		`id="showTestBtn"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -1155,8 +1376,7 @@ func TestSelectCuePersistsAndRenders(t *testing.T) {
 	if got, _ := ctp.SelectedCuePos(); got != pos {
 		t.Fatalf("SelectedCuePos = %d, want %d (selection not persisted)", got, pos)
 	}
-	if !strings.Contains(w.Body.String(), `class="selected"`) &&
-		!strings.Contains(w.Body.String(), "selected") {
+	if !strings.Contains(w.Body.String(), "table-warning") {
 		t.Fatalf("expected the selected cue to render as selected in the cuesheet")
 	}
 }
@@ -1175,6 +1395,10 @@ func TestNowPlayingWidgetControlsMarkup(t *testing.T) {
 		}
 	}
 	// Controls appear once something is loaded.
+	if err := os.WriteFile(filepath.Join(config.MediaLocation(), "control-tone.wav"), buildTinyWav(10), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer gsp.Panic()
 	mediaProbe := media.Metadata{Mimetype: "audio/wav", Duration: 10, Kind: media.KindAudio, Codec: "pcm_s16le"}
 	if err := ctp.RegisterMedia("control-tone.wav", 40000, mediaProbe, "Control Tone"); err != nil {
 		t.Fatalf("RegisterMedia: %v", err)
@@ -1264,7 +1488,7 @@ func TestNowPlayingHTMLRenders(t *testing.T) {
 	if !strings.Contains(body, `id="mediainfo"`) {
 		t.Fatalf("expected the rendered mediainfo widget, got:\n%s", body)
 	}
-	if !strings.Contains(body, "Now Playing") {
+	if !strings.Contains(body, "header-status") {
 		t.Fatalf("expected the Now Playing widget markup, got:\n%s", body)
 	}
 }
@@ -1290,15 +1514,17 @@ func TestNowPlayingStatus(t *testing.T) {
 			t.Fatalf("expected the status response to contain %q, got: %s", key, w.Body.String())
 		}
 	}
-	version := uint64(body["version"].(float64))
+	version := body["version"].(string)
 
 	// A client that last saw exactly the current version has nothing to
-	// re-render; one that last saw version+1 does.
+	// re-render; one that last saw a different version does. The version is
+	// a string pair ("<gsp>.<cuesheet>") — selection changes must mark the
+	// header partial stale too.
 	var ubody struct {
 		Changed bool   `json:"changed"`
-		Version uint64 `json:"version"`
+		Version string `json:"version"`
 	}
-	unchanged := get(t, r, "/api/nowplaying/status?version="+strconv.FormatUint(version, 10))
+	unchanged := get(t, r, "/api/nowplaying/status?version="+version)
 	if err := json.Unmarshal(unchanged.Body.Bytes(), &ubody); err != nil {
 		t.Fatalf("expected a JSON response, got: %s", unchanged.Body.String())
 	}
@@ -1308,9 +1534,9 @@ func TestNowPlayingStatus(t *testing.T) {
 
 	var sbody struct {
 		Changed bool   `json:"changed"`
-		Version uint64 `json:"version"`
+		Version string `json:"version"`
 	}
-	stale := get(t, r, "/api/nowplaying/status?version="+strconv.FormatUint(version+1, 10))
+	stale := get(t, r, "/api/nowplaying/status?version="+version+".1")
 	if err := json.Unmarshal(stale.Body.Bytes(), &sbody); err != nil {
 		t.Fatalf("expected a JSON response, got: %s", stale.Body.String())
 	}
@@ -1360,19 +1586,29 @@ func TestInspectorRendersForSelectedCue(t *testing.T) {
 		`name="fadeOut"`,
 		`id="insp-hold"`,
 		`name="volume"`,
+		`name="rate"`,
+		`name="balance"`,
+		`name="mute"`,
+		`data-tabpane="video"`,
+		`id="insp-video-fadein"`,
+		`id="insp-audio-fadein"`,
+		`data-volume-reset`,
+		`data-volume-step="-1"`,
+		`data-volume-step="1"`,
 		`Source: insp-sel.mp4`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected inspector markup %q, got:\n%s", want, body)
 		}
 	}
-	// The inspector colour control is a 12-swatch dropdown, not a colour picker.
+	// The inspector colour control is a 12-swatch chip picker, not a native
+	// colour picker.
 	if strings.Contains(body, `type="color"`) {
 		t.Fatalf("inspector must not use a colour picker input, got:\n%s", body)
 	}
-	// The fixed 12-named palette renders as <option>s.
-	if got := strings.Count(body, `<option`); got < 12 {
-		t.Fatalf("expected >= 12 palette options in the colour dropdown, got %d:\n%s", got, body)
+	// The fixed 12-named palette renders as swatch radios named "color".
+	if got := strings.Count(body, `name="color"`); got < 12 {
+		t.Fatalf("expected >= 12 colour swatch radios, got %d:\n%s", got, body)
 	}
 	// Volume is a vertical dB slider (range -60..12, 0 = 0dB), not a plain input.
 	if !strings.Contains(body, `name="volume" type="range" min="-60" max="12" step="1"`) {
@@ -1385,6 +1621,80 @@ func TestInspectorRendersForSelectedCue(t *testing.T) {
 		return
 	}
 	t.Fatalf("inspector rendered a template error:\n%s", body)
+}
+
+// An image cue has no audio stream: the inspector must not offer an Audio tab
+// pane or the "playback duration unknown" nag (a static image has no
+// duration), and should say so instead.
+func TestInspectorHidesAudioForImageCue(t *testing.T) {
+	r := setupTestServer(t)
+
+	if err := ctp.RegisterMedia("insp-img.png", 100, media.Metadata{
+		Mimetype: "image/png", Duration: 0, Resolution: "800x600",
+	}, "insp-img.png"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if err := ctp.AddCue("insp-img.png", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	if w := post(t, r, "/api/cue/1"); w.Code != 200 {
+		t.Fatalf("POST /api/cue/1 = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	body := get(t, r, "/api/cue/inspector").Body.String()
+	// Images get display timing + frame geometry (video pane) but no audio
+	// pane and no trim timeline.
+	for _, want := range []string{`data-no-audio-tab`, `data-tabpane="video"`, `name="cueDuration"`, `name="fit_mode"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected inspector markup %q, got:\n%s", want, body)
+		}
+	}
+	for _, forbid := range []string{`data-tabpane="audio"`, "no playback timing or trim", "Playback duration unknown"} {
+		if strings.Contains(body, forbid) {
+			t.Fatalf("unexpected inspector markup %q, got:\n%s", forbid, body)
+		}
+	}
+}
+
+// The Media tab re-probes and persists fresh audio info when a file was
+// imported before audio metadata was collected (stale media_meta) - the same
+// repair a ".webm has no audio info" report hits. A real file is written to
+// disk so media.Probe succeeds with real ffprobe.
+func TestInspectorSelfHealsStaleAudioMeta(t *testing.T) {
+	r := setupTestServer(t)
+	dir := config.MediaLocation()
+	wav := buildTinyWav(1)
+	if err := os.WriteFile(filepath.Join(dir, "self-heal.wav"), wav, 0o644); err != nil {
+		t.Fatalf("write wav: %v", err)
+	}
+	// Old import: base columns but no media_meta JSON (audio-info support
+	// arrived in a later build than this file's import).
+	if err := ctp.RegisterMedia("self-heal.wav", int64(len(wav)), media.Metadata{
+		Mimetype: "audio/wav", Duration: 1.0, Codec: "pcm_s16le", Kind: media.KindAudio,
+	}, "self-heal.wav"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if err := ctp.AddCue("self-heal.wav", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	if w := post(t, r, "/api/cue/1"); w.Code != 200 {
+		t.Fatalf("POST /api/cue/1 = %d, want 200", w.Code)
+	}
+	body := get(t, r, "/api/cue/inspector").Body.String()
+	if !strings.Contains(body, "pcm_s16le") {
+		t.Fatalf("Media tab did not self-heal audio info from the re-probe:\n%s", body)
+	}
+	// The repair must be persisted, not just painted once.
+	pool, err := ctp.GetMediapool()
+	if err != nil {
+		t.Fatalf("GetMediapool: %v", err)
+	}
+	for _, m := range pool.Medias {
+		if m.Filename == "self-heal.wav" && strings.Contains(m.MediaInfo, "pcm_s16le") {
+			return
+		}
+	}
+	t.Fatalf("media_meta was not persisted after the self-heal re-probe: %+v", pool.Medias)
 }
 
 // The per-cue playback columns (loop, colour, autofollow, fade) round-trip
@@ -1800,6 +2110,54 @@ func TestUploadFailurePreservesExistingMedia(t *testing.T) {
 	}
 }
 
+// TestMultiFileUploadKeepsImporting is the runnable check for the
+// best-effort multi-file upload: a failure in one file must not silently
+// drop the others. The corrupt file comes first to prove the loop keeps
+// going past it (the old code aborted the whole batch at the first error).
+func TestMultiFileUploadKeepsImporting(t *testing.T) {
+	r := setupTestServer(t)
+	dir := config.MediaLocation()
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("media", "bad.clip.mp4")
+	fw.Write([]byte("this is not a real video file"))
+	fw, _ = mw.CreateFormFile("media", "good.wav")
+	fw.Write(buildTinyWav(1))
+	mw.Close()
+
+	req := httptest.NewRequest("POST", "/upload/", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("partial-failure upload = %d, want 422: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "bad.clip.mp4") {
+		t.Fatalf("error response does not name the failed file: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "good.wav") {
+		t.Fatalf("error response blames the file that succeeded: %s", w.Body.String())
+	}
+	// The good file must have been imported despite the earlier failure.
+	if _, err := os.Stat(filepath.Join(dir, "good.wav")); err != nil {
+		t.Fatalf("good.wav was not imported after a sibling failed: %v", err)
+	}
+	pool, err := ctp.GetMediapool()
+	if err != nil {
+		t.Fatalf("GetMediapool: %v", err)
+	}
+	found := false
+	for _, m := range pool.Medias {
+		if m.Filename == "good.wav" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("good.wav not registered in the mediapool")
+	}
+}
+
 // buildCTPBytes builds an in-memory .CTP (zip) with the given manifest and
 // media entries for import tests.
 func buildCTPBytes(t *testing.T, m showManifest, media map[string][]byte) []byte {
@@ -1920,6 +2278,54 @@ func TestShowImportFailureKeepsSheet(t *testing.T) {
 	}
 }
 
+// TestShowImportAppendKeepsExistingCues is the runnable check for the append
+// rollback range in the import handler: AddCueFull always appends (it ignores
+// the exported cuePos), so append-mode imports land at appendedOffset+1.. and
+// never displace the operator's existing sheet - the invariant the failure
+// rollback's position range depends on.
+func TestShowImportAppendKeepsExistingCues(t *testing.T) {
+	r := setupTestServer(t)
+
+	wav := buildTinyWav(1.0)
+	reg := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(config.MediaLocation(), name), wav, 0o644); err != nil {
+			t.Fatalf("seed media %s: %v", name, err)
+		}
+		if err := ctp.RegisterMedia(name, int64(len(wav)), media.Metadata{Mimetype: "audio/wav", Duration: 1.0, Codec: "pcm_s16le"}, name); err != nil {
+			t.Fatalf("RegisterMedia(%s): %v", name, err)
+		}
+	}
+	reg("mine.wav")
+	reg("a.wav")
+	reg("b.wav")
+	if err := ctp.AddCue("mine.wav", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+
+	manifest := showManifest{
+		App: "CuTePi", Version: manifestVersion, SelectedCuePos: 0,
+		Cues: []ctp.ExportCue{
+			{Title: "a", Filename: "a.wav", CueNum: "1"},
+			{Title: "b", Filename: "b.wav", CueNum: "2"},
+		},
+	}
+	if w := postCTP(t, r, buildCTPBytes(t, manifest, nil), "append"); w.Code != http.StatusSeeOther {
+		t.Fatalf("append import = %d, want 303 (got: %s)", w.Code, w.Body.String())
+	}
+
+	cues, err := ctp.GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	if len(cues.Cues) != 3 {
+		t.Fatalf("imported cue count = %d, want 3: %+v", len(cues.Cues), cues.Cues)
+	}
+	if cues.Cues[0].Title != "mine.wav" || cues.Cues[1].Title != "a" || cues.Cues[2].Title != "b" {
+		t.Fatalf("append import displaced existing cues: %+v", cues.Cues)
+	}
+}
+
 // TestUploadBodyLimit is the runnable check for the body cap: a request
 // larger than maxBodyBytes is rejected instead of being spooled to disk.
 func TestUploadBodyLimit(t *testing.T) {
@@ -1969,7 +2375,7 @@ func TestYoutubeDlpTimeout(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	start := time.Now()
-	_, _, err := downloadWithYtDlp("https://youtube.com/watch?v=x")
+	_, _, err := downloadWithYtDlp("https://youtube.com/watch?v=x", nil)
 	if err == nil {
 		t.Fatal("hung yt-dlp must fail via timeout")
 	}
@@ -2004,4 +2410,161 @@ func TestGoSafeRecoversPanic(t *testing.T) {
 	if w := get(t, setupTestServer(t), "/api/cuesheet"); w.Code != 200 {
 		t.Fatalf("server dead after recovered panic: %d", w.Code)
 	}
+}
+
+// The Advance checkbox moved from the header GO cluster into the settings
+// modal: toggling posts /api/setting/goadvance and the choice round-trips
+// through GET /api/settings (which populates the modal's checkbox).
+func TestGoAdvanceRoundTrip(t *testing.T) {
+	r := setupTestServer(t)
+
+	off := httptest.NewRequest("POST", "/api/setting/goadvance", strings.NewReader(""))
+	off.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, off)
+	if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
+		t.Fatalf("POST /api/setting/goadvance (off) = %d, want 2xx", w.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(get(t, r, "/api/settings").Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding /api/settings: %v", err)
+	}
+	if body["goAdvance"] != false {
+		t.Fatalf("goAdvance = %v, want false: %s", body["goAdvance"], body)
+	}
+
+	on := httptest.NewRequest("POST", "/api/setting/goadvance", strings.NewReader("advance=1"))
+	on.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, on)
+	if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
+		t.Fatalf("POST /api/setting/goadvance (on) = %d, want 2xx", w.Code)
+	}
+	if err := json.Unmarshal(get(t, r, "/api/settings").Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding /api/settings: %v", err)
+	}
+	if body["goAdvance"] != true {
+		t.Fatalf("goAdvance = %v, want true: %s", body["goAdvance"], body)
+	}
+
+	if html := get(t, r, "/").Body.String(); strings.Contains(html, `id="go-advance"`) {
+		t.Fatal("header still renders the Advance checkbox")
+	}
+}
+
+// Edit/Show mode (footer toggle): posts flip the persisted mode, which
+// round-trips through GET /api/settings and seeds the index body class.
+func TestShowModeRoundTrip(t *testing.T) {
+	r := setupTestServer(t)
+
+	post := func(v string) int {
+		req := httptest.NewRequest("POST", "/api/setting/showmode", strings.NewReader(v))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := post("showmode=1"); code != http.StatusOK && code != http.StatusNoContent {
+		t.Fatalf("POST /api/setting/showmode (on) = %d, want 2xx", code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(get(t, r, "/api/settings").Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding /api/settings: %v", err)
+	}
+	if body["showMode"] != true {
+		t.Fatalf("showMode = %v, want true", body["showMode"])
+	}
+	if html := get(t, r, "/").Body.String(); !strings.Contains(html, `class="app-body show-mode"`) {
+		t.Fatal("index body missing show-mode class after enabling")
+	}
+	if code := post(""); code != http.StatusOK && code != http.StatusNoContent {
+		t.Fatalf("POST /api/setting/showmode (off) = %d, want 2xx", code)
+	}
+	if err := json.Unmarshal(get(t, r, "/api/settings").Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding /api/settings: %v", err)
+	}
+	if body["showMode"] != false {
+		t.Fatalf("showMode = %v, want false", body["showMode"])
+	}
+}
+
+// The footer carries the panel toggles, Tests, Settings and mode switch.
+func TestIndexRendersFooter(t *testing.T) {
+	r := setupTestServer(t)
+	body := get(t, r, "/").Body.String()
+	for _, want := range []string{
+		`id="app-footer"`,
+		`id="mode-toggle"`,
+		`data-settings-open`,
+		`&middot;`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected the index page to contain %q", want)
+		}
+	}
+}
+
+// Multi-selection (§12.4): toggle adds a highlighted member row, extend
+// selects the anchor-to-click range. Members share the anchor's
+// table-warning highlight — one selection look for every selected row.
+func TestMultiSelectToggleAndExtend(t *testing.T) {
+	r := setupTestServer(t)
+	for _, f := range []string{"ms-1.mp4", "ms-2.mp4", "ms-3.mp4"} {
+		if err := ctp.RegisterMedia(f, 100, media.Metadata{Mimetype: "video/mp4", Duration: 10}, f); err != nil {
+			t.Fatal(err)
+		}
+		if err := ctp.AddCue(f, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := post(t, r, "/api/cue/1"); w.Code != 200 {
+		t.Fatalf("select anchor = %d", w.Code)
+	}
+	if w := post(t, r, "/api/cue/3?toggle=1"); w.Code != 200 {
+		t.Fatalf("toggle = %d", w.Code)
+	} else if !strings.Contains(w.Body.String(), `data-cue-sel="1"`) {
+		t.Fatal("toggled member missing the selected mark")
+	}
+	if w := post(t, r, "/api/cue/2?extend=1"); w.Code != 200 {
+		t.Fatalf("extend = %d", w.Code)
+	} else {
+		body := w.Body.String()
+		if strings.Count(body, `data-cue-sel="1"`) < 2 {
+			t.Fatalf("range 1..3 should mark 2 members selected, got:\n%s", body)
+		}
+	}
+}
+
+// The schedule-next endpoint arms the GO flash: disarmed in Edit mode,
+// due-in seconds when a schedule approaches in Show mode.
+func TestScheduleNextEndpoint(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("sn.mp4", 100, media.Metadata{Mimetype: "video/mp4", Duration: 10}, "sn.mp4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctp.AddCue("sn.mp4", ""); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	day := int(now.Weekday())
+	if day == 0 {
+		day = 7
+	}
+	// Due 30 minutes from now (inside the day, safely in the future).
+	futureSec := now.Hour()*3600 + now.Minute()*60 + now.Second() + 1800
+	if futureSec >= 24*3600 {
+		t.Skip("too close to midnight for a same-day schedule")
+	}
+	if err := ctp.SetCueSchedule(1, true, day, futureSec); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(t, r, "/api/schedule/next").Body.String(); !strings.Contains(got, `"armed":false`) {
+		t.Fatalf("edit mode should disarm the flash, got: %s", got)
+	}
+	postForm(t, r, "/api/setting/showmode", "showmode", "1")
+	got := get(t, r, "/api/schedule/next").Body.String()
+	if !strings.Contains(got, `"armed":true`) || !strings.Contains(got, `"dueInSec"`) {
+		t.Fatalf("show mode should report the upcoming cue, got: %s", got)
+	}
+	postForm(t, r, "/api/setting/showmode", "showmode", "")
 }

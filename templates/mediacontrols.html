@@ -1,45 +1,26 @@
 {{ define "mediacontrols.html" }}
 
-<!-- <div hx-get="/api/progress" hx-trigger="every 50ms" hx-swap="innerHTML"> -->
-  <!-- 0:00.00/0:00.00  -0:00.00 -->
-<!-- </div> -->
 <div id="esc" hx-trigger="esc" hx-post="/api/stop" hx-swap="none" style="display: none;"></div>
-<!-- <div id="escDbl" hx-trigger="escDbl" hx-post="/api/panic" hx-target="#cuesheet" hx-swap="innerHTML"></div> -->
 <div class="d-flex gap-2">
-  <button class="btn btn-lg btn-success" hx-post="/api/play" hx-swap="none" title="Play" aria-label="Play">
-    <i class="bi bi-play-fill"></i>
-  </button>
   <div class="btn-group">
-    <button class="btn btn-sm btn-secondary" hx-post="/api/togglePause" hx-swap="none" title="Pause" aria-label="Pause">
-      <i class="bi bi-pause-fill"></i>
-    </button>
-    <button class="btn btn-sm btn-danger" hx-post="/api/stop" hx-swap="none" title="Stop" aria-label="Stop">
-      <i class="bi bi-stop-fill"></i>
-    </button>
-    <button class="btn btn-sm btn-danger" hx-post="/api/panic" hx-swap="none" title="Panic" aria-label="Panic">
-      <i class="bi bi-exclamation-triangle-fill"></i>
-    </button>
-    <button class="btn btn-sm btn-warning" hx-post="/api/fadeOut" hx-swap="none" title="Fade Out" aria-label="Fade Out">
-      <i class="bi bi-brightness-low-fill"></i>
-    </button>
-  </div>
-
-  <div class="btn-group">
-    <button id="showTestBtn" class="btn btn-sm btn-danger" hx-post="/api/test" hx-swap="none" title="Show Test" aria-label="Show Test">
-      <i class="bi bi-tv-fill"></i>
-    </button>
-    <button class="btn btn-sm btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Settings" aria-label="Settings"></button>
+    <button class="btn btn-sm btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Menu" aria-label="Menu"></button>
      <ul class="dropdown-menu dropdown-menu-end">
       <li>
-        <button class="dropdown-item" data-test-open type="button">
-          <i class="bi bi-person-video2"></i>&nbsp;Tests
+        <button class="dropdown-item" hx-post="/api/panic" hx-swap="none" hx-confirm="PANIC: cut playback now?" type="button">
+          <i class="bi bi-exclamation-triangle-fill"></i>&nbsp;Panic
         </button>
       </li>
       <li>
-        <button class="dropdown-item" data-settings-open type="button">
-          <i class="bi bi-gear-fill"></i>&nbsp;Settings
+        <button class="dropdown-item" hx-post="/api/stop" hx-swap="none" type="button">
+          <i class="bi bi-stop-fill"></i>&nbsp;Stop
         </button>
       </li>
+      <li>
+        <button class="dropdown-item" hx-post="/api/fadeOut" hx-swap="none" type="button">
+          <i class="bi bi-brightness-low-fill"></i>&nbsp;Fade out
+        </button>
+      </li>
+      <li><hr class="dropdown-divider"></li>
       <li>
         <a class="dropdown-item" href="/api/show/export">
           <i class="bi bi-box-arrow-down"></i>&nbsp;Export show (.CTP)
@@ -51,6 +32,11 @@
         </button>
       </li>
       <li><hr class="dropdown-divider"></li>
+      <li>
+        <button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#logsModal" title="View logs" aria-label="View logs" type="button">
+          <i class="bi bi-terminal"></i>&nbsp;Logs
+        </button>
+      </li>
       <li>
         <button class="dropdown-item" hx-post="/api/restart" hx-swap="none" hx-confirm="Restart the CuTePi server?" type="button">
           <i class="bi bi-arrow-clockwise"></i>&nbsp;Restart

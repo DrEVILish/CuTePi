@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,52 +15,13 @@ import (
 	"CuTePi/media"
 )
 
-// retryBackoff is how long to leave a failed item alone before trying its
-// thumbnail again, so a persistently-failing file (corrupt upload, missing
-// codec) doesn't get re-attempted - and re-log its ffmpeg failure - on
-// every single poll tick.
-const retryBackoff = 60 * time.Second
-
-// failureTracker remembers when each media item's thumbnail generation last
-// failed, so the worker loop can back off retrying it. It's a small,
-// dependency-injectable (via the `now` parameter) type specifically so the
-// backoff behavior can be unit tested without sleeping in real time.
-type failureTracker struct {
-	mu   sync.Mutex
-	last map[int]time.Time
-}
-
-func newFailureTracker() *failureTracker {
-	return &failureTracker{last: make(map[int]time.Time)}
-}
-
-func (f *failureTracker) shouldSkip(mediaID int, backoff time.Duration, now time.Time) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	t, ok := f.last[mediaID]
-	return ok && now.Sub(t) < backoff
-}
-
-func (f *failureTracker) recordFailure(mediaID int, at time.Time) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.last[mediaID] = at
-}
-
-func (f *failureTracker) clear(mediaID int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.last, mediaID)
-}
-
-var failures = newFailureTracker()
-
 // RunThumbnailWorker polls for mediapool rows with a pending thumbnail and
 // generates them. It runs until the process exits; call it in a goroutine.
 // Because "pending" is a DB column rather than an in-memory queue, work
 // left over from a crash or restart is picked up automatically on the next
 // poll.
 func RunThumbnailWorker(pollInterval time.Duration) {
+	rebuildOnce.Do(reFlagLowResWaveforms)
 	for {
 		pending, err := ctp.PendingThumbnails()
 		if err != nil {
@@ -67,14 +29,52 @@ func RunThumbnailWorker(pollInterval time.Duration) {
 			continue
 		}
 		for _, m := range pending {
-			if failures.shouldSkip(m.Media_id, retryBackoff, time.Now()) {
-				continue
-			}
 			processOne(m)
 		}
 		time.Sleep(pollInterval)
 	}
 }
+
+// Envelopes stored before the resolution bump (a fixed small bucket count,
+// typically 300 or 2000 regardless of file length) stay blocky when zoomed
+// even though new files come out detailed. Flag them once at startup so the
+// ordinary pending pipeline regenerates them at the new per-duration
+// resolution; a file already matching the target is left untouched (and the
+// check is cheap: a comma count, no JSON decode).
+func reFlagLowResWaveforms() {
+	pool, err := ctp.GetMediapool()
+	if err != nil {
+		log.Printf("worker: listing media for waveform rebuild: %v", err)
+		return
+	}
+	for _, m := range pool.Medias {
+		if m.Waveform != "" && needsWaveformRebuild(m) {
+			if err := ctp.RequestWaveformAnalysis(m.Filename); err != nil {
+				log.Printf("worker: re-flagging low-res waveform for %q: %v", m.Filename, err)
+			}
+		}
+	}
+}
+
+func needsWaveformRebuild(m ctp.Media) bool {
+	if m.Waveform == "" || m.Duration <= 0 {
+		return false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(m.Waveform), "[") {
+		return true
+	}
+	bins := strings.Count(m.Waveform, ",") + 1
+	target := int(m.Duration * 100) // one bin per ~10ms
+	if target < media.MinWaveformBins {
+		target = media.MinWaveformBins
+	}
+	if target > media.MaxWaveformBins {
+		target = media.MaxWaveformBins
+	}
+	return bins < target
+}
+
+var rebuildOnce sync.Once
 
 func processOne(m ctp.Media) {
 	kind := media.KindFromExtension(m.Filename)
@@ -83,17 +83,44 @@ func processOne(m ctp.Media) {
 
 	if m.ThumbnailPending {
 		if err := media.GenerateThumbnail(srcPath, kind, m.Duration, outPath); err != nil {
+			// Give up like FailWaveform: a thumbnail that fails once (usually
+			// a corrupt/undecodable file) would otherwise stay pending and be
+			// re-attempted forever, including on every restart. Operators can
+			// re-request regeneration via the refresh button.
 			log.Printf("worker: thumbnail generation failed for %q: %v", m.Filename, err)
-			failures.recordFailure(m.Media_id, time.Now())
+			_ = ctp.MarkThumbnailDone(m.Media_id)
 			return
 		}
-		failures.clear(m.Media_id)
 		if err := ctp.MarkThumbnailDone(m.Media_id); err != nil {
 			log.Printf("worker: failed marking thumbnail done for %q: %v", m.Filename, err)
+		}
+		// Also refresh the detailed codec info (the Media tab): re-probes the
+		// file, best-effort - an old meta JSON stays when ffprobe fails.
+		if meta, perr := media.Probe(srcPath); perr == nil && meta.Info != nil {
+			if raw, jerr := json.Marshal(meta.Info); jerr == nil {
+				if err := ctp.UpdateMediaMeta(m.Filename, string(raw)); err != nil {
+					log.Printf("worker: storing media meta for %q: %v", m.Filename, err)
+				}
+			}
 		}
 	}
 
 	if m.WaveformPending {
+		// Keep the pending flag until both analyses finish, so a restart resumes
+		// unfinished work. Full-file decoding runs off the import request path.
+		// ponytail: serial full-file analysis; split the queue if long files delay thumbnails.
+		gain := 0.0
+		if kind != media.KindImage {
+			var err error
+			gain, err = media.MeasureLoudness(srcPath)
+			if err != nil {
+				log.Printf("worker: loudness analysis for %q: %v", m.Filename, err)
+			}
+		}
+		if err := ctp.StoreLoudnessGain(m.Media_id, gain); err != nil {
+			log.Printf("worker: storing loudness for %q: %v", m.Filename, err)
+			return
+		}
 		// Amplitude peaks feed the Cue Inspector's trim timeline. A failure
 		// clears the pending flag (so it isn't retried on every poll tick)
 		// and leaves the timeline empty - the Analyse button can retry on

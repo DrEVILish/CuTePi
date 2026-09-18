@@ -1,19 +1,10 @@
 {{ template "header.html" }}
 
 
-<body data-bs-theme="dark" class="app-body">
+<body data-bs-theme="dark" class="app-body{{ if .ShowMode }} show-mode{{ end }}">
     {{ template "topbar.html" }}
 
     <div class="container-fluid app-content">
-      <button
-        type="button"
-        class="btn btn-outline-secondary btn-sm"
-        id="mediapool-expand-btn"
-        title="Expand the media pool"
-        aria-label="Expand the media pool"
-      >
-        <i class="bi bi-chevron-double-right"></i>
-      </button>
       <div class="app-main-row">
         <div class="app-pane d-flex flex-column" id="mediapool-pane">
           {{ template "mediapool.html" . }}
@@ -24,19 +15,71 @@
         </div>
       </div>
       <div class="inspector-panel mt-2" id="cueinspector-panel">
-        <div class="d-flex align-items-center gap-2">
-          <button type="button" class="btn btn-sm btn-outline-secondary" id="inspector-toggle"
-            title="Toggle the cue inspector" aria-label="Toggle the cue inspector"
-            data-bs-toggle="collapse" data-bs-target="#cueinspector-collapse" aria-expanded="true" aria-controls="cueinspector-collapse">
-            <i class="bi bi-sliders"></i> Cue Inspector
-          </button>
-          <span class="text-muted small">Trim In/Out, hold and playback for the selected cue</span>
+        <div class="inspector-header d-flex align-items-center gap-2 px-2 py-1">
+          <h6 class="mb-0 me-2 flex-shrink-0"><img src="/img/cutepi-logo.svg" class="inspector-logo" alt="">Cue Inspector</h6>
+          <ul class="nav nav-tabs nav-pills-small inspector-tabs mb-0 border-0 flex-shrink-0" role="tablist" id="inspector-tabs">
+            <li class="nav-item" role="presentation">
+              <button type="button" class="nav-link active" data-inspector-tab="time" role="tab" aria-selected="true">Time</button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button type="button" class="nav-link" data-inspector-tab="video" role="tab" aria-selected="false">Video</button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button type="button" class="nav-link" data-inspector-tab="audio" role="tab" aria-selected="false">Audio</button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button type="button" class="nav-link" data-inspector-tab="media" role="tab" aria-selected="false">Media</button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button type="button" class="nav-link" data-inspector-tab="advanced" role="tab" aria-selected="false">Colour</button>
+            </li>
+          </ul>
+          <span class="inspector-save-flash ms-auto" id="inspector-save-flash" title="Saved" aria-hidden="true"></span>
+          <span class="text-muted small d-none d-xl-inline flex-shrink-0">Changes save instantly</span>
         </div>
-        <div class="collapse show mt-2" id="cueinspector-collapse">
+        <div class="inspector-collapse show" id="cueinspector-collapse">
           {{ template "cueinspector.html" .Inspector }}
         </div>
       </div>
+      <div id="cueinspector-resizer" title="Resize the cue inspector (drag)" aria-label="Resize the cue inspector"></div>
     </div>
+
+    <footer id="app-footer" class="d-flex align-items-center gap-2 px-2 py-1">
+      <button type="button" id="mode-toggle" class="mode-switch" role="switch"
+        aria-checked="{{ if .ShowMode }}true{{ else }}false{{ end }}"
+        aria-label="Edit or Show mode"
+        title="Show mode arms scheduled triggers and test output; Edit mode is for building the show">
+        <span class="mode-knob" aria-hidden="true"></span>
+        <span class="mode-label">{{ if .ShowMode }}SHOW{{ else }}EDIT{{ end }}</span>
+      </button>
+      <div class="btn-group btn-group-sm" role="group" aria-label="Panels">
+        <button type="button" class="btn btn-outline-secondary" id="mediapool-collapse-btn"
+          title="Collapse the media pool" aria-label="Collapse the media pool">
+          <i class="bi bi-images"></i>
+        </button>
+        <button type="button" class="btn btn-outline-secondary" id="mediapool-expand-btn"
+          title="Expand the media pool" aria-label="Expand the media pool">
+          <i class="bi bi-images"></i>
+        </button>
+        <button type="button" class="btn btn-outline-secondary" id="cueinspector-collapse-btn"
+          title="Collapse the cue inspector" aria-label="Collapse the cue inspector">
+          <i class="bi bi-sliders"></i>
+        </button>
+        <button type="button" class="btn btn-outline-secondary" id="cueinspector-expand-btn"
+          title="Expand the cue inspector" aria-label="Expand the cue inspector">
+          <i class="bi bi-sliders"></i>
+        </button>
+      </div>
+      <button type="button" id="showTestBtn" class="btn btn-sm btn-danger"
+        hx-post="/api/test" hx-swap="none"
+        title="Show a test pattern on the output" aria-label="Show a test pattern">
+        <i class="bi bi-tv-fill"></i>&nbsp;Tests
+      </button>
+      <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-settings-open
+        title="Open settings" aria-label="Open settings">
+        <i class="bi bi-gear-fill"></i>&nbsp;Settings
+      </button>
+    </footer>
 
     {{ template "uploadModal.html" }}
     {{ template "ytdlModal.html" }}

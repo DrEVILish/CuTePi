@@ -65,3 +65,77 @@ fileInput.addEventListener("change", () => {
     fileList.appendChild(li);
   }
 });
+
+// XHR upload with live progress + success/failure feedback (both this modal
+// and the standalone /upload page share the same markup ids). htmx is not
+// involved in the submission, so its early "looks like nothing happened"
+// behaviour is gone; the status line carries the operator-facing feedback.
+const uploadProgress = document.getElementById("progress");
+const uploadStatus = document.getElementById("upload-status");
+
+function setUploaderFeedback(text, cls) {
+  if (uploadStatus) {
+    uploadStatus.textContent = text;
+    uploadStatus.className = "small " + (cls || "");
+  }
+}
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const files = fileInput.files;
+  if (!files || files.length === 0) {
+    setUploaderFeedback("No file chosen.", "text-warning");
+    return;
+  }
+  const formData = new FormData();
+  for (const f of files) formData.append("media", f);
+  const btn = document.getElementById("upload");
+  if (btn) { btn.disabled = true; btn.classList.add("disabled"); }
+  if (uploadProgress) { uploadProgress.hidden = false; uploadProgress.value = 0; }
+  setUploaderFeedback("Uploading… 0%");
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/upload");
+  // Same header the fetch path uses; the server returns the #mediapool partial.
+  xhr.setRequestHeader("HX-Request", "true");
+  xhr.upload.addEventListener("progress", (ev) => {
+    if (!ev.lengthComputable || !uploadProgress) return;
+    const pct = Math.round((ev.loaded / ev.total) * 100);
+    uploadProgress.value = pct;
+    setUploaderFeedback("Uploading… " + pct + "%");
+  });
+  xhr.addEventListener("load", () => {
+    if (btn) { btn.disabled = false; btn.classList.remove("disabled"); }
+    if (uploadProgress) uploadProgress.value = 100;
+    if (xhr.status >= 200 && xhr.status < 300) {
+      setUploaderFeedback("Upload complete", "text-success");
+      fileList.innerHTML = "";
+      fileInput.value = "";
+      if (droppedFiles && droppedFiles.items) droppedFiles = new DataTransfer();
+      // The partial is a standalone #mediapool; splice it in when present
+      // (the control centre modal). The standalone /upload page just keeps
+      // the success message.
+      if (document.getElementById("mediapool")) {
+        const wrapper = document.createElement("div");
+        wrapper.innerHTML = (xhr.responseText || "").trim();
+        const replacement = wrapper.firstElementChild;
+        const current = document.getElementById("mediapool");
+        if (replacement && replacement.id === "mediapool" && current) {
+          current.replaceWith(replacement);
+          if (window.htmx) htmx.process(replacement);
+        }
+      }
+      if (typeof showToast === "function") showToast("Upload complete");
+      if (window.bootstrap && document.getElementById("uploadModal")) {
+        try { bootstrap.Modal.getInstance(document.getElementById("uploadModal")).hide(); } catch (err) {}
+      }
+    } else {
+      setUploaderFeedback("Upload failed (server returned " + xhr.status + "). See the alert for details.", "text-danger");
+    }
+  });
+  xhr.addEventListener("error", () => {
+    if (btn) { btn.disabled = false; btn.classList.remove("disabled"); }
+    setUploaderFeedback("Upload failed (network error).", "text-danger");
+  });
+  xhr.send(formData);
+});

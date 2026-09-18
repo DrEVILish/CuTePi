@@ -276,7 +276,7 @@ func TestGroupMembershipStaysContiguous(t *testing.T) {
 	for _, cue := range sheet.Cues {
 		order = append(order, cue.CuePos)
 	}
-	if err := ReorderCues(order); err != nil {
+	if _, err := ReorderCues(order); err != nil {
 		t.Fatalf("ReorderCues: %v", err)
 	}
 	if p := parentByTitle()[titles[3]]; p != gid2 {
@@ -309,7 +309,7 @@ func TestGroupMembershipStaysContiguous(t *testing.T) {
 			leaveOrder = append(leaveOrder, cue.CuePos)
 		}
 	}
-	if err := ReorderCues(leaveOrder); err != nil {
+	if _, err := ReorderCues(leaveOrder); err != nil {
 		t.Fatalf("ReorderCues: %v", err)
 	}
 	if p := parentByTitle()[runHeadTitle]; p != 0 {
@@ -323,5 +323,298 @@ func TestGroupMembershipStaysContiguous(t *testing.T) {
 	}
 	if remaining != membersBefore-1 {
 		t.Errorf("remaining group members: %d, want %d (group must stay intact)", remaining, membersBefore-1)
+	}
+}
+
+// Collapsing a group hides its member rows from the flattened sheet (the
+// header stays), and member rows carry the group's colour for the folder
+// outline. Regression: the span never marked the group's own collapse, so
+// toggling (button or arrows) changed state but rendered nothing.
+func TestFlattenSheetCollapseHidesMembers(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	mustRegisterMedia(t, "flatcol.mp4")
+	gid, err := CreateGroup("Flat", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := AddCue("flatcol.mp4", ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	sheet, _ := GetCuesheet()
+	for _, c := range sheet.Cues {
+		if err := SetCueGroup(itoa(c.CuePos), gid); err != nil {
+			t.Fatalf("SetCueGroup: %v", err)
+		}
+	}
+	g, _ := GetGroup(gid)
+	g.Color = "#ff0000"
+	g.Collapse = true
+	if err := UpdateGroup(g); err != nil {
+		t.Fatalf("UpdateGroup: %v", err)
+	}
+	cs, err := GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	rows := FlattenSheet(&cs)
+	cues, headers := 0, 0
+	for _, r := range rows {
+		if r.Cue != nil {
+			cues++
+		}
+		if r.Group != nil {
+			headers++
+		}
+	}
+	if headers != 1 || cues != 0 {
+		t.Fatalf("collapsed sheet = %d headers + %d cues, want 1 + 0", headers, cues)
+	}
+	g.Collapse = false
+	if err := UpdateGroup(g); err != nil {
+		t.Fatalf("UpdateGroup: %v", err)
+	}
+	cs, _ = GetCuesheet()
+	for _, r := range FlattenSheet(&cs) {
+		if r.Cue != nil && r.GroupColor != "#ff0000" {
+			t.Fatalf("member row missing group colour, got %q", r.GroupColor)
+		}
+	}
+}
+
+// A gap drop on a group boundary (the line above a header) lands top-level
+// between the groups instead of joining either neighbour; a later join
+// clears the explicit mark. Regression: every boundary drop joined a group,
+// so cues could never sit between groups.
+func TestSheetDropBetweenGroupsStaysTopLevel(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	mustRegisterMedia(t, "gap.mp4")
+	ga, err := CreateGroup("GapA", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup A: %v", err)
+	}
+	gb, err := CreateGroup("GapB", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup B: %v", err)
+	}
+	posOf := func(title string) int {
+		t.Helper()
+		sheet, err := GetCuesheet()
+		if err != nil {
+			t.Fatalf("GetCuesheet: %v", err)
+		}
+		for _, c := range sheet.Cues {
+			if c.Title == title {
+				return c.CuePos
+			}
+		}
+		t.Fatalf("cue %q not found", title)
+		return 0
+	}
+	for i := 0; i < 4; i++ {
+		if err := AddCue("gap.mp4", ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	sheet, _ := GetCuesheet()
+	titles := []string{}
+	for _, c := range sheet.Cues {
+		titles = append(titles, c.Title)
+	}
+	// titles[0..1] -> A, titles[2] -> B, titles[3] stays for the gap drop.
+	if err := SetCueGroup(itoa(posOf(titles[0])), ga); err != nil {
+		t.Fatalf("SetCueGroup A1: %v", err)
+	}
+	if err := SetCueGroup(itoa(posOf(titles[1])), ga); err != nil {
+		t.Fatalf("SetCueGroup A2: %v", err)
+	}
+	if err := SetCueGroup(itoa(posOf(titles[2])), gb); err != nil {
+		t.Fatalf("SetCueGroup B: %v", err)
+	}
+	tpos := posOf(titles[3])
+	if err := SheetDrop([]int{tpos}, 0, "group", gb, false, true, false, nil, 0); err != nil {
+		t.Fatalf("SheetDrop between: %v", err)
+	}
+	cue, err := GetCue(itoa(tpos))
+	if err != nil {
+		t.Fatalf("GetCue: %v", err)
+	}
+	if cue.Parent != 0 {
+		t.Fatalf("gap-dropped cue parent = %d, want 0 (top-level between groups)", cue.Parent)
+	}
+	// A later join into B clears the explicit mark.
+	if err := SheetDrop([]int{tpos}, 0, "group", gb, true, false, false, nil, 0); err != nil {
+		t.Fatalf("SheetDrop join: %v", err)
+	}
+	cue, _ = GetCue(itoa(tpos))
+	if cue.Parent != gb {
+		t.Fatalf("joined cue parent = %d, want %d", cue.Parent, gb)
+	}
+}
+
+func TestSheetModelStoredMembership(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatal(err)
+	}
+	_ = setSelectedCuePos(0)
+	gid, err := CreateGroup("Stored", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"sm-a.mp4", "sm-b.mp4", "sm-c.mp4"} {
+		mustRegisterMedia(t, f)
+		if err := AddCue(f, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Appends never join: a trailing group does not absorb new cues.
+	sheet, _ := GetCuesheet()
+	for _, cue := range sheet.Cues {
+		if cue.Parent != 0 {
+			t.Fatalf("appended cue %d parent = %d, want 0", cue.CuePos, cue.Parent)
+		}
+	}
+	// Gap drop into the span joins; the stored parent is what renders.
+	sheet, _ = GetCuesheet()
+	var first, second int
+	for _, cue := range sheet.Cues {
+		if first == 0 {
+			first = cue.CuePos
+		} else if second == 0 {
+			second = cue.CuePos
+		}
+	}
+	if err := SetCueGroup(itoa(first), gid); err != nil {
+		t.Fatal(err)
+	}
+	// Gap drop before the group's only member lands in its span and joins.
+	if err := SheetDrop([]int{second}, 0, "cue", first, false, false, false, nil, 0); err != nil {
+		t.Fatalf("SheetDrop gap: %v", err)
+	}
+	members, _ := GroupCuePositions(gid)
+	if len(members) != 2 || members[0] != second || members[1] != first {
+		t.Fatalf("after gap drop: members = %v, want [%d %d]", members, second, first)
+	}
+}
+
+func TestHealSheetRepairsDanglingParents(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatal(err)
+	}
+	_ = setSelectedCuePos(0)
+	mustRegisterMedia(t, "heal.mp4")
+	if err := AddCue("heal.mp4", ""); err != nil {
+		t.Fatal(err)
+	}
+	pos, _ := lastCuePos()
+	// Simulate a legacy dangling reference straight in the DB.
+	if _, err := db.Exec(`UPDATE cuesheet SET parent = 4242 WHERE cuePos = ?`, pos); err != nil {
+		t.Fatal(err)
+	}
+	if err := HealSheet(); err != nil {
+		t.Fatalf("HealSheet: %v", err)
+	}
+	cue, err := GetCue(itoa(pos))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cue.Parent != 0 {
+		t.Fatalf("healed cue parent = %d, want 0", cue.Parent)
+	}
+}
+
+func TestAddCuePositionedPlacement(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatal(err)
+	}
+	_ = setSelectedCuePos(0)
+	gid, err := CreateGroup("Placed", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"pp-a.mp4", "pp-b.mp4"} {
+		mustRegisterMedia(t, f)
+		if err := AddCue(f, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sheet, _ := GetCuesheet()
+	var aPos, bPos int
+	for _, cue := range sheet.Cues {
+		if cue.Title == "pp-a.mp4" {
+			aPos = cue.CuePos
+		} else {
+			bPos = cue.CuePos
+		}
+	}
+	if err := SetCueGroup(itoa(aPos), gid); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCueGroup(itoa(bPos), gid); err != nil {
+		t.Fatal(err)
+	}
+	// Insert before the run head (first member): lands above the header,
+	// top-level — not as a member.
+	mustRegisterMedia(t, "pp-head.mp4")
+	sheet, _ = GetCuesheet()
+	var headPos int
+	for _, cue := range sheet.Cues {
+		if cue.Parent == gid {
+			headPos = cue.CuePos
+			break
+		}
+	}
+	if err := AddCue("pp-head.mp4", itoa(headPos)); err != nil {
+		t.Fatalf("AddCue at head: %v", err)
+	}
+	cue, _ := GetCue(itoa(headPos))
+	_ = cue
+	sheet, _ = GetCuesheet()
+	var found *Cue
+	for i, c := range sheet.Cues {
+		if c.Title == "pp-head.mp4" {
+			found = &sheet.Cues[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("inserted cue missing from sheet")
+	}
+	if found.Parent != 0 {
+		t.Fatalf("head insert parent = %d, want 0 (above the folder)", found.Parent)
+	}
+	if sheet.Cues[0].Title != "pp-head.mp4" {
+		t.Fatalf("head insert not first, got %q", sheet.Cues[0].Title)
+	}
+	// Insert before the second member: joins mid-span.
+	mustRegisterMedia(t, "pp-mid.mp4")
+	sheet, _ = GetCuesheet()
+	var secondPos int
+	n := 0
+	for _, cue := range sheet.Cues {
+		if cue.Parent == gid {
+			n++
+			if n == 2 {
+				secondPos = cue.CuePos
+			}
+		}
+	}
+	if err := AddCue("pp-mid.mp4", itoa(secondPos)); err != nil {
+		t.Fatalf("AddCue mid-span: %v", err)
+	}
+	sheet, _ = GetCuesheet()
+	for _, cue := range sheet.Cues {
+		if cue.Title == "pp-mid.mp4" && cue.Parent != gid {
+			t.Fatalf("mid-span insert parent = %d, want %d", cue.Parent, gid)
+		}
 	}
 }

@@ -1,7 +1,9 @@
-/* Theme system: each theme is a set of --ctp-* design tokens plus a few
- * per-theme flourish rules. Components read the tokens, so adding a theme
- * is mostly a palette. The theme is selected by html[data-theme=...] set in
- * header.html before paint and toggled live by settingsModal / ui.js. */
+/* Theme system base layer: default --ctp-* tokens plus the shared component
+ * styles that read them. Per-theme palettes and flourishes live in
+ * public/css/themes/<name>.css (one portable file per theme, discovered by
+ * routes.Themes and linked from header.html) — nothing theme-specific
+ * belongs in this file. The theme is selected by html[data-theme=...] set
+ * in header.html before paint and toggled live by settingsModal / ui.js. */
 
 /* === Future SciFi Blue (default) ======================================= *
  * Deep-space navy with cyan/blue neon accents and a soft glow.            */
@@ -18,36 +20,10 @@
   --ctp-success: #42ddb2;
   --ctp-radius: 0.2rem;
   --ctp-font: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-}
-
-html[data-theme="lcars"] {
-  --ctp-bg: #000000;
-  --ctp-surface: #120d24;
-  --ctp-surface-2: #251a44;
-  --ctp-border: #6c79a8;
-  --ctp-text: #f5f1e8;
-  --ctp-muted: #aeb4c9;
-  --ctp-accent: #ffa02e;
-  --ctp-accent-2: #c99bff;
-  --ctp-danger: #e85e78;
-  --ctp-success: #8fe3c6;
-  --ctp-radius: 1.1rem;
-  --ctp-font: "Trebuchet MS", system-ui, sans-serif;
-}
-
-html[data-theme="qlab"] {
-  --ctp-bg: #141414;
-  --ctp-surface: #1b1b1b;
-  --ctp-surface-2: #262626;
-  --ctp-border: #424242;
-  --ctp-text: #f4f4f3;
-  --ctp-muted: #9d9d9d;
-  --ctp-accent: #f06a18;
-  --ctp-accent-2: #f4a018;
-  --ctp-danger: #d8433b;
-  --ctp-success: #6bc58a;
-  --ctp-radius: 0.1rem;
-  --ctp-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Console hairlines recede; neon accents pop. Themes that don't define
+     these fall back to --ctp-border / the flare default below. */
+  --ctp-hairline: color-mix(in srgb, var(--ctp-border) 40%, transparent);
+  --ctp-flare: #d85cff;
 }
 
 body.app-body,
@@ -80,20 +56,44 @@ body.upload-body {
   border-color: var(--ctp-border) !important;
 }
 
-/* Scrollbars ------------------------------------------------------------ */
+/* Scrollbars: slim console rails. Transparent track (the pane surface shows
+   through — no boxed gutter), translucent thumb that brightens toward the
+   accent on hover. Firefox gets the two-line thin form. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ctp-border) 75%, transparent) transparent;
+}
 ::-webkit-scrollbar {
-  width: 0.65rem;
-  height: 0.65rem;
+  width: 0.4rem;
+  height: 0.4rem;
 }
 ::-webkit-scrollbar-track {
-  background: color-mix(in srgb, var(--ctp-surface-2) 55%, var(--ctp-bg));
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--ctp-border);
-  border-radius: var(--ctp-radius);
+  background: color-mix(in srgb, var(--ctp-border) 75%, transparent);
+  border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--ctp-accent);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Console readout headers: pane + column titles set as tracked uppercase
+   micro-labels in the muted tone — structure, not decoration. */
+#mediapool h5,
+#cuesheet thead th,
+.inspector-header h6 {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ctp-muted);
+}
+
+/* Focus rings pick up the accent instead of Bootstrap's default white. */
+:focus-visible {
+  outline-color: var(--ctp-accent, #2fd6ff);
 }
 
 /* Dropdowns ------------------------------------------------------------- */
@@ -114,6 +114,17 @@ body.upload-body {
 .dropdown-item:focus {
   color: var(--ctp-text);
   background-color: var(--ctp-accent);
+}
+
+/* Progress indications (YouTube downloader) ----------------------------- */
+.progress {
+  background-color: var(--ctp-surface-2);
+  border: 1px solid var(--ctp-border);
+  border-radius: var(--ctp-radius);
+}
+.progress-bar {
+  background: var(--ctp-accent);
+  border-radius: var(--ctp-radius);
 }
 
 /* Form controls --------------------------------------------------------- */
@@ -184,6 +195,20 @@ body.upload-body {
   --bs-btn-color: #10101a;
 }
 
+/* Brand exception: the YouTube download button keeps YouTube red in every
+   theme. Doubled class outranks the per-theme .btn-danger overrides; shape
+   and type still follow the theme, only the brand colour is locked. */
+html[data-theme] .btn.btn-youtube {
+  background-color: #ff0000;
+  border-color: #ff0000;
+  color: #fff;
+}
+html[data-theme] .btn.btn-youtube:hover {
+  background-color: #cc0000;
+  border-color: #cc0000;
+  color: #fff;
+}
+
 /* Tables ---------------------------------------------------------------- */
 .table-dark {
   --bs-table-bg: var(--ctp-surface);
@@ -199,9 +224,9 @@ body.upload-body {
   --bs-table-color: var(--ctp-text);
 }
 
-.media_thumbnail,
+.media-thumbnail,
 .cuesheet-blank-rows {
-  border-color: var(--ctp-border) !important;
+  border-color: var(--ctp-hairline, var(--ctp-border)) !important;
 }
 
 /* Transport / widget controls shared by all themes ---------------------- */
@@ -242,6 +267,14 @@ body.upload-body {
   width: 5.5rem;
 }
 
+/* Fixed width for the live rate/balance readouts: "1×" vs "0.25×" otherwise
+   reflows the label line on every drag tick. */
+#insp-rate-value, #insp-balance-value {
+  display: inline-block;
+  min-width: 4.5ch;
+  text-align: right;
+}
+
 .insp-volume {
   display: flex;
   flex-direction: column;
@@ -266,9 +299,79 @@ body.upload-body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Cue identity badge: neutral outline, tinted with the cue's own colour when
+   set, so the badge reads the row highlight instead of always warning. */
+.inspector-cuebadge {
+  background: transparent;
+  border: 1px solid var(--ctp-border);
+  color: var(--ctp-text);
+}
+.inspector-cuebadge.has-color {
+  background: color-mix(in srgb, var(--cue-accent) 28%, transparent);
+  border-color: var(--cue-accent);
+  color: var(--ctp-text);
+}
+
+/* Colour swatch chips: 12 named palette dots + "none". A radio group keeps
+   keyboard/arrow navigation and the form's instant-change save working. */
+.insp-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.insp-swatch {
+  position: relative;
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.insp-swatch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+.insp-swatch-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--swatch, #6c757d) 60%, #fff),
+                    var(--swatch, #6c757d));
+  border: 2px solid var(--ctp-border);
+  pointer-events: none;
+}
+.insp-swatch:hover .insp-swatch-fill {
+  border-color: var(--ctp-accent);
+}
+.insp-swatch input:focus-visible ~ .insp-swatch-fill {
+  outline: 2px solid var(--ctp-accent);
+  outline-offset: 2px;
+}
+.insp-swatch input:checked + .insp-swatch-fill {
+  border-color: var(--ctp-text);
+  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--ctp-accent) 55%, transparent);
+}
+.insp-swatch-none .insp-swatch-fill {
+  background: transparent;
+  border-color: var(--ctp-muted);
+  position: relative;
+}
+.insp-swatch-none .insp-swatch-fill::after {
+  content: "";
+  position: absolute;
+  inset: 22%;
+  border-bottom: 2px solid var(--ctp-muted);
+  transform: rotate(-45deg);
+}
+
 .trim-timeline {
   position: relative;
-  height: 5.5rem;
+  height: 6.75rem;
   border: 1px solid var(--ctp-border);
   border-radius: var(--ctp-radius);
   overflow: hidden;
@@ -294,7 +397,7 @@ body.upload-body {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 3px;
+  width: 5px;
   background: var(--ctp-accent);
   transform: translateX(-50%);
   cursor: ew-resize;
@@ -309,9 +412,9 @@ body.upload-body {
   transform: translateX(-50%);
   width: 0;
   height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 7px solid var(--ctp-accent);
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 10px solid var(--ctp-accent);
 }
 .trim-marker-out {
   background: var(--ctp-accent-2);
@@ -329,94 +432,55 @@ body.upload-body {
   z-index: 3;
   pointer-events: none;
 }
-
-/* =======================================================================
- * Theme flourishes
- * ===================================================================== */
-
-/* --- LCARS: rounded pills, thick accent rails, uppercase labels -------- */
-html[data-theme="lcars"] .navbar {
-  border-bottom-left-radius: var(--ctp-radius);
-  border-bottom-right-radius: var(--ctp-radius);
-  border-bottom: 0.3rem solid var(--ctp-accent);
-}
-
-html[data-theme="lcars"] .btn {
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-html[data-theme="lcars"] .btn-primary,
-html[data-theme="lcars"] .btn-outline-primary {
-  border-width: 2px;
-}
-
-html[data-theme="lcars"] .app-pane,
-html[data-theme="lcars"] .inspector-panel {
-  border-left: 0.45rem solid var(--ctp-accent);
-}
-
-html[data-theme="lcars"] #cuesheet thead th,
-html[data-theme="lcars"] .form-label,
-html[data-theme="lcars"] .small {
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-html[data-theme="lcars"] .form-control,
-html[data-theme="lcars"] .form-select,
-html[data-theme="lcars"] .dropdown-menu {
-  border-radius: var(--ctp-radius);
-}
-
-html[data-theme="lcars"] .table-warning {
-  --bs-table-bg: color-mix(in srgb, var(--ctp-accent) 28%, var(--ctp-surface));
-}
-
-/* --- QLab: flat charcoal console, crisp orange accents, square corners - */
-html[data-theme="qlab"] .btn {
-  border-width: 2px;
+.trim-length {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.4rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-html[data-theme="qlab"] .btn-danger,
-html[data-theme="qlab"] .btn-outline-danger {
-  font-weight: 700;
-}
-
-html[data-theme="qlab"] .btn-primary {
-  border-top: 3px solid color-mix(in srgb, var(--ctp-accent) 45%, #fff);
-}
-
-html[data-theme="qlab"] .navbar {
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--ctp-bg) 75%, transparent);
+  border: 1px solid var(--ctp-border);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.4rem;
   color: var(--ctp-accent);
+  z-index: 3;
+  pointer-events: none;
 }
-
-html[data-theme="qlab"] #cuesheet thead th {
+/* Box-select rectangle shown while Zoom mode is armed and dragging. */
+.trim-zoomsel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--ctp-accent) 18%, transparent);
+  border: 1px solid var(--ctp-accent);
+  pointer-events: none;
+  z-index: 1;
+  display: none;
+}
+.trim-zoomsel.trim-zoomsel-active {
+  display: block;
+}
+/* Zoom mode armed: the timeline reads as selectable, with an accent edge and
+   a zoom-in cursor while the box-select is active. */
+.trim-timeline.trim-zoom-active {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ctp-accent) 45%, transparent);
+  cursor: zoom-in;
+}
+/* Zoom state lives on the button's aria-pressed attribute. */
+#trim-zoom[aria-pressed="true"] {
   color: var(--ctp-accent);
+  border-color: var(--ctp-accent);
 }
 
-html[data-theme="qlab"] .table-dark {
-  --bs-table-border-color: var(--ctp-border);
+/* Video tab (§5.5): compact fade fields — full-width inputs read as broken
+   next to the other tabs' forms. */
+#insp-video-fadein, #insp-video-fadeout {
+  max-width: 10rem;
 }
 
-/* --- Future SciFi Blue: neon glow + subtle scanline backdrop ----------- */
-html[data-theme="blue-future"] .navbar,
-html[data-theme="blue-future"] .app-pane,
-html[data-theme="blue-future"] .inspector-panel {
-  box-shadow: inset 0 0 1.5rem rgba(47, 214, 255, 0.07);
-}
-
-html[data-theme="blue-future"] .btn-primary,
-html[data-theme="blue-future"] .btn-outline-primary {
-  box-shadow: 0 0 0.7rem rgba(47, 214, 255, 0.3);
-}
-
-html[data-theme="blue-future"] .table-warning {
-  box-shadow: inset 0.35rem 0 0 var(--ctp-accent);
-}
-
-html[data-theme="blue-future"] .media_thumbnail {
-  box-shadow: 0 0 0.8rem rgba(47, 214, 255, 0.08);
+/* Modal logos are compact; the topbar one keeps its full size. */
+.modal-header .cutepi-logo {
+  width: 5.5rem;
+  height: 1.4rem;
 }

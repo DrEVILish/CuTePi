@@ -6,14 +6,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ .title }} Control Centre - CuTePi</title>
 
-    <link rel="stylesheet" href="/css/index.css">
-    <link rel="stylesheet" href="/css/bootstrap@5.3.3.css">
-    <link rel="stylesheet" href="/css/bootstrap-icons@1.11.3.css">
+    <!-- Bootstrap loads FIRST as a utility fallback: every app layer below
+      wins its conflicts, so themes never depend on Bootstrap specifics and
+      it can keep shrinking toward removal. Icons stay last (font only). -->
+    <link rel="stylesheet" href="/css/bootstrap@5.3.3.css?v={{ assetStamp }}">
+    <link rel="stylesheet" href="/css/index.css?v={{ assetStamp }}">
+    <link rel="stylesheet" href="/css/comp/dropzone.css?v={{ assetStamp }}">
+    <link rel="stylesheet" href="/css/comp/cuesheet.css?v={{ assetStamp }}">
+    <link rel="stylesheet" href="/css/comp/mediapool.css?v={{ assetStamp }}">
+    <link rel="stylesheet" href="/css/comp/layout.css?v={{ assetStamp }}">
+    <link rel="stylesheet" href="/css/comp/themes.css?v={{ assetStamp }}">
+    <!-- One portable file per theme: dropping name.css into public/css/themes
+      auto-links it here and offers it in Settings (routes.Themes). -->
+    {{ range themeFiles }}<link rel="stylesheet" href="/css/themes/{{ .File }}?v={{ assetStamp }}">
+    {{ end }}<link rel="stylesheet" href="/css/bootstrap-icons@1.11.3.css?v={{ assetStamp }}">
     <script>
       (function () {
+        var available = [{{ range $i, $t := themeFiles }}{{ if $i }}, {{ end }}"{{ $t.Name }}"{{ end }}, "custom"];
         var theme = "blue-future";
         try { theme = localStorage.getItem("cutepi.theme") || theme; } catch (_) {}
-        if (["lcars", "qlab", "blue-future", "custom"].indexOf(theme) === -1) theme = "blue-future";
+        if (available.indexOf(theme) === -1) theme = "blue-future";
         document.documentElement.dataset.theme = theme;
         if (theme === "custom") {
           try {

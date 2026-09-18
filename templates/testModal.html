@@ -8,7 +8,9 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <p class="mb-0">Test is loaded.</p>
+        <div id="test-pattern-grid" class="d-flex flex-wrap gap-2 mb-2" aria-label="Built-in test patterns"></div>
+        <div id="test-custom-grid" class="d-flex flex-wrap gap-2" aria-label="Custom test patterns"></div>
+        <p class="text-muted small mt-2 mb-0">Pin your own media from its tile menu ("Add to test patterns").</p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Keep</button>
@@ -19,7 +21,6 @@
           hx-post="/api/stop"
           hx-swap="none"
         >
-        >
           Hide Test
         </button>
       </div>
@@ -28,12 +29,40 @@
 </div>
 
 <script>
+  var testPatternsLoaded = false;
   document.addEventListener("click", function (e) {
     var btn = e.target.closest("[data-test-open]");
     if (!btn) return;
-    htmx.ajax("POST", "/api/test", { target: btn, swap: "none" }).then(function () {
-      bootstrap.Modal.getOrCreateInstance(document.getElementById("testModal")).show();
-    });
+    // Opening Tests shows the picker; it does NOT auto-play SMPTE (the
+    // transport's TV button still fires the default pattern directly).
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("testModal")).show();
+    if (!testPatternsLoaded) {
+      testPatternsLoaded = true;
+      var grid = document.getElementById("test-pattern-grid");
+      var custom = document.getElementById("test-custom-grid");
+      fetch("/api/testpatterns").then(function (r) { return r.json(); }).then(function (data) {
+        data.builtin.forEach(function (p) {
+          var b = document.createElement("button");
+          b.type = "button"; b.className = "btn btn-sm btn-outline-secondary";
+          b.textContent = p.label;
+          b.onclick = function () {
+            htmx.ajax("POST", "/api/test/" + encodeURIComponent(p.name), {swap: "none"});
+          };
+          grid.appendChild(b);
+        });
+        (data.custom || []).forEach(function (name) {
+          var b = document.createElement("button");
+          b.type = "button"; b.className = "btn btn-sm btn-outline-primary";
+          b.textContent = name;
+          b.title = "Play this media as a test pattern";
+          b.onclick = function () {
+            htmx.ajax("POST", "/api/play/" + encodeURIComponent(name), {swap: "none"});
+          };
+          custom.appendChild(b);
+        });
+        if (!(data.custom || []).length) custom.hidden = true;
+      });
+    }
   });
 </script>
 

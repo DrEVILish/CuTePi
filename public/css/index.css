@@ -1,5 +1,2 @@
-@import "/css/comp/dropzone.css";
-@import "/css/comp/cuesheet.css";
-@import "/css/comp/mediapool.css";
-@import "/css/comp/layout.css";
-@import "/css/comp/themes.css";
+/* Component styles load as stamped <link> tags in header.html (assetStamp
+   busts their cache); this file only exists as the cascade entry point. */

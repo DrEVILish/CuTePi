@@ -1,92 +1,88 @@
 {{ define "cuesheet.html" }}
 
 <div id="cuesheet">
-  <h2>Cuesheet</h2>
+  <!-- Keyboard trigger plumbing: the global keydown handler fires these
+       custom events; each div maps one key to its endpoint. -->
   <div id="ArrowDown" hx-trigger="ArrowDown" hx-post="/api/cue/next" hx-target="#cuesheet" hx-swap="outerHTML"></div>
   <div id="ArrowUp" hx-trigger="ArrowUp" hx-post="/api/cue/prev" hx-target="#cuesheet" hx-swap="outerHTML"></div>
+  <div id="ArrowRight" hx-trigger="arrowRight" hx-post="/api/group/selected/open" hx-target="#cuesheet" hx-swap="outerHTML"></div>
+  <div id="ArrowLeft" hx-trigger="arrowLeft" hx-post="/api/group/selected/close" hx-target="#cuesheet" hx-swap="outerHTML"></div>
   <div id="spaceBar" hx-trigger="spaceBar" hx-post="/api/cue/selected/play" hx-swap="none"></div>
-  <div class="d-flex justify-content-end mb-1">
-    <button type="button" class="btn btn-sm btn-outline-secondary" hx-post="/api/group/add?name=New%20Group" hx-target="#cuesheet" hx-swap="outerHTML" title="Add a cue group" aria-label="Add a cue group">
-      <i class="bi bi-folder-plus"></i>&nbsp;Add group
-    </button>
-  </div>
-  <table class="table table-dark table-striped table-sm align-middle">
+    <table class="table table-dark table-striped table-sm align-middle">
     <thead>
       <tr>
         <th scope="col" class="col-type" title="Media type"></th>
-        <th scope="col" class="col-cue-num" title="Cue number">Cue No</th>
-        <th scope="col" data-column-resize="cueName">Cue Name<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
-        <th scope="col" data-column-resize="preWait">Cue Pre-Wait<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
-        <th scope="col" data-column-resize="cueDur">Cue Duration<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
-        <th scope="col" data-column-resize="postWait">Cue Post-Wait<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
+        <th scope="col" class="col-cue-num" title="Cue number">Number</th>
+        <th scope="col" data-column-resize="cueName">Name<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
+        <th scope="col" data-column-resize="preWait">PreWait<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
+        <th scope="col" data-column-resize="cueDur">Duration<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
+        <th scope="col" data-column-resize="postWait">PostWait<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
       </tr>
     </thead>
     <tbody>
       {{ range .Rows }}
         {{ if .Group }}
-        <tr class="cue-group-header" data-group-id="{{ .Group.GroupID }}" data-group-collapsed="{{ .Group.Collapse }}">
+        <tr class="cue-group-header{{ if .Selected }} table-warning{{ end }}{{ if .Group.Collapse }} cue-gcollapsed{{ end }}" data-group-id="{{ .Group.GroupID }}" data-group-collapsed="{{ .Group.Collapse }}"
+          data-cue-color="{{ .Group.Color }}" data-cue-name="{{ .Group.Name }}"
+          style="--depth: {{ .Depth }};{{ if .Group.Color }} --cue-accent: {{ .Group.Color }};{{ end }}"
+          draggable="true"
+          hx-trigger="click delay:250ms[!justEdited()]" hx-post="/api/group/{{ .Group.GroupID }}/select" hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML"
+          aria-label="Group {{ .Group.Name }}">
           <td class="cue-type" title="{{ if .Group.Slideshow }}Slideshow group{{ else }}Cue group{{ end }}">
             <i class="bi {{ if .Group.Slideshow }}bi-images{{ else }}bi-folder-fill{{ end }}"></i>
           </td>
-          <td colspan="5">
+          <td class="cue-num col-group-num">
             <span class="cue-group-toggle" role="button" tabindex="0" title="Collapse / expand"
-              hx-post="/api/group/{{ .Group.GroupID }}/collapse" hx-target="#cuesheet" hx-swap="outerHTML">
+              hx-post="/api/group/{{ .Group.GroupID }}/collapse" hx-target="#cuesheet" hx-swap="outerHTML"
+              hx-on:click="event.stopPropagation()">
               <i class="bi {{ if .Group.Collapse }}bi-chevron-right{{ else }}bi-chevron-down{{ end }}"></i>
             </span>
-            <span class="cue-group-name" title="{{ .Group.Name }}">{{ .Group.Name }}</span>
-            <span class="text-muted small ms-2" id="cue-group-members-{{ .Group.GroupID }}">{{ len .Cues }} cue{{ if ne (len .Cues) 1 }}s{{ end }}</span>
-            <span class="btn-group btn-group-sm ms-2">
-              <button type="button" class="btn btn-outline-secondary btn-sm" title="Play this group"
-                hx-post="/api/group/{{ .Group.GroupID }}/play" hx-swap="none" aria-label="Play group {{ .Group.Name }}">
-                <i class="bi bi-play-fill"></i>
-              </button>
-              <button type="button" class="btn btn-outline-secondary btn-sm" title="Group inspector"
-                hx-get="/api/group/{{ .Group.GroupID }}/inspector" hx-target="#cueinspector-collapse" hx-swap="innerHTML" aria-label="Group inspector {{ .Group.Name }}">
-                <i class="bi bi-sliders"></i>
-              </button>
-              <button type="button" class="btn btn-outline-secondary btn-sm" title="Delete group"
-                hx-delete="/api/group/{{ .Group.GroupID }}" hx-confirm="Delete this group? Its cues return to the top level." hx-target="#cuesheet" hx-swap="outerHTML" aria-label="Delete group {{ .Group.Name }}">
-                <i class="bi bi-trash"></i>
-              </button>
+            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/group/{{ .Group.GroupID }}/edit/cueNum" hx-swap="outerHTML">{{ .Group.CueNum }}</span>
+          </td>
+          <td colspan="4">
+            <span class="cue-group-select" role="button" tabindex="0" title="Select this group (double-click the name to rename)">
+              <span class="cue-group-name cue-inline-edit" title="{{ .Group.Name }}"
+                hx-target="this"
+                hx-trigger="dblclick" hx-post="/api/group/{{ .Group.GroupID }}/edit/name"
+                hx-swap="outerHTML" aria-label="Edit group name {{ .Group.Name }}">{{ .Group.Name }}</span>
             </span>
+            <span class="text-muted small ms-2" id="cue-group-members-{{ .Group.GroupID }}">{{ .MemberCount }} cue{{ if ne .MemberCount 1 }}s{{ end }}</span>
           </td>
         </tr>
-        {{ end }}
-        {{ if or (not .Group) (not .Group.Collapse) }}
-        {{ range .Cues }}
-        <tr class="cue{{ if .Selected }} table-warning{{ end }}{{ if ne .Parent 0 }} cue-in-group{{ end }}" {{ if .Color }}style="--cue-accent: {{ .Color }}"{{ end }} data-cue-pos="{{ .CuePos }}" data-cue-auto-continue="{{ .AutoContinue }}" data-cue-color="{{ .Color }}" data-cue-fade-action="{{ .FadeAction }}" data-cue-fade-out="{{ .FadeOut }}" data-cue-missing="{{ .Missing }}" data-cue-group="{{ .Parent }}" draggable="true"
-          {{ if not .Selected }}hx-trigger="click" hx-post="/api/cue/{{ .CuePos }}" hx-target="#cuesheet" hx-swap="outerHTML"{{ end }}>
-          <td class="cue-type" title="{{ .Mimetype }}">
-            <i class="bi {{ typeIcon .MediaType }}"></i>
-            {{ if .Missing }}<i class="bi bi-exclamation-triangle-fill text-warning" title="Source file missing from disk"></i>{{ end }}
+        {{ else }}
+        <tr class="cue{{ if .Cue.Selected }} table-warning{{ end }}{{ if .Cue.InSelection }} table-warning{{ end }}{{ if .Cue.Playing }} cue-playing{{ end }}{{ if ne .Cue.Parent 0 }} cue-in-group{{ end }}{{ if .FirstInGroup }} cue-gfirst{{ end }}{{ if .LastInGroup }} cue-glast{{ end }}" style="--depth: {{ .Depth }};{{ if .Cue.Color }} --cue-accent: {{ .Cue.Color }};{{ end }}{{ if .GroupColor }} --group-accent: {{ .GroupColor }};{{ end }}" data-cue-pos="{{ .Cue.CuePos }}" data-cue-auto-continue="{{ .Cue.AutoContinue }}" data-cue-color="{{ .Cue.Color }}" data-cue-fade-action="{{ .Cue.FadeAction }}" data-cue-fade-out="{{ .Cue.FadeOut }}" data-cue-missing="{{ .Cue.Missing }}" data-cue-result="{{ .Cue.LastResult }}" data-cue-sel="{{ if .Cue.InSelection }}1{{ else }}0{{ end }}" data-cue-group="{{ .Cue.Parent }}" draggable="true"
+          hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML" {{ if not .Cue.Selected }}hx-trigger="click delay:250ms[!justEdited()]" hx-post="/api/cue/{{ .Cue.CuePos }}"{{ end }}>
+          <td class="cue-type" title="{{ .Cue.Mimetype }}">
+            <i class="bi {{ typeIcon .Cue.MediaType }}"></i>
+            {{ if .Cue.Missing }}<i class="bi bi-exclamation-triangle-fill text-warning" title="Source file missing from disk"></i>{{ end }}
+            {{ if eq .Cue.LastResult 2 }}<i class="bi bi-x-octagon-fill cue-result-error" title="Last play failed"></i>{{ end }}
           </td>
           <td class="cue-num">
-            <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/cueNum" hx-swap="outerHTML">{{ .CueNum }}</span>
+            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/cueNum" hx-swap="outerHTML">{{ .Cue.CueNum }}</span>
           </td>
           <td class="cue-name">
-            <span class="cue-colour-swatch" {{ if not .Color }}style="display:none"{{ end }} aria-hidden="true"></span>
-            <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/title" hx-swap="outerHTML">{{ .Title }}</span>
+            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/title" hx-swap="outerHTML">{{ .Cue.Title }}</span>
+            {{ if .Cue.WaitKind }}<span class="cue-wait-pill" title="{{ if eq .Cue.WaitKind "post" }}PostWait{{ else }}PreWait{{ end }} in progress">{{ .Cue.WaitLeftS }}s</span>{{ end }}
           </td>
           <td>
-            <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/preWait" hx-swap="outerHTML">{{ .PreWaitFmt }}</span>
+            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/preWait" hx-swap="outerHTML">{{ .Cue.PreWaitFmt }}</span>
           </td>
           <td>
-            <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/cueDuration" hx-swap="outerHTML">{{ .CueDurationFmt }}</span>
+            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/cueDuration" hx-swap="outerHTML">{{ .Cue.CueDurationFmt }}</span>
           </td>
           <td>
-            <span hx-trigger="dblclick" hx-post="/api/cue/{{ .CuePos }}/edit/postWait" hx-swap="outerHTML">{{ .PostWaitFmt }}</span>
+            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/postWait" hx-swap="outerHTML">{{ .Cue.PostWaitFmt }}</span>
           </td>
         </tr>
-        {{ if .Playing }}
-        <tr class="cue-progress" data-cue-pos="{{ .CuePos }}">
+        {{ if .Cue.Playing }}
+        <tr class="cue-progress" data-cue-pos="{{ .Cue.CuePos }}">
           <td colspan="6">
-            <div class="cue-progress-bar" data-pos="{{ .PlayPos }}" data-dur="{{ .PlayDur }}" role="progressbar" tabindex="0"
-                 title="{{ displayTime .PlayPos }} of {{ displayTime .PlayDur }}">
-              <div class="cue-progress-fill" style="width: {{ progressPct .PlayPos .PlayDur }}%"></div>
+            <div class="cue-progress-bar" data-pos="{{ .Cue.PlayPos }}" data-dur="{{ .Cue.PlayDur }}" role="progressbar" tabindex="0"
+                 title="{{ displayTime .Cue.PlayPos }} of {{ displayTime .Cue.PlayDur }}">
+              <div class="cue-progress-fill" style="width: {{ progressPct .Cue.PlayPos .Cue.PlayDur }}%"></div>
             </div>
           </td>
         </tr>
-        {{ end }}
         {{ end }}
         {{ end }}
       {{ end }}

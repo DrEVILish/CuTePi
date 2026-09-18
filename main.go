@@ -6,10 +6,8 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -47,8 +45,15 @@ func main() {
 	// One-time scan flags media whose source files are missing on disk; cues
 	// and pool tiles then surface a warning (see the Missing flag).
 	ctp.MarkMissingFiles()
+	// Repair dangling group references left by older builds (parents
+	// pointing at deleted groups, missing indices). Membership itself is
+	// never judged — only broken references.
+	if err := ctp.HealSheet(); err != nil {
+		log.Printf("CuTePi: sheet heal: %v", err)
+	}
 
 	go worker.RunThumbnailWorker(2 * time.Second)
+	go routes.RunScheduler()
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)
@@ -59,24 +64,12 @@ func main() {
 	// in-memory .CTP parse.
 	r.Use(routes.LimitBody())
 
-	extendedFuncs := map[string]any{
-		"contains":    strings.Contains,
-		"hasPrefix":   strings.HasPrefix,
-		"hasSuffix":   strings.HasSuffix,
-		"formatTime":  ctp.FormatTime,
-		"urlPath":     url.PathEscape,
-		"typeIcon":    routes.TypeIcon,
-		"displayTime": routes.DisplayTime,
-		"progressPct": routes.ProgressPct,
-		"div":         func(a, b int) int { return a / b },
-	}
-
-	// Load templates with FunctionMap
-	r.SetHTMLTemplate(template.Must(template.New("").Funcs(extendedFuncs).ParseGlob("templates/*")))
+	// Single template function map (routes.TemplateFuncs): server renders and
+	// tests parse the same templates, so the map must be identical in both.
+	r.SetHTMLTemplate(template.Must(template.New("").Funcs(routes.TemplateFuncs()).ParseGlob("templates/*")))
 
 	index := r.Group("/")
 	api := r.Group("/api")
-	install := r.Group("/install")
 	upload := r.Group("/upload")
 	youtube := r.Group("/youtube")
 
@@ -87,7 +80,6 @@ func main() {
 		routes.Groups(api)
 		routes.Show(api)
 		routes.Logs(api)
-		routes.Install(install)
 		routes.Upload(upload)
 		routes.Youtube(youtube)
 	}

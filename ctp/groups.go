@@ -1,10 +1,9 @@
 package ctp
 
 import (
-	"database/sql"
+	"strconv"
 	"fmt"
 	"log"
-	"strconv"
 )
 
 // Group is a cue_group row: a visual folder that holds cues (via
@@ -21,22 +20,37 @@ type Group struct {
 	Loop          bool   `db:"loop"`
 	FadeMS        int    `db:"fade_ms"`
 	DurationMS    int    `db:"duration_ms"`
+	CueNum        string `db:"cue_num"`
+	Color         string `db:"color"`
+	AnchorPos     int    `db:"anchor_pos"` // legacy: pre-sheet_index empty-group anchor
+	SheetIndex    float64 `db:"sheet_index"` // header position in the visual sequence (§4)
 }
 
 // CreateGroup inserts a new cue group and returns its group_id.
 func CreateGroup(name string, parentGroupID int) (int, error) {
+	if err := ValidateGroupParent(0, parentGroupID); err != nil {
+		return 0, err
+	}
 	if name == "" {
 		name = "New Group"
 	}
+	// Place the new group at the end of the visual sequence so it doesn't
+	// truncate existing groups' spans (which end at the next same-or-shallower
+	// depth header). Use max existing sheet_index + step.
+	var maxIdx float64
+	_ = db.Get(&maxIdx, `SELECT COALESCE(MAX(sheet_index), 0) FROM (
+		SELECT sheet_index FROM cuesheet
+		UNION ALL
+		SELECT sheet_index FROM cue_group
+	)`)
 	res, err := db.Exec(`
-		INSERT INTO cue_group (name, parent_group_id) VALUES (?, ?)
-	`, name, parentGroupID)
+		INSERT INTO cue_group (name, parent_group_id, sheet_index) VALUES (?, ?, ?)
+	`, name, parentGroupID, maxIdx+sheetIndexStep)
 	if err != nil {
 		log.Printf("Error creating cue group: %v", err)
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
-	// Collapse state is presentation, but the cuesheet render needs it now.
 	bumpCuesheetVersion()
 	return int(id), nil
 }
@@ -63,17 +77,65 @@ func GetGroup(id int) (Group, error) {
 
 // UpdateGroup persists every editable group field in one call.
 func UpdateGroup(g Group) error {
+	if err := ValidateGroupParent(g.GroupID, g.ParentGroupID); err != nil {
+		return err
+	}
 	_, err := db.Exec(`
 		UPDATE cue_group SET name = ?, parent_group_id = ?, collapse = ?,
-			slideshow = ?, shuffle = ?, loop = ?, fade_ms = ?, duration_ms = ?
+			slideshow = ?, shuffle = ?, loop = ?, fade_ms = ?, duration_ms = ?,
+			cue_num = ?, color = ?
 		WHERE group_id = ?
 	`, g.Name, g.ParentGroupID, boolInt(g.Collapse), boolInt(g.Slideshow),
-		boolInt(g.Shuffle), boolInt(g.Loop), g.FadeMS, g.DurationMS, g.GroupID)
+		boolInt(g.Shuffle), boolInt(g.Loop), g.FadeMS, g.DurationMS,
+		g.CueNum, g.Color, g.GroupID)
 	if err != nil {
 		log.Printf("Error updating cue group: %v", err)
 		return err
 	}
 	bumpCuesheetVersion()
+	return nil
+}
+
+// DeleteGroupWithCues deletes a group block (§5.4): its member cues, any
+// nested subgroups and every cue inside them — folders disappear WITH
+// their contents, QLab-style.
+func DeleteGroupWithCues(id int) error {
+	var all []Group
+	if err := db.Select(&all, `SELECT * FROM cue_group`); err != nil {
+		return err
+	}
+	ids := []int{}
+	var collect func(int)
+	collect = func(gid int) {
+		ids = append(ids, gid)
+		for _, g := range all {
+			if g.ParentGroupID == gid {
+				collect(g.GroupID)
+			}
+		}
+	}
+	collect(id)
+	// Member cues first, then the headers.
+	for _, gid := range ids {
+		if _, err := db.Exec(`DELETE FROM cuesheet WHERE parent = ?`, gid); err != nil {
+			return err
+		}
+	}
+	for _, gid := range ids {
+		if _, err := db.Exec(`DELETE FROM cue_group WHERE group_id = ?`, gid); err != nil {
+			return err
+		}
+	}
+	// A deleted group must not stay selected (dangling inspector refetch).
+	if sel, err := SelectedGroupPos(); err == nil && sel == id {
+		_ = setSelectedCuePos(0)
+	}
+	bumpCuesheetVersion()
+	// Reindex to the compact sequence after the removals (bulk rule).
+	var byIndex []int
+	if err := db.Select(&byIndex, `SELECT cuePos FROM cuesheet ORDER BY sheet_index, cuePos`); err == nil && len(byIndex) > 0 {
+		_, _ = ReorderCues(byIndex)
+	}
 	return nil
 }
 
@@ -88,14 +150,154 @@ func DeleteGroup(id int) error {
 		log.Printf("Error releasing group members: %v", err)
 		return err
 	}
+	// Release nested subgroups too, or they keep a dangling parent_group_id
+	// pointing at the deleted group.
+	if _, err := db.Exec(`UPDATE cue_group SET parent_group_id = 0 WHERE parent_group_id = ?`, id); err != nil {
+		log.Printf("Error releasing nested subgroups: %v", err)
+		return err
+	}
+	// A deleted group must not stay selected: the persisted selection would
+	// keep the inspector refetching /api/group/<id>/inspector forever (404
+	// toasts on every cuesheet re-render). Reset to no-selection.
+	if sel, err := SelectedGroupPos(); err == nil && sel == id {
+		_ = setSelectedCuePos(0)
+	}
 	bumpCuesheetVersion()
 	return nil
 }
 
-// SetCueGroup assigns cue at cuePos to group (0 = top level) and moves it
-// right after the group's current last member, keeping membership contiguous
-// in flat cuePos order (the render model groups by contiguous runs).
+// MoveGroup relocates a group's block (header + whole span, nested rows
+// included) before the target row or group header. The dragged block moves
+// as one; membership follows the sequence.
+func MoveGroup(groupID int, beforeCuePos int, beforeGroup int) error {
+	if beforeGroup != 0 {
+		return SheetDrop(nil, groupID, "group", beforeGroup, false, false, false, nil, 0)
+	}
+	return SheetDrop(nil, groupID, "cue", beforeCuePos, false, false, false, nil, 0)
+}
+
+// ValidateGroupParent rejects nesting that would corrupt the sheet: a group
+// cannot be its own ancestor, and the tree is capped so indentation stays
+// legible. 0 is a valid parent (top level).
+func ValidateGroupParent(groupID, parentID int) error {
+	if parentID == 0 {
+		return nil
+	}
+	if parentID == groupID {
+		return fmt.Errorf("a group cannot be its own parent")
+	}
+	depth := 0
+	seen := map[int]bool{groupID: true}
+	// Walk newParent's ancestors: reaching groupID would create a cycle.
+	for at := parentID; at != 0; {
+		if seen[at] {
+			return fmt.Errorf("group nesting would create a cycle")
+		}
+		seen[at] = true
+		g, err := GetGroup(at)
+		if err != nil {
+			return fmt.Errorf("parent group %d not found", at)
+		}
+		at = g.ParentGroupID
+		depth++
+		if depth > 8 {
+			return fmt.Errorf("group nesting is limited to 8 levels")
+		}
+	}
+	return nil
+}
+
+
+// groupDescendants maps every group id to the set of its PROPER descendants
+// (children, grandchildren, ...), cycle-proof.
+func groupDescendants() map[int]map[int]bool {
+	var groups []Group
+	_ = db.Select(&groups, `SELECT group_id, parent_group_id FROM cue_group`)
+	children := make(map[int][]int, len(groups))
+	for _, g := range groups {
+		children[g.ParentGroupID] = append(children[g.ParentGroupID], g.GroupID)
+	}
+	out := make(map[int]map[int]bool, len(groups))
+	var walk func(int, map[int]bool)
+	walk = func(id int, seen map[int]bool) {
+		for _, ch := range children[id] {
+			if seen[ch] {
+				continue
+			}
+			seen[ch] = true
+			walk(ch, seen)
+		}
+	}
+	for _, g := range groups {
+		seen := make(map[int]bool)
+		walk(g.GroupID, seen)
+		out[g.GroupID] = seen
+	}
+	return out
+}
+
+// GroupCuePositions lists a group's direct member cue positions in sheet
+// (visual) order.
+func GroupCuePositions(groupID int) ([]int, error) {
+	var positions []int
+	if err := db.Select(&positions, `
+		SELECT c.cuePos FROM cuesheet c
+		JOIN cue_group g ON c.parent = g.group_id
+		WHERE c.parent = ?
+		ORDER BY c.sheet_index, c.cuePos
+	`, groupID); err != nil {
+		return nil, err
+	}
+	return positions, nil
+}
+
+// GroupSubtreeCues lists every cue position inside a group's subtree (the
+// group's own members plus all descendant groups' members) in visual order.
+// Slideshows and group-relative operations work on the subtree.
+func GroupSubtreeCues(groupID int) ([]int, error) {
+	desc := groupDescendants()
+	ids := []int{groupID}
+	for k := range desc[groupID] {
+		ids = append(ids, k)
+	}
+	ph := ""
+	args := []interface{}{}
+	for i, id := range ids {
+		if i > 0 {
+			ph += ","
+		}
+		ph += "?"
+		args = append(args, id)
+	}
+	var positions []int
+	if err := db.Select(&positions, `
+		SELECT cuePos FROM cuesheet WHERE parent IN (`+ph+`)
+			ORDER BY sheet_index, cuePos`, args...); err != nil {
+		return nil, err
+	}
+	return positions, nil
+}
+
+// ReparentCue is the legacy single-cue membership setter (context menu /
+// older clients): place the cue at the end of the target group's span.
+// Membership in the sequence model is positional, so "join" = move.
+func ReparentCue(newPos int, parentGroupID int) error {
+		return SheetDrop([]int{newPos}, 0, "group", parentGroupID, true, false, false, nil, 0)
+}
+
+// SetCueGroup assigns cue at cuePos to group (0 = top level) — the join
+// gesture; the cue lands after the group's span end.
 func SetCueGroup(cuePos string, groupID int) error {
+	return setCueGroup(cuePos, groupID, false)
+}
+
+// SetCueGroupFirst is the expanded-header drop (§5.4): the cue becomes the
+// group's FIRST member (right after the header).
+func SetCueGroupFirst(cuePos string, groupID int) error {
+	return setCueGroup(cuePos, groupID, true)
+}
+
+func setCueGroup(cuePos string, groupID int, first bool) error {
 	pos, err := strconv.Atoi(cuePos)
 	if err != nil {
 		return err
@@ -104,246 +306,17 @@ func SetCueGroup(cuePos string, groupID int) error {
 		if _, err := GetGroup(groupID); err != nil {
 			return err
 		}
+		return SheetDrop([]int{pos}, 0, "group", groupID, true, false, first, nil, 0)
 	}
-
-	// Remember the group's last member so the cue lands after it (this runs
-	// before the reorder; ReorderCues reindexes 1..N and remaps the selection).
-	var lastMember sql.NullInt64
-	if err := db.Get(&lastMember, `
-		SELECT MAX(cuePos) FROM cuesheet WHERE parent = ? AND cuePos != ?
-	`, groupID, pos); err != nil {
-		return err
-	}
-	insertAfter := int(lastMember.Int64)
-
-	_, err = db.Exec(`UPDATE cuesheet SET parent = ? WHERE cuePos = ?`, groupID, pos)
-	if err != nil {
-		log.Printf("Error setting cue group: %v", err)
-		return err
-	}
-
-	var order []int
-	if err := db.Select(&order, `SELECT cuePos FROM cuesheet ORDER BY cuePos`); err != nil {
-		return err
-	}
-	// Rebuild the flat order with pos removed, then reinsert it right after
-	// the group's last member (front of the list when the group is empty).
-	without := make([]int, 0, len(order)-1)
-	for _, p := range order {
-		if p != pos {
-			without = append(without, p)
-		}
-	}
-	idx := -1
-	for i, p := range without {
-		if p == insertAfter {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		idx = 0
-	} else {
-		idx++ // land AFTER the group's last member, not before it
-	}
-	reordered := make([]int, 0, len(order))
-	reordered = append(reordered, without[:idx]...)
-	reordered = append(reordered, pos)
-	reordered = append(reordered, without[idx:]...)
-	return ReorderCues(reordered)
-}
-
-// GroupCuePositions lists a group's member cue positions in sheet order.
-func GroupCuePositions(groupID int) ([]int, error) {
-	var positions []int
-	if err := db.Select(&positions, `
-		SELECT cuePos FROM cuesheet WHERE parent = ? ORDER BY cuePos
-	`, groupID); err != nil {
-		return nil, err
-	}
-	return positions, nil
-}
-
-// normalizeGroupMembership maintains the render invariant: every group's
-// members are contiguous in flat cuePos order. buildSheetRows clusters by
-// contiguous parent runs, so without this a drag-reorder or move that lands
-// a cue inside/away from a group would render the group as two same-named
-// folders sharing one identity, or leave a stray indented row behind.
-//
-// Membership follows placement, and the caller says which cues moved:
-//   - a moved cue placed between two members of one group joins it (dropping
-//     into a folder's span), whatever its previous group;
-//   - a moved member that no longer touches its own group leaves it — unless
-//     it is that group's only member (a lone member IS the group; dragging
-//     it around relocates the group rather than deleting it);
-//   - bystander runs are only touched by the structural pass: a run
-//     sandwiched between two runs of one group joins it, and a group run
-//     separated from its group leaves (edge fragment first, when the group
-//     was split in two).
-//
-// Runs to fixpoint, since joins can cascade ([G 0 0 G] needs two rounds).
-func normalizeGroupMembership(moved ...int) error {
-	// Phase 1: operator intent, applied to the moved cues' NEW positions.
-	// Joins run to fixpoint before any leave: in a swap, the cue placed
-	// between two members of a group must join before the displaced cue is
-	// judged "separated" (its neighbour may just have joined).
-	join := func() (bool, error) {
-		changed := false
-		for _, mpos := range moved {
-			if mpos <= 0 {
-				continue
-			}
-			var p int
-			if err := db.Get(&p, `SELECT parent FROM cuesheet WHERE cuePos = ?`, mpos); err != nil {
-				return false, err
-			}
-			prevP, nextP := -1, -1 // -1 = no neighbour on that side
-			var v int
-			if err := db.Get(&v, `SELECT parent FROM cuesheet WHERE cuePos < ? ORDER BY cuePos DESC LIMIT 1`, mpos); err == nil {
-				prevP = v
-			}
-			if err := db.Get(&v, `SELECT parent FROM cuesheet WHERE cuePos > ? ORDER BY cuePos LIMIT 1`, mpos); err == nil {
-				nextP = v
-			}
-			if prevP > 0 && prevP == nextP && p != prevP {
-				if _, err := db.Exec(`UPDATE cuesheet SET parent = ? WHERE cuePos = ?`, prevP, mpos); err != nil {
-					return false, err
-				}
-				changed = true
-			}
-		}
-		return changed, nil
-	}
-	for {
-		c, err := join()
-		if err != nil {
-			return err
-		}
-		if !c {
-			break
-		}
-	}
-	for _, mpos := range moved {
-		if mpos <= 0 {
-			continue
-		}
-		var p int
-		if err := db.Get(&p, `SELECT parent FROM cuesheet WHERE cuePos = ?`, mpos); err != nil {
-			return err
-		}
-		prevP, nextP := -1, -1
-		var v int
-		if err := db.Get(&v, `SELECT parent FROM cuesheet WHERE cuePos < ? ORDER BY cuePos DESC LIMIT 1`, mpos); err == nil {
-			prevP = v
-		}
-		if err := db.Get(&v, `SELECT parent FROM cuesheet WHERE cuePos > ? ORDER BY cuePos LIMIT 1`, mpos); err == nil {
-			nextP = v
-		}
-		// Separated from the own group — but a lone member stays: the group
-		// travels with its only cue.
-		if p != 0 && prevP != p && nextP != p {
-			var n int
-			if err := db.Get(&n, `SELECT COUNT(*) FROM cuesheet WHERE parent = ?`, p); err != nil {
-				return err
-			}
-			if n >= 2 {
-				if _, err := db.Exec(`UPDATE cuesheet SET parent = 0 WHERE cuePos = ?`, mpos); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	// Phase 2: structural cleanup to fixpoint (covers bystanders and any
-	// legacy non-contiguous data).
-	for round := 0; ; round++ {
-		if round > 100 {
-			return fmt.Errorf("normalizeGroupMembership: did not converge")
-		}
-		var rows []struct {
-			CuePos int `db:"cuePos"`
-			Parent int `db:"parent"`
-		}
-		if err := db.Select(&rows, `SELECT cuePos, parent FROM cuesheet ORDER BY cuePos`); err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			return nil
-		}
-
-		// Contiguous parent runs.
-		type run struct {
-			start, end int // row indexes, inclusive
-			parent     int
-		}
-		var runs []run
-		for i := range rows {
-			if i == 0 || rows[i].Parent != rows[i-1].Parent {
-				runs = append(runs, run{i, i, rows[i].Parent})
-				continue
-			}
-			runs[len(runs)-1].end = i
-		}
-
-		changed := false
-		apply := func(from, to, parent int) {
-			for i := from; i <= to; i++ {
-				if _, err := db.Exec(`UPDATE cuesheet SET parent = ? WHERE cuePos = ?`, parent, rows[i].CuePos); err != nil {
-					log.Printf("normalizeGroupMembership: update cue %d: %v", rows[i].CuePos, err)
-				}
-			}
-			changed = true
-		}
-
-		// Rule 1 (join) first: a run sandwiched between two runs of one group
-		// belongs to that group, whatever its current parent — the operator
-		// placed it inside the group's span. (Joining merges runs, so this
-		// takes priority over the leave rule below.)
-		for idx, r := range runs {
-			if idx == 0 || idx+1 == len(runs) {
-				continue
-			}
-			prev, next := &runs[idx-1], &runs[idx+1]
-			if prev.parent != 0 && prev.parent == next.parent && r.parent != prev.parent {
-				apply(r.start, r.end, prev.parent)
+	// Top level: drop before the first header (or at the end).
+	beforeKind, beforeID := "", 0
+	if seq, err := loadSheetSequence(); err == nil {
+		for _, item := range seq {
+			if item.Kind == "group" {
+				beforeKind, beforeID = "group", item.GroupID
 				break
 			}
 		}
-		// Rule 2 (leave): a group run separated from the rest of its group.
-		// When the group is split in two, the EDGE fragment is taken to be
-		// the one that was dragged away (dropping a cue at the sheet's head
-		// or tail); a fragment stranded mid-sheet between other groups also
-		// leaves, since it can neither join its neighbours nor teleport back.
-		if !changed {
-			pickIdx := -1
-			for idx, r := range runs {
-				if r.parent == 0 {
-					continue
-				}
-				displaced := false
-				for j, other := range runs {
-					if j != idx && other.parent == r.parent {
-						displaced = true
-						break
-					}
-				}
-				if !displaced {
-					continue
-				}
-				if idx == 0 || idx == len(runs)-1 {
-					pickIdx = idx // edge fragment wins immediately
-					break
-				}
-				if pickIdx == -1 {
-					pickIdx = idx // first mid-sheet candidate as fallback
-				}
-			}
-			if pickIdx != -1 {
-				apply(runs[pickIdx].start, runs[pickIdx].end, 0)
-			}
-		}
-		if !changed {
-			return nil
-		}
 	}
+	return SheetDrop([]int{pos}, 0, beforeKind, beforeID, false, false, false, nil, 0)
 }

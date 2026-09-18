@@ -1,29 +1,52 @@
 {{ define "mediainfo.html" }}
 
-<div id="mediainfo" class="text-center text-light mx-auto">
-  <h5 class="mb-0">Now Playing</h5>
-  {{ if .Filename }}
-    <small>{{ .Filename }} &middot; {{ .Position }} / {{ .Duration }}</small>
-    <div class="d-flex align-items-center justify-content-center gap-2 mt-1">
-      <input
-        type="range"
-        class="ctp-slider ctp-scrubber"
-        id="nowplaying-scrubber"
-        value="{{ .PositionRaw }}"
-        min="0"
-        max="{{ .DurationRaw }}"
-        step="0.05"
-        aria-label="Seek within the clip">
+<!-- Merged header status (§5.2): GO cluster + Now Playing in one
+     version-guarded partial — every render keeps both truthful. -->
+<div id="mediainfo" class="header-status">
+  <div class="go-cluster d-flex align-items-center gap-2">
+    <button type="button" id="go-btn" class="btn btn-go"
+      hx-post="/api/cue/selected/play" hx-target="#cuesheet" hx-swap="outerHTML"
+      title="Fire the selected cue (Space / Enter)" aria-label="GO">
+      GO<i class="bi bi-play-fill"></i>
+    </button>
+    <div class="go-now" {{ if not .GoHasSel }}hidden{{ end }}{{ if .GoColor }} style="border-color: {{ .GoColor }}"{{ end }}>
+      <span class="go-num">{{ if .GoNum }}{{ .GoNum }}{{ else }}&mdash;{{ end }}</span>
+      <span class="go-sep" aria-hidden="true">&middot;</span>
+      <span class="go-title" title="{{ .GoTitle }}">{{ .GoTitle }}</span>
     </div>
-  {{ else }}
+  </div>
+
+  <div class="now-cluster text-center mx-auto">
+    {{ if .Filename }}
+    <div class="now-title">
+      <span class="text-muted small">NOW&nbsp;</span>
+      {{ if .PlayingCueNum }}<span class="go-num">{{ .PlayingCueNum }}</span>{{ end }}
+      <span title="{{ .PlayingCueTitle }}">{{ .PlayingCueTitle }}</span>
+    </div>
+    <div class="d-flex align-items-center gap-2 mt-1">
+      <button type="button" class="btn btn-sm btn-outline-secondary" hx-post="/api/togglePause" hx-swap="none"
+        title="Pause / resume" aria-label="Pause or resume">
+        <i class="bi bi-pause-fill"></i>
+      </button>
+      <input type="range" class="ctp-slider ctp-scrubber flex-grow-1"
+        id="nowplaying-scrubber" value="{{ .PositionRaw }}" min="0" max="{{ .DurationRaw }}" step="0.05"
+        aria-label="Seek within the clip">
+      <small class="text-nowrap" id="now-time" title="{{ .Duration }} total">{{ .Position }} / -<span id="now-remaining" class="remaining-slow">{{ .Remaining }}</span></small>
+    </div>
+    {{ else }}
     <small class="text-muted">Nothing playing</small>
-  {{ end }}
+    {{ end }}
+  </div>
 </div>
 
 <script>
   (function () {
     var root = document.getElementById("nowplaying-scrubber");
     if (!root) return;
+
+    var remEl = document.getElementById("now-remaining");
+    var timeEl = document.getElementById("now-time");
+    var duration = parseFloat(root.max) || 0;
 
     function post(url, data) {
       fetch(url, {
@@ -33,15 +56,41 @@
       });
     }
 
+    // Pulse the remaining time indicator based on time left.
+    var pulseTimer = setInterval(function () {
+      if (!remEl || !timeEl) return;
+      var pos = parseFloat(root.value) || 0;
+      var remSec = Math.max(0, duration - pos);
+      // Update the text (mm:ss)
+      var m = Math.floor(remSec / 60);
+      var s = Math.floor(remSec % 60);
+      remEl.textContent = (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+      // Pulse classes
+      if (remSec <= 10 && remSec > 0) {
+        remEl.classList.add("remaining-fast");
+        remEl.classList.remove("remaining-slow");
+      } else if (remSec <= 30 && remSec > 0) {
+        remEl.classList.add("remaining-slow");
+        remEl.classList.remove("remaining-fast");
+      } else {
+        remEl.classList.remove("remaining-slow", "remaining-fast");
+      }
+    }, 500);
+
     var scrubTimer = null;
     root.addEventListener("input", function () {
       var pos = parseFloat(root.value) || 0;
-      // Send the seek after a short debounce so dragging doesn't flood the
-      // server; the poller skips re-renders while the thumb is :active.
       clearTimeout(scrubTimer);
       scrubTimer = setTimeout(function () {
         post("/api/seek", "position=" + pos);
       }, 120);
+    });
+
+    // Cleanup on htmx swap
+    document.body.addEventListener("htmx:beforeSwap", function (e) {
+      if (e.detail.target?.id === "mediainfo") {
+        clearInterval(pulseTimer);
+      }
     });
   })();
 </script>

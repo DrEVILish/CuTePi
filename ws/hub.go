@@ -42,6 +42,10 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 	c.write.Unlock()
 
 	// Read loop: we don't expect client messages, but reading detects close.
+	// A read deadline evicts the goroutine when a client stalls (dead phone,
+	// half-closed laptop): every 5 minutes of silence returns a deadline error
+	// and breaks out.
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			break
@@ -51,6 +55,14 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 	delete(clients, c)
 	mu.Unlock()
 	_ = conn.Close()
+}
+
+// ClientCount reports how many WebSocket clients are currently connected
+// (header connection-status tooltip).
+func ClientCount() int {
+	mu.Lock()
+	defer mu.Unlock()
+	return len(clients)
 }
 
 // Broadcast notifies all connected clients that server state changed.

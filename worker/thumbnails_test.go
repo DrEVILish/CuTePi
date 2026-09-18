@@ -1,67 +1,13 @@
 package worker
 
 import (
+	"strings"
 	"testing"
-	"time"
 
 	"CuTePi/config"
 	"CuTePi/ctp"
 	"CuTePi/media"
 )
-
-// Regression test: before the failureTracker existed, a persistently
-// failing thumbnail (e.g. a corrupt upload) was retried on every single
-// poll tick forever, spamming ffmpeg failures and burning CPU. The tracker
-// must suppress retries for retryBackoff after a failure, then allow one
-// again once the backoff has elapsed.
-func TestFailureTrackerBacksOffThenRetries(t *testing.T) {
-	f := newFailureTracker()
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	const backoff = 60 * time.Second
-
-	if f.shouldSkip(1, backoff, base) {
-		t.Fatalf("expected no skip before any failure is recorded")
-	}
-
-	f.recordFailure(1, base)
-
-	if !f.shouldSkip(1, backoff, base.Add(1*time.Second)) {
-		t.Fatalf("expected skip immediately after a failure")
-	}
-	if !f.shouldSkip(1, backoff, base.Add(59*time.Second)) {
-		t.Fatalf("expected skip while still within the backoff window")
-	}
-	if f.shouldSkip(1, backoff, base.Add(61*time.Second)) {
-		t.Fatalf("expected retry to be allowed once the backoff window has elapsed")
-	}
-}
-
-func TestFailureTrackerClearAllowsImmediateRetry(t *testing.T) {
-	f := newFailureTracker()
-	now := time.Now()
-	const backoff = 60 * time.Second
-
-	f.recordFailure(2, now)
-	if !f.shouldSkip(2, backoff, now) {
-		t.Fatalf("expected skip right after a failure")
-	}
-
-	f.clear(2)
-	if f.shouldSkip(2, backoff, now) {
-		t.Fatalf("expected no skip immediately after clearing a failure")
-	}
-}
-
-func TestFailureTrackerIsPerMediaID(t *testing.T) {
-	f := newFailureTracker()
-	now := time.Now()
-	const backoff = 60 * time.Second
-
-	f.recordFailure(1, now)
-	if f.shouldSkip(2, backoff, now) {
-		t.Fatalf("failure for media 1 must not affect media 2")
-	}
-}
 
 // TestWaveformFailureClearsFlag is the runnable check for the retry-forever
 // fix: a pending waveform whose file cannot be decoded must have its
@@ -103,4 +49,83 @@ func TestWaveformFailureClearsFlag(t *testing.T) {
 	if len(pending) != 0 {
 		t.Fatalf("waveform_pending not cleared after failure: still %d pending rows", len(pending))
 	}
+}
+
+// TestThumbnailFailureClearsFlag is the runnable check for the thumbnail
+// give-up behavior: when thumbnail generation fails (corrupt or missing
+// file), thumbnail_pending must be cleared so the worker stops
+// re-attempting it on every poll (including after restarts). Operators can
+// always re-request generation via the refresh button.
+func TestThumbnailFailureClearsFlag(t *testing.T) {
+	dir := t.TempDir()
+	config.SetDbLocation(":memory:")
+	config.SetConfigFilePath(dir + "/config.json")
+	config.SetDirsForTesting(dir)
+	if err := ctp.InitDB(); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	if err := ctp.RegisterMedia("missing.mp4", 0, media.Metadata{Mimetype: "video/mp4", Duration: 1}, "missing"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	pending, err := ctp.PendingThumbnails()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("expected 1 pending row, got %d (err=%v)", len(pending), err)
+	}
+	// Clear waveform so only the thumbnail branch fires.
+	if err := ctp.FailWaveform(pending[0].Media_id); err != nil {
+		t.Fatalf("FailWaveform: %v", err)
+	}
+	pending, err = ctp.PendingThumbnails()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("expected 1 thumbnail-pending row, got %d (err=%v)", len(pending), err)
+	}
+	processOne(pending[0])
+	pending, err = ctp.PendingThumbnails()
+	if err != nil {
+		t.Fatalf("PendingThumbnails: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("thumbnail_pending not cleared after failure: still %d pending rows", len(pending))
+	}
+}
+
+// TestWaveformRebuildFlagsLowResOnly covers the comma-count heuristic used to
+// spot pre-resolution-bump envelopes: old fixed-size archives must be flagged
+// for regeneration, already-detailed ones (matching the per-duration target)
+// must be left alone, and never-analysed/empty envelopes must not churn.
+func TestWaveformRebuildFlagsLowResOnly(t *testing.T) {
+	mk := func(wave string, dur float64) ctp.Media {
+		return ctp.Media{Waveform: wave, Duration: dur}
+	}
+	cases := []struct {
+		name string
+		m    ctp.Media
+		want bool
+	}{
+		{"empty (never analysed)", mk("", 120), false},
+		{"old 300-bin archive, long file", mk(jsonFew(300), 600), true},
+		{"old 300-bin archive, short file", mk(jsonFew(300), 2), true},
+		{"built 2000-bin archive", mk(jsonFew(2000), 180), true},
+		{"current resolution, short file", mk(jsonFew(500), 5), false},
+		{"current resolution, capped long file", mk(jsonFew(16000), 600), false},
+		{"corrupt envelope", mk("not-json", 60), true},
+	}
+	for _, c := range cases {
+		if got := needsWaveformRebuild(c.m); got != c.want {
+			t.Errorf("%s: needsWaveformRebuild = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func jsonFew(n int) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString("0.5")
+	}
+	b.WriteByte(']')
+	return b.String()
 }

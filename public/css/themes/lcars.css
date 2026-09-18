@@ -1,0 +1,233 @@
+/* CuTePi portable theme: LCARS
+ * Theme-Name: LCARS
+ * Install: drop this file into <app>/public/css/themes/ and set
+ *   html[data-theme="lcars"] (a ?theme=lcars link or the settings UI does it).
+ * Contract: needs only the --ctp-* tokens below plus common component hooks
+ *   (.btn/.btn-primary/.btn-danger, .form-control/.form-select,
+ *   .table-dark, .navbar, .modal-content, .dropdown-menu).
+ * Section A (portable): tokens + generic elements + component hooks.
+ * Section B (CuTePi): app selectors (#cuesheet, #mediapool, .go-bar, ...).
+ *   Safe to delete section B when moving to another app.
+ */
+
+/* --- Section A: tokens ------------------------------------------------ */
+html[data-theme="lcars"] {
+  --ctp-bg: #000000;
+  --ctp-surface: #0c0c12;
+  --ctp-surface-2: #191926;
+  --ctp-border: #6c79a8;
+  --ctp-text: #dde4ff;
+  --ctp-muted: #8f96c2;
+  --ctp-accent: #ff9900;
+  --ctp-accent-2: #9999cc;
+  --ctp-danger: #cc4444;
+  --ctp-success: #99cc99;
+  --ctp-radius: 1.4rem;
+  --ctp-font: "Trebuchet MS", Verdana, system-ui, sans-serif;
+  --ctp-hairline: #2c2c44;
+  --ctp-flare: #ffcc99;
+  /* LCARS candy bars — extra palette, namespaced so they never collide. */
+  --lcars-peach: #ff9966;
+  --lcars-tan: #ffcc99;
+  --lcars-lavender: #cc99cc;
+  --lcars-sky: #9999ff;
+  --lcars-rose: #cc6699;
+}
+
+/* --- Section A: generic elements -------------------------------------- */
+html[data-theme="lcars"] body {
+  background: #000;
+  color: var(--ctp-text);
+  font-family: var(--ctp-font);
+}
+html[data-theme="lcars"] a { color: var(--lcars-sky); }
+html[data-theme="lcars"] h1, html[data-theme="lcars"] h2,
+html[data-theme="lcars"] h3, html[data-theme="lcars"] h5,
+html[data-theme="lcars"] h6 {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ctp-accent);
+  font-weight: 600;
+}
+
+/* LCARS elbow buttons: pill with one flat end, dark text on candy bars. */
+html[data-theme="lcars"] .btn {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  border-radius: 0 1.2rem 1.2rem 0;
+  border-width: 0;
+  padding: 0.45rem 1.4rem 0.45rem 1.1rem;
+}
+html[data-theme="lcars"] .btn-primary {
+  background: var(--ctp-accent);
+  color: #000;
+}
+html[data-theme="lcars"] .btn-primary:hover {
+  background: var(--lcars-tan);
+  color: #000;
+}
+html[data-theme="lcars"] .btn-outline-primary,
+html[data-theme="lcars"] .btn-outline-secondary {
+  background: var(--lcars-lavender);
+  color: #000;
+}
+html[data-theme="lcars"] .btn-outline-primary:hover,
+html[data-theme="lcars"] .btn-outline-secondary:hover {
+  background: var(--lcars-tan);
+  color: #000;
+}
+html[data-theme="lcars"] .btn-danger,
+html[data-theme="lcars"] .btn-outline-danger {
+  background: var(--ctp-danger);
+  color: #000;
+  font-weight: 700;
+}
+html[data-theme="lcars"] .btn-success { background: var(--lcars-sky); color: #000; }
+html[data-theme="lcars"] .btn-secondary { background: var(--ctp-accent-2); color: #000; }
+html[data-theme="lcars"] .btn-sm { padding: 0.2rem 1rem 0.2rem 0.8rem; }
+
+/* LCARS top rail: black bar over a thick orange rule with an elbow corner. */
+html[data-theme="lcars"] .navbar {
+  background: #000 !important;
+  border-bottom: 0.35rem solid var(--ctp-accent);
+  border-bottom-left-radius: 2.2rem;
+  padding-left: 1.2rem;
+}
+html[data-theme="lcars"] .navbar-brand { color: var(--ctp-accent) !important; }
+
+/* LCARS panels: black slabs edged by a candy side-rail, elbow top corner. */
+html[data-theme="lcars"] .app-pane,
+html[data-theme="lcars"] .inspector-panel,
+html[data-theme="lcars"] .card,
+html[data-theme="lcars"] .modal-content {
+  background-color: var(--ctp-surface);
+  border: none;
+  border-left: 0.5rem solid var(--ctp-accent);
+  border-top-right-radius: 1.6rem;
+}
+html[data-theme="lcars"] .modal-content { border-top: 0.35rem solid var(--lcars-lavender); }
+
+/* Pill data segments: table headers read as orange bars, black text. */
+html[data-theme="lcars"] .table-dark thead th {
+  background: var(--ctp-accent);
+  color: #000;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: none;
+}
+html[data-theme="lcars"] .table-dark thead th:first-child { border-radius: 1rem 0 0 1rem; }
+html[data-theme="lcars"] .table-dark thead th:last-child { border-radius: 0 1rem 1rem 0; }
+html[data-theme="lcars"] .table-dark { color: var(--ctp-text); }
+html[data-theme="lcars"] .table-warning {
+  --bs-table-bg: var(--lcars-lavender);
+  background-color: var(--lcars-lavender) !important;
+  color: #000;
+}
+
+/* Pill inputs on black. */
+html[data-theme="lcars"] .form-control,
+html[data-theme="lcars"] .form-select,
+html[data-theme="lcars"] input[type="text"],
+html[data-theme="lcars"] input[type="number"],
+html[data-theme="lcars"] input[type="password"],
+html[data-theme="lcars"] select {
+  background-color: #000;
+  color: var(--ctp-text);
+  border: 1px solid var(--ctp-accent);
+  border-radius: 1.2rem;
+}
+html[data-theme="lcars"] .form-control:focus,
+html[data-theme="lcars"] .form-select:focus {
+  border-color: var(--lcars-tan);
+  box-shadow: 0 0 0 0.2rem rgba(255, 153, 0, 0.25);
+  background-color: #000;
+  color: var(--ctp-text);
+}
+html[data-theme="lcars"] .form-label,
+html[data-theme="lcars"] .small,
+html[data-theme="lcars"] .insp-field-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+html[data-theme="lcars"] .form-check-input { border-color: var(--ctp-accent); }
+html[data-theme="lcars"] .form-check-input:checked {
+  background-color: var(--ctp-accent);
+  border-color: var(--ctp-accent);
+}
+html[data-theme="lcars"] :focus-visible { outline-color: var(--ctp-accent); }
+
+html[data-theme="lcars"] .dropdown-menu {
+  background-color: var(--ctp-surface-2);
+  border: 1px solid var(--ctp-accent);
+  border-radius: 1rem;
+}
+html[data-theme="lcars"] .dropdown-item { color: var(--ctp-text); }
+html[data-theme="lcars"] .dropdown-item:hover {
+  background-color: var(--ctp-accent);
+  color: #000;
+}
+html[data-theme="lcars"] .progress {
+  background-color: var(--ctp-surface-2);
+  border-radius: 1rem;
+}
+html[data-theme="lcars"] .progress-bar { background: var(--lcars-sky); }
+
+/* --- Section B: CuTePi flourishes ------------------------------------- */
+/* GO bar: the fire control is the biggest orange elbow on the sheet. */
+html[data-theme="lcars"] .go-bar {
+  background: #000;
+  border: none;
+  border-bottom: 0.3rem solid var(--ctp-accent);
+  border-radius: 0 0 0 1.4rem;
+}
+html[data-theme="lcars"] .btn-go {
+  background: transparent;
+  color: var(--ctp-accent);
+  border: 2px solid var(--ctp-accent);
+  border-radius: 0 1.4rem 1.4rem 0;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  box-shadow: none;
+}
+html[data-theme="lcars"] .btn-go:hover {
+  background: rgba(255, 153, 0, 0.15);
+  color: var(--ctp-accent);
+  border-color: var(--ctp-accent);
+  box-shadow:
+    0 0 0 3px rgba(255, 153, 0, 0.35),
+    0 0 22px 4px rgba(255, 153, 0, 0.55);
+}
+html[data-theme="lcars"] .go-num { color: var(--ctp-accent); }
+html[data-theme="lcars"] .go-next-num { color: var(--lcars-lavender); }
+
+/* Group headers render as lavender bars; members sit under a sky rail. */
+html[data-theme="lcars"] .cue-group-header { background: rgba(204, 153, 204, 0.14) !important; }
+html[data-theme="lcars"] .cue-group-header .cue-group-name { color: var(--lcars-lavender); }
+html[data-theme="lcars"] #cuesheet tr.cue-in-group td,
+html[data-theme="lcars"] #cuesheet tr.cue-group-header td {
+  border-left-color: var(--lcars-sky);
+  border-right-color: var(--lcars-sky);
+}
+html[data-theme="lcars"] #cuesheet tr.cue-playing > td { animation: none; }
+html[data-theme="lcars"] .cue-progress-fill { background: var(--lcars-sky); }
+
+/* Inspector tabs become candy elbows; the active one is orange. */
+html[data-theme="lcars"] .inspector-tabs .nav-link {
+  border-radius: 1rem 1rem 0 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ctp-muted);
+}
+html[data-theme="lcars"] .inspector-tabs .nav-link.active {
+  background: var(--ctp-accent);
+  color: #000;
+}
+html[data-theme="lcars"] #cueinspector-panel { box-shadow: none; }
+html[data-theme="lcars"] .trim-marker { background: var(--ctp-accent); }
+html[data-theme="lcars"] .trim-marker::before { border-top-color: var(--ctp-accent); }
+html[data-theme="lcars"] .trim-marker-out { background: var(--lcars-sky); }
+html[data-theme="lcars"] .trim-marker-out::before { border-top-color: var(--lcars-sky); }
+html[data-theme="lcars"] .insp-swatch input:checked + .insp-swatch-fill {
+  box-shadow: 0 0 0 0.2rem rgba(255, 153, 0, 0.5);
+}

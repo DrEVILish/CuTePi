@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type Config struct {
@@ -27,7 +28,14 @@ type Config struct {
 	} `json:"thumbnails"`
 }
 
-var conf Config
+// conf is read by the auth middleware and every settings getter on their own
+// goroutine while settings POSTs (and the app handlers) mutate it, so all
+// access rides an RWMutex. SaveConfig/LoadConfig take the lock themselves;
+// setters mutate under Lock, then persist via SaveConfig.
+var (
+	conf   Config
+	confMu sync.RWMutex
+)
 
 const (
 	defaultPort         = 3000
@@ -111,6 +119,14 @@ func init() {
 // (and the config file's and db file's parent directories) if they are missing,
 // so first-run on a clean system doesn't panic on file creation.
 func ensureDirs() error {
+	confMu.RLock()
+	defer confMu.RUnlock()
+	return ensureDirsLocked()
+}
+
+// ensureDirsLocked is the lock-free body of ensureDirs; callers already
+// holding confMu (SaveConfig snapshots under RLock) use it directly.
+func ensureDirsLocked() error {
 	dirs := []string{
 		conf.WorkingDir,
 		filepath.Dir(conf.ConfigFilePath),
@@ -136,18 +152,13 @@ func LoadConfig() {
 		println("Error creating CuTePi directories:", err.Error())
 	}
 
-	// Read config file if it exists
+	confMu.Lock()
 	file, err := os.Open(conf.ConfigFilePath)
 	if err == nil {
-		defer file.Close()
-		decoder := json.NewDecoder(file)
-		err = decoder.Decode(&conf)
-		if err != nil {
-			println("Error reading config file:", err.Error())
+		if derr := json.NewDecoder(file).Decode(&conf); derr != nil {
+			println("Error reading config file:", derr.Error())
 		}
-	} else {
-		// Create the config file with default values if it doesn't exist
-		SaveConfig()
+		file.Close()
 	}
 
 	// Environment overrides are intentional launch-time settings. Reapply them
@@ -167,24 +178,41 @@ func LoadConfig() {
 	if conf.PollInterval < minPollInterval {
 		conf.PollInterval = minPollInterval
 	}
+	confMu.Unlock()
+
+	// First run: create the config file with default values (SaveConfig takes
+	// the lock itself).
+	if err != nil {
+		SaveConfig()
+	}
 }
 
 // Save configuration to the config file. Atomic: encode to a temp sidecar
 // and rename over the real file, so a crash or power-cut mid-write cannot
 // leave a truncated config.json (which LoadConfig would silently replace
-// with defaults, losing the operator's port/auth settings).
+// with defaults, losing the operator's port/auth settings). Snapshot and
+// encode under RLock so a concurrent setter can't partially update fields
+// mid-write; the temp+rename stays safe under concurrent saves (unique temp
+// per call, last rename wins).
 func SaveConfig() {
-	if err := ensureDirs(); err != nil {
+	confMu.RLock()
+	defer confMu.RUnlock()
+
+	if err := ensureDirsLocked(); err != nil {
 		println("Error creating CuTePi directories:", err.Error())
 		return
 	}
 
-	tmpPath := conf.ConfigFilePath + ".tmp"
-	file, err := os.Create(tmpPath)
+	// Unique temp sidecar per call (os.CreateTemp): concurrent SaveConfigs
+	// (a settings POST can refire several setters) each write their own file,
+	// and the last atomic rename wins instead of two writers clobbering a
+	// single shared ".tmp".
+	file, err := os.CreateTemp(filepath.Dir(conf.ConfigFilePath), "config-*.tmp")
 	if err != nil {
 		println("Error creating config file:", err.Error())
 		return
 	}
+	tmpPath := file.Name()
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	err = encoder.Encode(conf)
@@ -204,23 +232,31 @@ func SaveConfig() {
 
 // Port returns the port value from the configuration
 func Port() int {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.Port
 }
 
 // PollInterval returns the client poll interval, in milliseconds.
 func PollInterval() int {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.PollInterval
 }
 
 // Loop returns whether newly loaded clips loop back to the start on end-of-
 // stream by default.
 func Loop() bool {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.Loop
 }
 
 // SetLoop updates and persists the default loop-on-end behaviour.
 func SetLoop(loop bool) {
+	confMu.Lock()
 	conf.Loop = loop
+	confMu.Unlock()
 	SaveConfig()
 }
 
@@ -229,7 +265,9 @@ func SetPollInterval(ms int) error {
 	if ms < minPollInterval {
 		return fmt.Errorf("poll interval must be >= %dms", minPollInterval)
 	}
+	confMu.Lock()
 	conf.PollInterval = ms
+	confMu.Unlock()
 	SaveConfig()
 	return nil
 }
@@ -240,7 +278,9 @@ func SetPort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
+	confMu.Lock()
 	conf.Port = port
+	confMu.Unlock()
 	SaveConfig()
 	return nil
 }
@@ -248,40 +288,54 @@ func SetPort(port int) error {
 // AuthPassword returns the operator password; empty means auth is disabled
 // (the default for a trusted show LAN).
 func AuthPassword() string {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.AuthPassword
 }
 
 // HasAuth reports whether the operator password is enabled.
 func HasAuth() bool {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.AuthPassword != ""
 }
 
 // SetAuthPassword sets (non-empty) or clears (empty) the operator password,
 // persisting it. Applies to new requests immediately.
 func SetAuthPassword(pw string) {
+	confMu.Lock()
 	conf.AuthPassword = strings.TrimSpace(pw)
+	confMu.Unlock()
 	SaveConfig()
 }
 
 // WorkingDir returns the working directory from the configuration
 func WorkingDir() string {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.WorkingDir
 }
 
 // DbLocation returns the database location from the configuration
 func DbLocation() string {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.Db.Location
 }
 
 // SetDbLocation overrides the DB location in memory without persisting it.
 // Intended for tests that want an isolated (e.g. in-memory sqlite) database.
 func SetDbLocation(path string) {
+	confMu.Lock()
+	defer confMu.Unlock()
 	conf.Db.Location = path
 }
 
 // SetConfigFilePath overrides where SaveConfig/LoadConfig read and write,
 // so tests don't touch the real user config file.
 func SetConfigFilePath(path string) {
+	confMu.Lock()
+	defer confMu.Unlock()
 	conf.ConfigFilePath = path
 }
 
@@ -289,6 +343,8 @@ func SetConfigFilePath(path string) {
 // thumbnails) so SaveConfig's ensureDirs doesn't touch the real user
 // filesystem during tests.
 func SetDirsForTesting(dir string) {
+	confMu.Lock()
+	defer confMu.Unlock()
 	conf.WorkingDir = dir
 	conf.Media.Location = dir
 	conf.Thumbnails.Location = dir
@@ -296,10 +352,14 @@ func SetDirsForTesting(dir string) {
 
 // MediaLocation returns the media location from the configuration
 func MediaLocation() string {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.Media.Location
 }
 
 // ThumbnailLocation returns the thumbnail storage location from the configuration
 func ThumbnailLocation() string {
+	confMu.RLock()
+	defer confMu.RUnlock()
 	return conf.Thumbnails.Location
 }

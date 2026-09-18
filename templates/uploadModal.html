@@ -10,13 +10,7 @@
         </a>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
-      <form
-        id="dropform"
-        hx-encoding="multipart/form-data"
-        hx-post="/upload"
-        hx-swap="outerHTML"
-        hx-target="#mediapool"
-      >
+      <form id="dropform">
         <div class="modal-body">
           <div id="dropzone">
             <input
@@ -26,16 +20,17 @@
               multiple
               hidden
             />
-            <label for="media">
+            <label for="file-input">
               <strong>Choose a file</strong>
               <span class="dragndrop"> or drag it here</span>
             </label>
           </div>
           <ul id="filelist"></ul>
-          <progress id="progress" value="0" max="100"></progress>
+          <progress id="progress" value="0" max="100" hidden></progress>
+          <div id="upload-status" class="small" role="status" aria-live="polite"></div>
         </div>
         <div class="modal-footer">
-          <button id="upload" class="btn btn-primary">Upload</button>
+          <button id="upload" class="btn btn-primary" type="submit">Upload</button>
         </div>
       </form>
     </div>

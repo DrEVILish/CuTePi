@@ -2,7 +2,6 @@ package routes
 
 import (
 	"archive/zip"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,20 +17,24 @@ import (
 	"CuTePi/config"
 	"CuTePi/ctp"
 	"CuTePi/logs"
-	"CuTePi/media"
 )
 
 // manifestVersion is the format version of cutepi.json inside a .CTP file.
-const manifestVersion = 1
+// v2 adds the groups table (membership, nesting, slideshow settings); v1
+// manifests import fine — their cue Parent values resolve to nothing and
+// every cue lands top-level, matching pre-group behaviour.
+const manifestVersion = 2
 
-// showManifest is cutepi.json: every cue plus the audit trail and the
-// exported selection, so import can rebuild order, selection, and history.
+// showManifest is cutepi.json: every cue and group plus the audit trail and
+// the exported selection, so import can rebuild order, structure, selection,
+// and history.
 type showManifest struct {
 	App            string            `json:"app"`
 	Version        int               `json:"version"`
 	ExportedAt     string            `json:"exportedAt"`
 	SelectedCuePos int               `json:"selectedCuePos"`
 	Cues           []ctp.ExportCue   `json:"cues"`
+	Groups         []ctp.ExportGroup `json:"groups,omitempty"`
 	Audit          []logs.AuditEvent `json:"audit"`
 }
 
@@ -49,23 +52,30 @@ func Show(rg *gin.RouterGroup) {
 			c.String(http.StatusBadRequest, "the cuesheet is empty - nothing to export")
 			return
 		}
-
-		var buf bytes.Buffer
-		if err := writeShowZip(&buf, showManifest{
-			App:            "CuTePi",
-			Version:        manifestVersion,
-			ExportedAt:     time.Now().Format(time.RFC3339),
-			SelectedCuePos: selected,
-			Cues:           cues,
-			Audit:          logs.AuditTrail(),
-		}); err != nil {
+		groups, err := ctp.ExportGroups()
+		if err != nil {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		filename := fmt.Sprintf("show-%s.ctp", time.Now().Format("20060102-150405"))
+		c.Header("Content-Type", "application/zip")
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-		c.Data(http.StatusOK, "application/zip", buf.Bytes())
+		// Stream the zip to the response instead of building it in a buffer:
+		// media is copied entry-at-a-time, so a multi-GB show never sits in
+		// RAM on the Pi.
+		if err := writeShowZip(c.Writer, showManifest{
+			App:            "CuTePi",
+			Version:        manifestVersion,
+			ExportedAt:     time.Now().Format(time.RFC3339),
+			SelectedCuePos: selected,
+			Cues:           cues,
+			Groups:         groups,
+			Audit:          logs.AuditTrail(),
+		}); err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
 	})
 
 	rg.POST("/show/import", func(c *gin.Context) {
@@ -87,11 +97,35 @@ func Show(rg *gin.RouterGroup) {
 		}
 		defer src.Close()
 
-		manifest, mediaFiles, err := parseShowZip(src)
+		// Spool the uploaded .CTP to a temp file rather than io.ReadAll: the
+		// archive is streamed out of it entry-at-a-time below, so a big show
+		// never occupies RAM on the Pi.
+		tmpZip, err := os.CreateTemp("", "cutepi-show-*.ctp")
 		if err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		zipPath := tmpZip.Name()
+		if _, err := io.Copy(tmpZip, src); err != nil {
+			tmpZip.Close()
+			os.Remove(zipPath)
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := tmpZip.Close(); err != nil {
+			os.Remove(zipPath)
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer os.Remove(zipPath)
+
+		manifest, mediaFiles, err := parseShowZip(zipPath)
+		if err != nil {
+			removeMediaTemps(mediaFiles)
 			c.String(http.StatusUnprocessableEntity, "invalid .CTP file: "+err.Error())
 			return
 		}
+		defer removeMediaTemps(mediaFiles)
 		if manifest.Version > manifestVersion {
 			c.String(http.StatusUnprocessableEntity, fmt.Sprintf("unsupported .CTP version %d (this build reads up to %d)", manifest.Version, manifestVersion))
 			return
@@ -115,36 +149,46 @@ func Show(rg *gin.RouterGroup) {
 		}
 
 		// Import media BEFORE touching the cuesheet: a media write/probe
-		// failure must not cost the operator their current show.
+		// failure must not cost the operator their current show. The .CTP's
+		// media entries were streamed to temp files during parsing; commit
+		// here moves each into place (copy+rename so it works across
+		// filesystems; /tmp and the media dir may be different mounts).
 		mediaDir := config.MediaLocation()
 		for _, cue := range manifest.Cues {
 			if registered[cue.Filename] {
 				continue
 			}
-			data, ok := mediaFiles[cue.Filename]
+			tmp, ok := mediaFiles[cue.Filename]
 			if !ok {
 				continue
 			}
 			dest := filepath.Join(mediaDir, cue.Filename)
-			if err := os.WriteFile(dest, data, 0o644); err != nil {
+			if err := moveIntoPlace(tmp, dest); err != nil {
 				c.String(http.StatusInternalServerError, err.Error())
 				return
 			}
-			meta, err := media.Probe(dest)
-			if err != nil {
-				os.Remove(dest)
-				c.String(http.StatusUnprocessableEntity, fmt.Sprintf("imported media %q failed probing: %v", cue.Filename, err))
+			delete(mediaFiles, cue.Filename) // committed; skip deferred cleanup
+			if err := importMedia(cue.Filename, dest); err != nil {
+				c.String(http.StatusUnprocessableEntity, fmt.Sprintf("imported media %q failed: %v", cue.Filename, err))
 				return
 			}
-			if err := ctp.RegisterMedia(cue.Filename, int64(len(data)), meta, strings.TrimSuffix(cue.Filename, filepath.Ext(cue.Filename))); err != nil {
-				c.String(http.StatusInternalServerError, err.Error())
-				return
-			}
+		}
+
+		// Groups are created before cues: cue Parent values reference group
+		// ids, and the manifest's ids are remapped through the returned map
+		// (imported groups get fresh local ids). v1 manifests have no groups,
+		// leaving the map empty and every cue top-level — matching pre-group
+		// behaviour.
+		idMap, err := ctp.ImportGroups(manifest.Groups)
+		if err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
 		}
 
 		appendedOffset := 0
 		if mode == "append" {
 			if count, err := ctp.CueCount(); err != nil {
+				ctp.ImportGroupsRollback(idMap)
 				c.String(http.StatusInternalServerError, err.Error())
 				return
 			} else {
@@ -152,12 +196,15 @@ func Show(rg *gin.RouterGroup) {
 			}
 		}
 
-		// Only after the media is in place: overwrite clears the sheet, then
-		// cues are inserted. If an insert fails mid-way, the cues inserted so
-		// far are rolled back so the sheet is left empty-but-consistent (with
-		// an audit note) instead of a random half-show.
+		// Only after the media is in place: overwrite clears the sheet (and
+		// any local groups — stale folders would otherwise survive the
+		// import), then cues are inserted. If an insert fails mid-way, the
+		// cues and groups inserted so far are rolled back so the sheet is
+		// left empty-but-consistent (with an audit note) instead of a random
+		// half-show.
 		if mode == "overwrite" {
 			if err := ctp.ClearCueSheet(); err != nil {
+				ctp.ImportGroupsRollback(idMap)
 				c.String(http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -165,11 +212,17 @@ func Show(rg *gin.RouterGroup) {
 		}
 		inserted := 0
 		for _, cue := range manifest.Cues {
+			cue.Parent = idMap[cue.Parent]
 			if _, err := ctp.AddCueFull(cue); err != nil {
-			for pos := inserted; pos >= 1; pos-- {
-				_ = ctp.RemoveCue(strconv.Itoa(pos)) // best-effort rollback of this import's inserts
-			}
-			logs.Emit(logs.AuditEvent{Event: "import_failed", Pos: 0, Title: fmt.Sprintf("after %d cues: %v", inserted, err)})
+				// Roll back only this import's inserts. AddCueFull always
+				// appends (it ignores the exported cuePos), so in append mode
+				// the inserts sit at appendedOffset+1.., never at the top of
+				// the operator's existing sheet.
+				for pos := appendedOffset + inserted; pos > appendedOffset; pos-- {
+					_ = ctp.RemoveCue(strconv.Itoa(pos)) // best-effort rollback of this import's inserts
+				}
+				ctp.ImportGroupsRollback(idMap)
+				logs.Emit(logs.AuditEvent{Event: "import_failed", Pos: 0, Title: fmt.Sprintf("after %d cues: %v", inserted, err)})
 				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 				return
 			}
@@ -199,9 +252,11 @@ func registeredFilenames(cues []ctp.ExportCue) (map[string]bool, error) {
 	return reg, nil
 }
 
-// writeShowZip builds the .CTP archive in-memory: cutepi.json plus one entry
-// per referenced media file that exists on disk (missing sources are skipped;
-// import rejects cues whose source is absent).
+// writeShowZip writes the .CTP archive to dst, streaming: cutepi.json plus
+// one entry per referenced media file that exists on disk (missing sources
+// are skipped; import rejects cues whose source is absent). dst is usually
+// the HTTP response writer, so peak memory is one archive entry's buffer
+// rather than the whole show.
 func writeShowZip(dst io.Writer, m showManifest) error {
 	zw := zip.NewWriter(dst)
 
@@ -215,17 +270,20 @@ func writeShowZip(dst io.Writer, m showManifest) error {
 
 	for _, cue := range m.Cues {
 		path := filepath.Join(config.MediaLocation(), cue.Filename)
-		data, err := os.ReadFile(path)
+		f, err := os.Open(path)
 		if err != nil {
 			continue
 		}
 		w, err := zw.Create("media/" + cue.Filename)
 		if err != nil {
+			f.Close()
 			return err
 		}
-		if _, err := w.Write(data); err != nil {
+		if _, err := io.Copy(w, f); err != nil {
+			f.Close()
 			return err
 		}
+		f.Close()
 	}
 	return zw.Close()
 }
@@ -242,22 +300,56 @@ func safeMediaName(name string) bool {
 	return filepath.Base(name) == name && name != "." && name != ".."
 }
 
-// parseShowZip reads cutepi.json and the media/ entries from a .CTP archive.
-// Entry names are validated with safeMediaName before they ever reach
-// filepath.Join on import.
-func parseShowZip(src io.Reader) (showManifest, map[string][]byte, error) {
-	data, err := io.ReadAll(src)
+// removeMediaTemps best-effort removes the temp files parseShowZip created,
+// ignoring ones already committed (renamed into place or removed).
+func removeMediaTemps(mediaFiles map[string]string) {
+	for _, tmp := range mediaFiles {
+		if tmp != "" {
+			os.Remove(tmp)
+		}
+	}
+}
+
+// moveIntoPlace moves tmp to dest, copying across filesystems when rename
+// can't (os.CreateTemp spools to /tmp, which may be a different mount than
+// the media dir). Always streams, never buffers the file in RAM.
+func moveIntoPlace(tmp, dest string) error {
+	if err := os.Rename(tmp, dest); err == nil {
+		return nil
+	}
+	in, err := os.Open(tmp)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Remove(tmp)
+}
+
+// parseShowZip reads cutepi.json and the media/ entries from a .CTP archive
+// on disk. Entry names are validated with safeMediaName before they ever
+// reach filepath.Join on import. Media content is streamed out to temp files
+// (returned as filename -> temp path), so a multi-GB show never sits in RAM.
+func parseShowZip(path string) (showManifest, map[string]string, error) {
+	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return showManifest{}, nil, err
 	}
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return showManifest{}, nil, err
-	}
+	defer zr.Close()
 
 	var m showManifest
-	mediaFiles := map[string][]byte{}
-	for _, f := range reader.File {
+	mediaFiles := map[string]string{}
+	for _, f := range zr.File {
 		switch {
 		case f.Name == "cutepi.json":
 			rc, err := f.Open()
@@ -278,19 +370,32 @@ func parseShowZip(src io.Reader) (showManifest, map[string][]byte, error) {
 			if err != nil {
 				return showManifest{}, nil, err
 			}
-			content, err := io.ReadAll(rc)
-			rc.Close()
+			tmp, err := os.CreateTemp("", "cutepi-media-*")
 			if err != nil {
+				rc.Close()
 				return showManifest{}, nil, err
 			}
-			mediaFiles[name] = content
+			if _, err := io.Copy(tmp, rc); err != nil {
+				rc.Close()
+				tmp.Close()
+				os.Remove(tmp.Name())
+				return showManifest{}, nil, err
+			}
+			rc.Close()
+			if err := tmp.Close(); err != nil {
+				os.Remove(tmp.Name())
+				return showManifest{}, nil, err
+			}
+			mediaFiles[name] = tmp.Name()
 		}
 	}
 	if m.Version == 0 {
+		removeMediaTemps(mediaFiles)
 		return showManifest{}, nil, fmt.Errorf("missing cutepi.json manifest")
 	}
 	for _, cue := range m.Cues {
 		if !safeMediaName(cue.Filename) {
+			removeMediaTemps(mediaFiles)
 			return showManifest{}, nil, fmt.Errorf("manifest cue %q has an unsafe media filename %q", cue.Title, cue.Filename)
 		}
 	}

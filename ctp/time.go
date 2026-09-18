@@ -3,6 +3,7 @@ package ctp
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -41,7 +42,7 @@ func ParseTime(s string) (int, error) {
 	// Bare number (no colons) -> treat as seconds
 	if !strings.Contains(s, ":") {
 		sec, err := strconv.ParseFloat(s, 64)
-		if err != nil {
+		if err != nil || math.IsNaN(sec) || math.IsInf(sec, 0) || sec < 0 || sec*1000 >= float64(math.MaxInt) {
 			return 0, TimeParseError{Input: s, Msg: "not a valid number of seconds"}
 		}
 		return int(sec * 1000), nil
@@ -61,7 +62,10 @@ func ParseTime(s string) (int, error) {
 		if err != nil {
 			return 0, TimeParseError{Input: s, Msg: "hours/minutes/seconds must be integers"}
 		}
-		totalSec = float64(h*3600 + m*60) + ssec
+		if h < 0 || m < 0 || ssec < 0 {
+			return 0, ErrInvalidTimeFormat
+		}
+		totalSec = float64(h)*3600 + float64(m)*60 + ssec
 	case 2: // mm:ss[.ms]
 		m, err1 := strconv.Atoi(parts[0])
 		ssec, err2 := strconv.ParseFloat(parts[1], 64)
@@ -69,7 +73,10 @@ func ParseTime(s string) (int, error) {
 		if err != nil {
 			return 0, TimeParseError{Input: s, Msg: "minutes/seconds must be integers"}
 		}
-		totalSec = float64(m*60) + ssec
+		if m < 0 || ssec < 0 {
+			return 0, ErrInvalidTimeFormat
+		}
+		totalSec = float64(m)*60 + ssec
 	case 1: // ss[.ms] with trailing colon? shouldn't happen due to Contains(":"), but handle
 		ssec, err := strconv.ParseFloat(parts[0], 64)
 		if err != nil {
@@ -80,6 +87,9 @@ func ParseTime(s string) (int, error) {
 		return 0, TimeParseError{Input: s, Msg: "too many colon-separated parts"}
 	}
 
+	if math.IsNaN(totalSec) || math.IsInf(totalSec, 0) || totalSec < 0 || totalSec*1000 >= float64(math.MaxInt) {
+		return 0, ErrInvalidTimeFormat
+	}
 	return int(totalSec * 1000), nil
 }
 

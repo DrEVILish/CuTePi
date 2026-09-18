@@ -102,8 +102,11 @@ func TestGeneratePeaks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratePeaks: %v", err)
 	}
-	if len(peaks) != 300 {
-		t.Fatalf("expected 300 peak buckets, got %d", len(peaks))
+	// A 4s file resolves to ~10ms per bucket (400 samples at the 100 Hz
+	// analysis rate), clamped up to the 500-bin floor - not the fixed 300
+	// of the pre-zoom-resolution build.
+	if len(peaks) != 500 {
+		t.Fatalf("expected 500 peak buckets, got %d", len(peaks))
 	}
 	var max, min float64 = 0, 1
 	for _, p := range peaks {
@@ -126,6 +129,85 @@ func TestGeneratePeaks(t *testing.T) {
 }
 
 var b [2]byte
+
+// TestGeneratePeaksWindow is the runnable check for the zoom-depth waveform
+// probe: a windowed request returns exactly the requested bucket count, its
+// values stay 0..1, and a window from a silent region of the fixture yields
+// a silent (all-zero) envelope while the loud region resolves near 1.0.
+func TestGeneratePeaksWindow(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available; skipping windowed peaks test")
+	}
+	const sampleRate = 8000
+	seconds := 4
+	data := make([]byte, 0, seconds*sampleRate*2)
+	for s := 0; s < seconds*sampleRate; s++ {
+		var v int16
+		if s < 2*sampleRate {
+			v = int16(6000 * sine(s, sampleRate, 440))
+		}
+		binary.LittleEndian.PutUint16(b[:], uint16(v))
+		data = append(data, b[:]...)
+	}
+	path := filepath.Join(t.TempDir(), "window.wav")
+	if err := os.WriteFile(path, buildWav(data, sampleRate), 0o644); err != nil {
+		t.Fatalf("writing test wav: %v", err)
+	}
+
+	maxOf := func(peaks []float64) (max, min float64) {
+		max, min = 0, 1
+		for _, p := range peaks {
+			if p < 0 || p > 1 {
+				t.Fatalf("peak %v out of normalized range 0..1", p)
+			}
+			if p > max {
+				max = p
+			}
+			if p < min {
+				min = p
+			}
+		}
+		return max, min
+	}
+
+	// The whole file, resolved to a requested 200 buckets.
+	whole, err := GeneratePeaksWindow(path, 0, 4, 200)
+	if err != nil {
+		t.Fatalf("GeneratePeaksWindow(full): %v", err)
+	}
+	if len(whole) != 200 {
+		t.Fatalf("expected 200 buckets, got %d", len(whole))
+	}
+	if max, min := maxOf(whole); max < 0.95 || min > 0.05 {
+		t.Fatalf("whole-file envelope wrong (max %v, min %v)", max, min)
+	}
+
+	// A sub-second window inside the silent half must stay silent.
+	silent, err := GeneratePeaksWindow(path, 3.5, 4, 200)
+	if err != nil {
+		t.Fatalf("GeneratePeaksWindow(silent): %v", err)
+	}
+	if max, _ := maxOf(silent); max > 0.02 {
+		t.Fatalf("silent window should resolve near 0, max=%v", max)
+	}
+
+	// A window inside the loud half resolves its tone.
+	loud, err := GeneratePeaksWindow(path, 0.5, 1.5, 240)
+	if err != nil {
+		t.Fatalf("GeneratePeaksWindow(loud): %v", err)
+	}
+	if len(loud) != 240 {
+		t.Fatalf("expected 240 buckets, got %d", len(loud))
+	}
+	if max, _ := maxOf(loud); max < 0.95 {
+		t.Fatalf("loud window should normalize near 1, max=%v", max)
+	}
+
+	// Degenerate windows are rejected, not probed.
+	if _, err := GeneratePeaksWindow(path, 4, 4, 50); err == nil {
+		t.Fatalf("GeneratePeaksWindow(empty window) = nil error, want an error")
+	}
+}
 
 // TestVerifyPlayable is the runnable check for the import-time playability
 // probe: a real decodable audio file passes, a garbage/non-media file is

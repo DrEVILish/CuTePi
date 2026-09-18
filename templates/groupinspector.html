@@ -1,5 +1,8 @@
 {{ define "groupinspector.html" }}
-<div class="groupinspector-body" data-group-id="{{ .Group.GroupID }}">
+<!-- Same wrapper id as the cue inspector: the auto-refresh logic refetches
+     GET /api/cue/inspector into #cueinspector-body, so rendering a group
+     here must still present that id or every later cue re-render dies. -->
+<div id="cueinspector-body" class="groupinspector-body" data-group-id="{{ .Group.GroupID }}">
   <div class="d-flex justify-content-between align-items-center mb-2">
     <h6 class="mb-0"><i class="bi {{ if .Group.Slideshow }}bi-images{{ else }}bi-folder-fill{{ end }} me-1"></i>Group</h6>
     <span class="text-muted small">{{ .MemberCount }} cue{{ if ne .MemberCount 1 }}s{{ end }}</span>
@@ -12,11 +15,45 @@
   </div>
   {{ end }}
 
-  <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML" class="vstack gap-2">
-    <div class="row g-2">
-      <div class="col">
+  <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML"
+    class="gi-form vstack gap-2" style="max-width: 42rem;">
+    <div class="d-flex gap-2">
+      <div class="flex-grow-1">
         <label class="form-label small mb-0" for="group-name">Name</label>
         <input id="group-name" name="name" class="form-control form-control-sm" value="{{ .Group.Name }}">
+      </div>
+      <div>
+        <label class="form-label small mb-0" for="group-cuenum">Number</label>
+        <input id="group-cuenum" name="cueNum" class="form-control form-control-sm" style="width:6em" maxlength="24"
+          value="{{ .Group.CueNum }}">
+      </div>
+    </div>
+    <div class="row g-2">
+      <div class="col">
+        <label class="form-label small mb-1" for="group-swatches">Colour</label>
+        <div class="insp-swatches" id="group-swatches" role="radiogroup" aria-label="Group colour">
+          <label class="insp-swatch insp-swatch-none" title="None">
+            <input type="radio" name="color" value="" aria-label="No colour" {{ if not $.Group.Color }}checked{{ end }}>
+            <span class="insp-swatch-fill"></span>
+          </label>
+          {{ range .Palette }}
+          <label class="insp-swatch" style="--swatch: {{ .Hex }}" title="{{ .Name }}">
+            <input type="radio" name="color" value="{{ .Hex }}" aria-label="{{ .Name }}" {{ if eq $.Group.Color .Hex }}checked{{ end }}>
+            <span class="insp-swatch-fill"></span>
+          </label>
+          {{ end }}
+        </div>
+      </div>
+      <div class="col-auto align-self-end">
+        <label class="form-label small mb-1 d-block" for="group-parent" style="visibility:hidden">.</label>
+        <select id="group-parent" name="parentGroupID" class="form-select form-select-sm" aria-label="Parent group" title="Nest this group inside another">
+          <option value="0" {{ if not .Group.ParentGroupID }}selected{{ end }}>Top level</option>
+          {{ range .OtherGroups }}
+          {{ if ne .GroupID $.Group.GroupID }}
+          <option value="{{ .GroupID }}" {{ if eq $.Group.ParentGroupID .GroupID }}selected{{ end }}{{ if .IsDescendantOf }}disabled{{ end }}>{{ .Indent }}{{ .Name }}</option>
+          {{ end }}
+          {{ end }}
+        </select>
       </div>
     </div>
     <div class="d-flex flex-wrap gap-2">
@@ -33,15 +70,15 @@
         <label class="form-check-label small" for="group-loop">Loop</label>
       </div>
     </div>
-    <div class="row g-2 {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
-      <div class="col">
+    <div class="d-flex gap-2 {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
+      <div>
         <label class="form-label small mb-0" for="group-duration">Hold each image (s)</label>
-        <input id="group-duration" name="durationMs" type="number" min="0" step="100" class="form-control form-control-sm"
+        <input id="group-duration" name="durationSecs" type="number" min="0" step="1" class="form-control form-control-sm" style="width:8em"
           value="{{ if .Group.DurationMS }}{{ div .Group.DurationMS 1000 }}{{ end }}" placeholder="5">
       </div>
-      <div class="col">
+      <div>
         <label class="form-label small mb-0" for="group-fade">Fade between (s)</label>
-        <input id="group-fade" name="fadeMs" type="number" min="0" step="100" class="form-control form-control-sm"
+        <input id="group-fade" name="fadeSecs" type="number" min="0" step="1" class="form-control form-control-sm" style="width:8em"
           value="{{ if .Group.FadeMS }}{{ div .Group.FadeMS 1000 }}{{ end }}" placeholder="0">
       </div>
     </div>

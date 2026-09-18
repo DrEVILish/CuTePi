@@ -56,6 +56,7 @@ func InitDB() error {
 			waveform TEXT NOT NULL DEFAULT '',
 			waveform_pending BOOLEAN NOT NULL DEFAULT 0,
 			missing BOOLEAN NOT NULL DEFAULT 0,
+			loudness_gain REAL NOT NULL DEFAULT 0,
 			date_added DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
 	`)
@@ -69,6 +70,8 @@ func InitDB() error {
 		{"waveform", "TEXT NOT NULL DEFAULT ''"}, // NOT NULL so sqlx can scan into Go string
 		{"waveform_pending", "BOOLEAN NOT NULL DEFAULT 0"},
 		{"missing", "BOOLEAN NOT NULL DEFAULT 0"},
+		{"media_meta", "TEXT NOT NULL DEFAULT ''"}, // JSON MediaInfo for the inspector's Media tab
+		{"loudness_gain", "REAL NOT NULL DEFAULT 0"},
 	}
 	for _, nc := range mpNewCols {
 		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE mediapool ADD COLUMN %s %s;`, nc.name, nc.ddl))
@@ -119,6 +122,20 @@ func InitDB() error {
 			fadeAction TEXT NOT NULL DEFAULT 'peers',
 			autoContinue INTEGER NOT NULL DEFAULT 0,
 			volume REAL NOT NULL DEFAULT 0, -- per-cue master gain in dB; 0 = 0dB
+			fadeIn INTEGER NOT NULL DEFAULT 0,
+			rate REAL NOT NULL DEFAULT 1,
+			balance REAL NOT NULL DEFAULT 0,
+			mute INTEGER NOT NULL DEFAULT 0,
+	last_result INTEGER NOT NULL DEFAULT 0, -- 0 never, 1 ok, 2 error
+	last_played_at INTEGER NOT NULL DEFAULT 0, -- unix ms
+		fade_curve TEXT NOT NULL DEFAULT 'linear', -- linear|smooth|log|exp
+		fit_mode TEXT NOT NULL DEFAULT 'fit', -- fit|stretch frame fitting
+		rotation INTEGER NOT NULL DEFAULT 0, -- 0|90|180|270 clockwise degrees
+		flip TEXT NOT NULL DEFAULT 'none', -- none|h|v mirror
+		schedule_enabled INTEGER NOT NULL DEFAULT 0, -- boolean: whether scheduling is enabled
+	schedule_days INTEGER NOT NULL DEFAULT 0,    -- bitmask: bit0=Mon, bit1=Tue, ..., bit6=Sun
+	schedule_time_ms INTEGER NOT NULL DEFAULT 0, -- time of day in milliseconds since 00:00:00
+	sheet_index REAL NOT NULL DEFAULT 0, -- visual+playback order (§4)
 			FOREIGN KEY (media_id)
 				REFERENCES mediapool (media_id)
 					ON UPDATE CASCADE
@@ -157,6 +174,17 @@ func InitDB() error {
 		{"fadeAction", "TEXT NOT NULL DEFAULT 'peers'"},
 		{"autoContinue", "INTEGER NOT NULL DEFAULT 0"},
 		{"volume", "REAL NOT NULL DEFAULT 0"},
+		{"fadeIn", "INTEGER NOT NULL DEFAULT 0"},
+		{"rate", "REAL NOT NULL DEFAULT 1"},
+		{"balance", "REAL NOT NULL DEFAULT 0"},
+		{"mute", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_result", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_played_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"fade_curve", "TEXT NOT NULL DEFAULT 'linear'"},
+		{"fit_mode", "TEXT NOT NULL DEFAULT 'fit'"},
+		{"rotation", "INTEGER NOT NULL DEFAULT 0"},
+		{"flip", "TEXT NOT NULL DEFAULT 'none'"},
+		{"sheet_index", "REAL NOT NULL DEFAULT 0"},
 	}
 	for _, nc := range newCols {
 		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE cuesheet ADD COLUMN %s %s;`, nc.name, nc.ddl))
@@ -164,13 +192,6 @@ func InitDB() error {
 			return fmt.Errorf("ctp: adding %s column: %w", nc.name, err)
 		}
 	}
-
-	// volume changed meaning from linear gain (1.0 = 0dB) to dB (0 = 0dB).
-	// Rescale any rows written under the old linear interpretation once; rows
-	// at the old default 1.0 become 0 dB.
-	_, _ = db.Exec(`UPDATE cuesheet SET volume = ROUND(20*LOG10(volume)*10)/10
-		WHERE volume > 0 AND volume != 1.0;`)
-	_, _ = db.Exec(`UPDATE cuesheet SET volume = 0 WHERE volume = 1.0;`)
 
 	// Rationalize a legacy cuesheet table whose volume column was created with
 	// the old linear default (dflt_value 1.0). SQLite cannot change a column
@@ -209,25 +230,42 @@ func InitDB() error {
 			shuffle          BOOLEAN NOT NULL DEFAULT 0,
 			loop             BOOLEAN NOT NULL DEFAULT 0,
 			fade_ms          INTEGER NOT NULL DEFAULT 0,
-			duration_ms      INTEGER NOT NULL DEFAULT 0
+			duration_ms      INTEGER NOT NULL DEFAULT 0,
+			anchor_pos       INTEGER NOT NULL DEFAULT 0,
+			sheet_index      REAL NOT NULL DEFAULT 0
 		);
 	`)
 	if err != nil {
 		return fmt.Errorf("ctp: creating cue_group table: %w", err)
 	}
 	newGroupCols := []struct{ name, ddl string }{
+		{"anchor_pos", "INTEGER NOT NULL DEFAULT 0"},
+		{"sheet_index", "REAL NOT NULL DEFAULT 0"},
 		{"collapse", "BOOLEAN NOT NULL DEFAULT 0"},
 		{"slideshow", "BOOLEAN NOT NULL DEFAULT 0"},
 		{"shuffle", "BOOLEAN NOT NULL DEFAULT 0"},
 		{"loop", "BOOLEAN NOT NULL DEFAULT 0"},
 		{"fade_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"duration_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"cue_num", "TEXT NOT NULL DEFAULT ''"},
+		{"color", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, nc := range newGroupCols {
 		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE cue_group ADD COLUMN %s %s;`, nc.name, nc.ddl))
 		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return fmt.Errorf("ctp: adding %s column on cue_group: %w", nc.name, err)
 		}
+	}
+	// Backfill the visual order once: sheet_index rides cuePos (x1000 so
+	// group headers can slot before their blocks).
+	if _, err := db.Exec(`UPDATE cuesheet SET sheet_index = cuePos * 1000 WHERE sheet_index = 0;`); err != nil {
+		return fmt.Errorf("ctp: backfilling cuesheet sheet_index: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE cue_group SET sheet_index = COALESCE(
+		(SELECT MIN(c.sheet_index) - 500 FROM cuesheet c WHERE c.parent = cue_group.group_id),
+		(SELECT (COALESCE(MAX(cuePos), 0) + 1) * 1000 FROM cuesheet))
+		WHERE sheet_index = 0;`); err != nil {
+		return fmt.Errorf("ctp: backfilling cue_group sheet_index: %w", err)
 	}
 
 	return nil
@@ -252,6 +290,14 @@ func migrateLegacyCuesheetDefault(d *sqlx.DB) error {
 	if err != nil || staleDefault == "0" {
 		return err
 	}
+	// Older legacy tables predate loop_count; the rebuild below SELECTs it,
+	// so backfill the column first if it is missing (idempotent: InitDB's
+	// generic add-column pass already did this for most DBs).
+	for _, col := range []string{"loop_count INTEGER NOT NULL DEFAULT 0", "fadeIn INTEGER NOT NULL DEFAULT 0", "rate REAL NOT NULL DEFAULT 1", "balance REAL NOT NULL DEFAULT 0", "mute INTEGER NOT NULL DEFAULT 0", "fit_mode TEXT NOT NULL DEFAULT 'fit'", "rotation INTEGER NOT NULL DEFAULT 0", "flip TEXT NOT NULL DEFAULT 'none'"} {
+		if _, err := d.Exec(`ALTER TABLE cuesheet ADD COLUMN ` + col); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("ctp: adding column before legacy rebuild: %w", err)
+		}
+	}
 	_, err = d.Exec(`
 		PRAGMA foreign_keys = OFF;
 		BEGIN;
@@ -275,16 +321,29 @@ func migrateLegacyCuesheetDefault(d *sqlx.DB) error {
 			fadeAction TEXT NOT NULL DEFAULT 'peers',
 			autoContinue INTEGER NOT NULL DEFAULT 0,
 			volume REAL NOT NULL DEFAULT 0,
+			fadeIn INTEGER NOT NULL DEFAULT 0,
+			rate REAL NOT NULL DEFAULT 1,
+			balance REAL NOT NULL DEFAULT 0,
+			mute INTEGER NOT NULL DEFAULT 0,
+			last_result INTEGER NOT NULL DEFAULT 0,
+			last_played_at INTEGER NOT NULL DEFAULT 0,
+			fade_curve TEXT NOT NULL DEFAULT 'linear',
+			fit_mode TEXT NOT NULL DEFAULT 'fit',
+			rotation INTEGER NOT NULL DEFAULT 0,
+			flip TEXT NOT NULL DEFAULT 'none',
+			sheet_index REAL NOT NULL DEFAULT 0,
 			FOREIGN KEY (media_id) REFERENCES mediapool (media_id)
 				ON UPDATE CASCADE ON DELETE CASCADE
 		);
 		INSERT INTO cuesheet_new
 			(cue_id, cuePos, cueNum, media_id, title, posStart, posEnd,
-			 preWait, cueDuration, postWait, hold, loop, color, parent,
-			 fadeOut, fadeAction, autoContinue, volume)
+			 preWait, cueDuration, postWait, hold, loop, loop_count, color,
+			 parent, fadeOut, fadeAction, autoContinue, volume, fadeIn, rate, balance, mute,
+			 fit_mode, rotation, flip)
 		SELECT cue_id, cuePos, cueNum, media_id, title, posStart, posEnd,
-			 preWait, cueDuration, postWait, hold, loop, color, parent,
-			 fadeOut, fadeAction, autoContinue, volume
+			 preWait, cueDuration, postWait, hold, loop, loop_count, color,
+			 parent, fadeOut, fadeAction, autoContinue, volume, fadeIn, rate, balance, mute,
+			 fit_mode, rotation, flip
 		FROM cuesheet;
 		DROP TABLE cuesheet;
 		ALTER TABLE cuesheet_new RENAME TO cuesheet;

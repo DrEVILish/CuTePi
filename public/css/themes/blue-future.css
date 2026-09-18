@@ -1,0 +1,250 @@
+/* CuTePi portable theme: Future SciFi Blue (default)
+ * Theme-Name: Future SciFi (Default)
+ * Install: drop this file into <app>/public/css/themes/ and set
+ *   html[data-theme="blue-future"] (a ?theme=blue-future link or the settings
+ *   UI does it).
+ * Contract: needs only the --ctp-* tokens below plus common component hooks
+ *   (.btn/.btn-primary/.btn-danger, .form-control/.form-select,
+ *   .table-dark, .navbar, .modal-content, .dropdown-menu).
+ * Section A (portable): tokens + generic elements + component hooks.
+ * Section B (CuTePi): app selectors (#cuesheet, #mediapool, .go-bar, ...).
+ *   Safe to delete section B when moving to another app.
+ */
+
+/* --- Section A: tokens -------------------------------------------------- */
+html[data-theme="blue-future"] {
+  --ctp-bg: #020b16;
+  --ctp-surface: #07172a;
+  --ctp-surface-2: #0d2440;
+  --ctp-border: #176095;
+  --ctp-text: #dff4ff;
+  --ctp-muted: #7ca6c3;
+  --ctp-accent: #2fd6ff;
+  --ctp-accent-2: #4d7dff;
+  --ctp-danger: #ff5f87;
+  --ctp-success: #42ddb2;
+  --ctp-radius: 0.2rem;
+  --ctp-font: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --ctp-hairline: #0e3a5c;
+  --ctp-flare: #d85cff;
+  /* Aliases for the glow/panel language below. */
+  --glow: var(--ctp-accent);
+  --panel: var(--ctp-surface);
+}
+
+/* --- Section A: generic elements ---------------------------------------- */
+html[data-theme="blue-future"] body {
+  background: radial-gradient(ellipse at top, #0a1a2e, #020509 70%);
+  background-attachment: fixed;
+  background-image:
+    radial-gradient(ellipse at top, #0a1a2e, #020509 70%),
+    linear-gradient(rgba(47, 214, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47, 214, 255, 0.04) 1px, transparent 1px);
+  background-size: auto, 2rem 2rem, 2rem 2rem;
+  color: var(--ctp-text);
+  font-family: var(--ctp-font);
+}
+html[data-theme="blue-future"] a { color: var(--glow); }
+html[data-theme="blue-future"] h1, html[data-theme="blue-future"] h2,
+html[data-theme="blue-future"] h3, html[data-theme="blue-future"] h5,
+html[data-theme="blue-future"] h6 {
+  font-size: 0.8em;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ctp-muted);
+}
+
+/* Corner-bracket panels. NOTE: no positioning here — .dropdown-menu is
+   placed by Popper (inline styles) and must keep its Bootstrap position. */
+html[data-theme="blue-future"] .modal-content,
+html[data-theme="blue-future"] .dropdown-menu {
+  background: var(--panel);
+  border: 1px solid var(--ctp-border);
+  border-radius: 10px;
+  box-shadow: 0 0 20px rgba(0, 180, 255, 0.08), inset 0 0 30px rgba(0, 180, 255, 0.03);
+}
+
+/* Buttons: dark cell + glow on hover, disabled stays flat. */
+html[data-theme="blue-future"] .btn { letter-spacing: 0.05em; }
+html[data-theme="blue-future"] .btn-primary {
+  box-shadow: 0 0 0.7rem rgba(47, 214, 255, 0.3);
+}
+html[data-theme="blue-future"] .btn-outline-secondary,
+html[data-theme="blue-future"] .btn-outline-primary {
+  background: #08192b;
+  color: var(--glow);
+  border-color: var(--ctp-border);
+}
+html[data-theme="blue-future"] .btn-outline-secondary:hover,
+html[data-theme="blue-future"] .btn-outline-primary:hover {
+  border-color: var(--glow);
+  box-shadow: 0 0 8px var(--glow);
+  color: var(--glow);
+}
+html[data-theme="blue-future"] .btn-outline-secondary:active,
+html[data-theme="blue-future"] .btn-outline-primary:active {
+  background: #0f2a44;
+}
+html[data-theme="blue-future"] .btn:disabled { opacity: 0.35; box-shadow: none; }
+
+/* Inputs: dark cell, glow focus ring. */
+html[data-theme="blue-future"] .form-control,
+html[data-theme="blue-future"] .form-select,
+html[data-theme="blue-future"] input[type="text"],
+html[data-theme="blue-future"] input[type="number"],
+html[data-theme="blue-future"] input[type="password"],
+html[data-theme="blue-future"] select {
+  background: #08192b;
+  color: var(--ctp-text);
+  border-color: var(--ctp-border);
+}
+html[data-theme="blue-future"] .form-control:focus,
+html[data-theme="blue-future"] .form-select:focus,
+html[data-theme="blue-future"] input:focus-visible,
+html[data-theme="blue-future"] button:focus-visible,
+html[data-theme="blue-future"] select:focus-visible {
+  outline: 1px solid var(--glow);
+  outline-offset: 2px;
+  border-color: var(--glow);
+  box-shadow: 0 0 8px rgba(0, 217, 255, 0.35);
+}
+
+/* Tables: tracked uppercase dim headers, hairline rows, accent select bar. */
+html[data-theme="blue-future"] .table-dark { font-size: 0.82em; }
+html[data-theme="blue-future"] .table-dark th {
+  color: var(--ctp-muted);
+  text-transform: uppercase;
+  font-size: 0.72em;
+  letter-spacing: 0.08em;
+}
+html[data-theme="blue-future"] .table-dark td,
+html[data-theme="blue-future"] .table-dark th {
+  border-bottom: 1px solid var(--ctp-border);
+}
+html[data-theme="blue-future"] .table-warning {
+  box-shadow: inset 0.35rem 0 0 var(--ctp-accent);
+}
+
+/* Status helpers. */
+html[data-theme="blue-future"] .ok { color: var(--ctp-success); }
+html[data-theme="blue-future"] .err { color: var(--ctp-danger); }
+html[data-theme="blue-future"] .rec {
+  color: var(--ctp-danger);
+  font-weight: bold;
+  text-shadow: 0 0 8px var(--ctp-danger);
+}
+html[data-theme="blue-future"] .idle { color: var(--ctp-success); }
+
+/* Glow range inputs. */
+html[data-theme="blue-future"] input[type="range"] { accent-color: var(--glow); }
+html[data-theme="blue-future"] .ctp-slider { background: transparent; }
+html[data-theme="blue-future"] .ctp-slider::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px; background: linear-gradient(90deg, #0e3a5c, var(--glow));
+}
+html[data-theme="blue-future"] .ctp-slider::-moz-range-track {
+  height: 4px; border-radius: 2px; background: linear-gradient(90deg, #0e3a5c, var(--glow));
+}
+html[data-theme="blue-future"] .ctp-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 3px;
+  background: #02050a; border: 1px solid var(--glow); box-shadow: 0 0 8px rgba(0, 217, 255, 0.5);
+}
+html[data-theme="blue-future"] .ctp-slider::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 3px;
+  background: #02050a; border: 1px solid var(--glow); box-shadow: 0 0 8px rgba(0, 217, 255, 0.5);
+}
+
+/* Toggle switch: <label class="sci-switch"><input type="checkbox">… (scoped:
+ * the unprefixed original leaked this widget's look into every theme). */
+html[data-theme="blue-future"] .sci-switch { position: relative; display: inline-flex; align-items: center; gap: 0.7em; cursor: pointer; }
+html[data-theme="blue-future"] .sci-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+html[data-theme="blue-future"] .sci-switch-track {
+  position: relative; display: block; width: 4.4em; height: 1.9em; padding: 2px;
+  background: #02050a; border: 1px solid var(--ctp-border); border-radius: 3px;
+  box-shadow: inset 0 0 12px rgba(0, 180, 255, 0.08);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+html[data-theme="blue-future"] .sci-thumb {
+  display: block; width: 1.45em; height: 1.45em; background: #0d2b4a;
+  border: 1px solid var(--ctp-border); border-radius: 2px; position: relative;
+  transform: translateX(0); transition: transform 0.18s ease, background 0.18s, border-color 0.18s;
+}
+html[data-theme="blue-future"] .sci-thumb::before { content: ""; position: absolute; inset: 3px; background: #071426; border-radius: 1px; }
+html[data-theme="blue-future"] .sci-thumb::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px;
+  border-radius: 50%; background: #fff; opacity: 0.35; transform: translate(-50%, -50%);
+  box-shadow: 0 0 5px #fff;
+}
+html[data-theme="blue-future"] .sci-switch input:checked + .sci-switch-track {
+  border-color: var(--glow);
+  box-shadow: inset 0 0 12px rgba(0, 217, 255, 0.22), 0 0 10px rgba(0, 217, 255, 0.25);
+}
+html[data-theme="blue-future"] .sci-switch input:checked + .sci-switch-track .sci-thumb {
+  transform: translateX(2.45em); background: #0e3a5c; border-color: var(--glow);
+}
+html[data-theme="blue-future"] .sci-switch input:checked + .sci-switch-track .sci-thumb::after {
+  background: var(--glow); box-shadow: 0 0 6px var(--glow); opacity: 1;
+}
+html[data-theme="blue-future"] .sci-switch input:focus-visible + .sci-switch-track { outline: 1px solid var(--glow); outline-offset: 2px; }
+html[data-theme="blue-future"] .switch-readout { font-size: 0.82em; letter-spacing: 0.08em; min-width: 5em; text-align: center; color: #2c4a66; }
+html[data-theme="blue-future"] .switch-readout::after { content: attr(data-off); }
+html[data-theme="blue-future"] .sci-switch input:checked ~ .switch-readout { color: var(--glow); text-shadow: 0 0 6px rgba(0, 217, 255, 0.6); }
+html[data-theme="blue-future"] .sci-switch input:checked ~ .switch-readout::after { content: attr(data-on); }
+
+/* --- Section B: CuTePi flourishes -------------------------------------- */
+html[data-theme="blue-future"] .navbar,
+html[data-theme="blue-future"] .app-pane,
+html[data-theme="blue-future"] .inspector-panel {
+  box-shadow: inset 0 0 1.5rem rgba(47, 214, 255, 0.07);
+}
+html[data-theme="blue-future"] .go-bar {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--ctp-border);
+  border-radius: 10px;
+  box-shadow: 0 0 20px rgba(0, 180, 255, 0.08), inset 0 0 30px rgba(0, 180, 255, 0.03);
+}
+html[data-theme="blue-future"] .go-bar::before,
+html[data-theme="blue-future"] .modal-content::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--glow);
+  opacity: 0.55;
+  pointer-events: none;
+  top: -1px;
+  left: -1px;
+  border-right: none;
+  border-bottom: none;
+}
+html[data-theme="blue-future"] .go-bar::after,
+html[data-theme="blue-future"] .modal-content::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--glow);
+  opacity: 0.55;
+  pointer-events: none;
+  bottom: -1px;
+  right: -1px;
+  border-left: none;
+  border-top: none;
+}
+html[data-theme="blue-future"] .cue-context-menu {
+  /* NOTE: no position override — the menus are placed at the cursor via
+   * left/top and depend on the base position:fixed. relative here stranded
+   * them in page flow (opened in the wrong place). */
+  background: var(--panel);
+  border: 1px solid var(--ctp-border);
+  border-radius: 10px;
+  box-shadow: 0 0 20px rgba(0, 180, 255, 0.08), inset 0 0 30px rgba(0, 180, 255, 0.03);
+}
+html[data-theme="blue-future"] .media-thumbnail {
+  box-shadow: 0 0 0.8rem rgba(47, 214, 255, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="blue-future"] .sci-switch-track,
+  html[data-theme="blue-future"] .sci-thumb { transition: none; }
+}

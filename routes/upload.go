@@ -12,7 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"CuTePi/config"
-	"CuTePi/ctp"
 	"CuTePi/media"
 )
 
@@ -45,13 +44,21 @@ func handleUpload(c *gin.Context) {
 		return
 	}
 
+	// Best-effort multi-file: every file that validates is imported, and ALL
+	// failures are reported together instead of aborting the batch on the
+	// first error (which silently dropped every later file while keeping the
+	// earlier ones - a half-import the operator couldn't see).
+	var failures []string
 	for _, fh := range files {
 		if err := saveUploadedFile(fh); err != nil {
-			c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{
-				"error": fmt.Sprintf("failed to import %q: %v", fh.Filename, err),
-			})
-			return
+			failures = append(failures, fmt.Sprintf("%q: %v", fh.Filename, err))
 		}
+	}
+	if len(failures) > 0 {
+		c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{
+			"error": fmt.Sprintf("could not import %d of %d: %s", len(failures), len(files), strings.Join(failures, "; ")),
+		})
+		return
 	}
 
 	// htmx requests (the desktop modal) get the mediapool partial to swap
@@ -82,8 +89,6 @@ func saveUploadedFile(fh *multipart.FileHeader) error {
 		return fmt.Errorf("unsupported media type")
 	}
 
-	destPath := filepath.Join(config.MediaLocation(), filename)
-
 	src, err := fh.Open()
 	if err != nil {
 		return err
@@ -101,37 +106,14 @@ func saveUploadedFile(fh *multipart.FileHeader) error {
 	if err != nil {
 		return err
 	}
-	size, err := io.Copy(dst, src)
+	if _, err = io.Copy(dst, src); err != nil {
+		dst.Close()
+		os.Remove(tmpPath)
+		return err
+	}
 	dst.Close()
-	if err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
 
-	meta, err := media.Probe(tmpPath)
-	if err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-
-	// Import-time playability probe: decode a short window so undecodable /
-	// corrupt sources are rejected here rather than failing at cue time.
-	// Images are excluded - ffprobe (+ the thumbnail copy) already prove them.
-	if meta.Kind == media.KindVideo || meta.Kind == media.KindAudio {
-		if err := media.VerifyPlayable(tmpPath); err != nil {
-			os.Remove(tmpPath)
-			return err
-		}
-	}
-
-	title := strings.TrimSuffix(filename, filepath.Ext(filename))
-	if err := ctp.RegisterMedia(filename, size, meta, title); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		os.Remove(tmpPath)
+	if err := importMedia(filename, tmpPath); err != nil {
 		return err
 	}
 	return nil

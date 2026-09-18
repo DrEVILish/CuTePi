@@ -31,6 +31,7 @@ func TestMigrateLegacyCuesheetDefaultRebuildsStaleVolume(t *testing.T) {
 		postWait INTEGER NOT NULL DEFAULT 0,
 		hold INTEGER NOT NULL DEFAULT 1,
 		loop INTEGER NOT NULL DEFAULT 0,
+		loop_count INTEGER NOT NULL DEFAULT 0,
 		color TEXT NOT NULL DEFAULT '',
 		parent INTEGER NOT NULL DEFAULT 0,
 		fadeOut INTEGER NOT NULL DEFAULT 0,
@@ -41,8 +42,8 @@ func TestMigrateLegacyCuesheetDefaultRebuildsStaleVolume(t *testing.T) {
 			ON UPDATE CASCADE ON DELETE CASCADE
 	)`)
 	mustExec(t, d, `INSERT INTO mediapool (media_id, filename) VALUES (1, 'legacy.mp4')`)
-	mustExec(t, d, `INSERT INTO cuesheet (cuePos, cueNum, media_id, title, volume)
-		SELECT 1, '1', 1, 'legacy.mp4', -6`)
+	mustExec(t, d, `INSERT INTO cuesheet (cuePos, cueNum, media_id, title, volume, loop, loop_count)
+		SELECT 1, '1', 1, 'legacy.mp4', -6, 1, 5`)
 
 	if err := migrateLegacyCuesheetDefault(d); err != nil {
 		t.Fatalf("migrateLegacyCuesheetDefault: %v", err)
@@ -62,6 +63,17 @@ func TestMigrateLegacyCuesheetDefaultRebuildsStaleVolume(t *testing.T) {
 	}
 	if want := -6.0; vol != want {
 		t.Fatalf("volume = %v, want %v (data preserved through rebuild)", vol, want)
+	}
+
+	var loop, loopCount int
+	if err := d.Get(&loop, `SELECT loop FROM cuesheet WHERE title='legacy.mp4'`); err != nil {
+		t.Fatalf("reading migrated loop: %v", err)
+	}
+	if err := d.Get(&loopCount, `SELECT loop_count FROM cuesheet WHERE title='legacy.mp4'`); err != nil {
+		t.Fatalf("reading migrated loop_count: %v", err)
+	}
+	if loop != 1 || loopCount != 5 {
+		t.Fatalf("loop/loop_count = %d/%d, want 1/5 (the rebuild must copy both)", loop, loopCount)
 	}
 
 	// A second run must be a no-op (default already 0).

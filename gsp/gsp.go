@@ -19,22 +19,35 @@ import (
 // can't race on the pipeline handle - the historical cause of "multiple
 // pipelines" / "losing reference, can't stop playback" bugs.
 type manager struct {
-	mu          sync.Mutex
-	pipeline    *gst.Pipeline
-	currentFile string // filename currently loaded, "" if none/test pattern
-	version     uint64 // bumped on every client-visible state change/position tick
-	lastPos     float64
-	inPoint     float64       // seconds; playback starts here (0 = start of file)
-	outPoint    float64       // seconds; playback auto-stops here (0 = end of file)
-	hold        bool          // freeze the last frame at end-of-stream / trim-out
-	loop        bool          // restart from the in-point when the clip reaches its end
-	loopRemain  int           // passes left in a finite loop (loopCount); 0 = infinite
-	volumeEl    *gst.Element  // per-audio-branch "volume" element (last wins)
-	volume      float64       // requested volume 0..1 for the active pipeline
-	brightEl    *gst.Element  // per-video-branch "videobalance" element (last wins)
-	cuePos      int           // cue position associated with the active clip (0 = not a cue)
-	onCueEnd    func(pos int) // invoked (in a goroutine) when an active cue reaches its end
-	gen         uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
+	mu           sync.Mutex
+	pipeline     *gst.Pipeline
+	currentFile  string // filename currently loaded, "" if none/test pattern
+	version      uint64 // bumped on every client-visible state change/position tick
+	lastPos      float64
+	inPoint      float64      // seconds; playback starts here (0 = start of file)
+	outPoint     float64      // seconds; playback auto-stops here (0 = end of file)
+	hold         bool         // freeze the last frame at end-of-stream / trim-out
+	loop         bool         // restart from the in-point when the clip reaches its end
+	loopRemain   int          // passes left in a finite loop (loopCount); 0 = infinite
+	volumeEl     *gst.Element // per-audio-branch "volume" element (last wins)
+	volume       float64      // requested cue volume in dB
+	loudnessGain float64
+	rate         float64
+	balance      float64
+	mute         bool
+	panEl        *gst.Element
+	fadeIn       int
+	fadeCurve    string
+	fitMode      string // fit|stretch frame fitting ("", fit = letterbox)
+	rotation     int    // 0|90|180|270 clockwise degrees
+	flip         string // none|h|v mirror ("", none = off)
+	fadeLevel    float64 // shared audio/video envelope, 0..1
+	fadeSerial   uint64  // cancels an earlier ramp on the same pipeline
+	starting     bool
+	brightEl     *gst.Element  // per-video-branch "videobalance" element (last wins)
+	cuePos       int           // cue position associated with the active clip (0 = not a cue)
+	onCueEnd     func(pos int) // invoked (in a goroutine) when an active cue reaches its end
+	gen          uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
 }
 
 var (
@@ -96,6 +109,7 @@ func Generation() uint64 {
 // swap atomically stops/releases the current pipeline (if any) and installs
 // newPipeline as the active one, under the manager lock.
 func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadOpts) {
+	stopBackground() // a new playback decision always kills the soundtrack
 	m.mu.Lock()
 	if m.pipeline != nil {
 		retirePipeline(m.pipeline)
@@ -109,6 +123,20 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	m.loop = opts.Loop
 	m.loopRemain = opts.LoopCount
 	m.volume = opts.Volume // per-cue gain in dB (0 = 0dB)
+	m.loudnessGain = opts.LoudnessGain
+	m.rate = clampRate(opts.Rate)
+	m.balance = math.Max(-1, math.Min(1, opts.Balance))
+	m.mute = opts.Mute
+	m.fadeIn = opts.FadeIn
+	m.fadeCurve = opts.FadeCurve
+	m.fitMode = opts.FitMode
+	m.rotation = opts.Rotation
+	m.flip = opts.Flip
+	m.fadeLevel = 1
+	if m.fadeIn > 0 {
+		m.fadeLevel = 0
+	}
+	m.starting = true
 	m.gen++
 	m.mu.Unlock()
 	go ws.Broadcast()
@@ -126,6 +154,9 @@ func (m *manager) clearPlayback() {
 	m.loopRemain = 0
 	m.volumeEl = nil
 	m.brightEl = nil
+	m.panEl = nil
+	m.starting = false
+	m.fadeSerial++
 	m.cuePos = 0
 	m.version++
 }
@@ -152,12 +183,21 @@ func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 // the clip loops back to its in-point at end-of-stream, and the per-cue
 // master audio gain in dB (0 = 0dB). Playback volume is per-cue, never global.
 type LoadOpts struct {
-	InPoint   float64 // 0 = start of file
-	OutPoint  float64 // 0 = end of file
-	Hold      bool    // freeze last frame at end / trim-out
-	Loop      bool    // restart from in-point at end / trim-out
-	LoopCount int     // finite loop count; 0 = infinite (ignored when Loop is false)
-	Volume    float64 // per-cue master gain in dB, 0 = 0dB (range -60..12)
+	InPoint      float64 // 0 = start of file
+	OutPoint     float64 // 0 = end of file
+	Hold         bool    // freeze last frame at end / trim-out
+	Loop         bool    // restart from in-point at end / trim-out
+	LoopCount    int     // finite loop count; 0 = infinite (ignored when Loop is false)
+	Volume       float64 // per-cue master gain in dB, 0 = 0dB (range -60..12)
+	LoudnessGain float64 // per-media EBU R128 correction in dB
+	Rate         float64 // 0 defaults to 1; valid range 0.25..4, pitch preserved
+	Balance      float64 // -1 left, 0 centre, +1 right
+	Mute         bool
+	FadeIn       int    // milliseconds
+	FadeCurve    string // envelope shape: linear|smooth|log|exp (§12.7); "" = linear
+	FitMode      string // fit|stretch frame fitting ("" = fit)
+	Rotation     int    // 0|90|180|270 clockwise degrees
+	Flip         string // none|h|v mirror ("" = none)
 }
 
 func Play() {
@@ -165,8 +205,15 @@ func Play() {
 	p := mgr.pipeline
 	inPoint := mgr.inPoint
 	hold := mgr.hold
+	starting := mgr.starting
 	mgr.mu.Unlock()
-	if p == nil {
+	if p == nil || starting {
+		return
+	}
+	_, state := p.GetState(gst.StateNull, 0)
+	if state == gst.StateNull {
+		startPlayback(p)
+		mgr.bump()
 		return
 	}
 
@@ -179,14 +226,14 @@ func Play() {
 		// (or start) before going back to PLAYING, since a pipeline parked at
 		// EOS will not advance on its own.
 		if inPoint > 0 && float64(inPoint*1_000_000_000) < float64(dur) {
-			p.SeekTime(time.Duration(inPoint*float64(time.Second)), gst.SeekFlagFlush)
+			seekAtRate(p, inPoint)
 		} else {
-			p.SeekTime(0, gst.SeekFlagFlush)
+			seekAtRate(p, 0)
 		}
 	} else if inPoint > 0 && okPos && float64(pos) < inPoint*1_000_000_000 {
 		// Freshly loaded (or stop->play): never play the part before the
 		// in-point, jump straight to the trim start.
-		p.SeekTime(time.Duration(inPoint*float64(time.Second)), gst.SeekFlagFlush)
+		seekAtRate(p, inPoint)
 	}
 
 	p.SetState(gst.StatePlaying)
@@ -203,6 +250,7 @@ func Pause() {
 	if err := p.SetState(gst.StatePaused); err != nil {
 		logs.Printf(logs.GSPPauseErr, "gsp: error pausing: %v", err)
 	}
+	CurrentPosition()
 	mgr.bump()
 }
 
@@ -231,6 +279,7 @@ func TogglePause() {
 }
 
 func Panic() {
+	stopBackground()
 	mgr.mu.Lock()
 	if mgr.pipeline != nil {
 		retirePipeline(mgr.pipeline)
@@ -243,6 +292,7 @@ func Panic() {
 }
 
 func Stop() {
+	stopBackground()
 	mgr.mu.Lock()
 	p := mgr.pipeline
 	mgr.mu.Unlock()
@@ -266,6 +316,8 @@ func Stop() {
 	mgr.mu.Lock()
 	mgr.currentFile = ""
 	mgr.cuePos = 0
+	mgr.lastPos = 0
+	mgr.starting = false
 	mgr.gen++
 	mgr.version++
 	mgr.mu.Unlock()
@@ -334,12 +386,16 @@ func SetCueEndHook(cb func(pos int)) {
 }
 
 func CurrentPosition() float64 {
+	// Snapshot the pipeline under the lock, then run the GStreamer query
+	// outside it (QueryPosition can block on the bus; holding mgr.mu would
+	// stall every other playback call). Same shape as CurrentDuration.
 	mgr.mu.Lock()
-	defer mgr.mu.Unlock()
-	if mgr.pipeline == nil {
+	p := mgr.pipeline
+	mgr.mu.Unlock()
+	if p == nil {
 		return 0
 	}
-	ok, pos := mgr.pipeline.QueryPosition(gst.FormatTime)
+	ok, pos := p.QueryPosition(gst.FormatTime)
 	if !ok {
 		return 0
 	}
@@ -347,6 +403,8 @@ func CurrentPosition() float64 {
 	// A position tick the client cares about is one that changes the
 	// displayed clock (rounded to the nearest second, matching formatClock).
 	// While paused/stopped the value is frozen, so no bump and no re-render.
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
 	if int(seconds+0.5) != int(mgr.lastPos+0.5) {
 		mgr.version++
 	}
@@ -402,15 +460,19 @@ func Volume() float64 {
 }
 
 // FadeAndStop fades the active clip to black over durMs (volume -> 0 and,
-// for video, brightness -> -1) and then tears the pipeline down. It spawns a
-// goroutine and returns immediately; a zero or negative duration stops at
-// once. The tween samples the element pointers under the lock each step and
+// for video, brightness -> -1) and then tears the pipeline down. It blocks
+// until the fade finishes; a zero or negative duration stops at once.
+// The tween samples the element pointers under the lock each step and
 // bails if the pipeline is swapped out mid-fade.
 // ponytail: single tween goroutine at the single-active-pipeline scale.
 func FadeAndStop(durMs int) {
 	mgr.mu.Lock()
 	p := mgr.pipeline
-	startGain := dbToGain(mgr.volume)
+	gen := mgr.gen
+	fadeCurve := mgr.fadeCurve
+	mgr.fadeSerial++
+	serial := mgr.fadeSerial
+	startLevel := mgr.fadeLevel
 	mgr.mu.Unlock()
 	if p == nil {
 		return
@@ -420,30 +482,95 @@ func FadeAndStop(durMs int) {
 		return
 	}
 	steps := 20
-	stepMs := time.Duration(durMs/steps) * time.Millisecond
-	dVol := startGain / float64(steps)
+	stepMs := time.Duration(durMs) * time.Millisecond / time.Duration(steps)
 	for i := 1; i <= steps; i++ {
+		time.Sleep(stepMs)
 		mgr.mu.Lock()
-		still := mgr.pipeline == p
-		ve := mgr.volumeEl
-		be := mgr.brightEl
-		mgr.mu.Unlock()
-		if !still {
+		if mgr.pipeline != p || mgr.gen != gen || mgr.fadeSerial != serial {
+			mgr.mu.Unlock()
 			return
 		}
-		v := startGain - dVol*float64(i)
-		if v < 0 {
-			v = 0
+		mgr.fadeLevel = startLevel * (1 - fadeShape(fadeCurve, float64(i)/float64(steps)))
+		mgr.applyGain()
+		if mgr.brightEl != nil {
+			mgr.brightEl.Set("brightness", mgr.fadeLevel-1)
 		}
-		if ve != nil {
-			ve.Set("volume", v)
-		}
-		if be != nil {
-			be.Set("brightness", -float64(i)/float64(steps))
-		}
-		time.Sleep(stepMs)
+		mgr.mu.Unlock()
 	}
-	Stop()
+	mgr.clearIfCurrent(p)
+}
+
+// Caller holds mu; live changes and both fades share the same effective gain.
+func (m *manager) effectiveGain() float64 {
+	if m.mute || m.volume <= -60 {
+		return 0
+	}
+	return dbToGain(dbClamp(m.volume+m.loudnessGain)) * m.fadeLevel
+}
+
+func (m *manager) applyGain() {
+	if m.volumeEl != nil {
+		m.volumeEl.Set("volume", m.effectiveGain())
+	}
+}
+
+// fadeShape maps ramp progress t (0..1) through the selected envelope curve.
+// All callers share one envelope (audio gain + video brightness), so a curve
+// changes both identically. linear is the historical flat ramp.
+func fadeShape(curve string, t float64) float64 {
+	if t <= 0 {
+		return 0
+	}
+	if t >= 1 {
+		return 1
+	}
+	switch curve {
+	case "smooth": // S-curve (smoothstep): slow ends, fast middle
+		return t * t * (3 - 2*t)
+	case "log": // perceptual: fast initial change, long tail
+		return math.Log10(1+9*t) / 1
+	case "exp": // slow start, sharp finish
+		const k = 3.0
+		return (math.Exp(k*t) - 1) / (math.Exp(k) - 1)
+	default: // linear
+		return t
+	}
+}
+
+func fadeIn(p *gst.Pipeline, gen uint64) {
+	mgr.mu.Lock()
+	serial, duration := mgr.fadeSerial, time.Duration(mgr.fadeIn)*time.Millisecond
+	mgr.mu.Unlock()
+	if duration <= 0 {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	var elapsed time.Duration
+	last := time.Now()
+	for now := range ticker.C {
+		_, state := p.GetState(gst.StateNull, 0)
+		delta := now.Sub(last)
+		last = now
+		mgr.mu.Lock()
+		if mgr.pipeline != p || mgr.gen != gen || mgr.fadeSerial != serial {
+			mgr.mu.Unlock()
+			return
+		}
+		if state == gst.StatePlaying {
+			elapsed += delta
+		}
+		mgr.fadeLevel = fadeShape(mgr.fadeCurve, math.Min(1, float64(elapsed)/float64(duration)))
+		mgr.applyGain()
+		if mgr.brightEl != nil {
+			mgr.brightEl.Set("brightness", mgr.fadeLevel-1)
+		}
+		done := mgr.fadeLevel == 1
+		mgr.mu.Unlock()
+		if done {
+			return
+		}
+	}
 }
 
 // dbToGain converts a dB value (as stored per-cue) to the linear gain the
@@ -468,11 +595,8 @@ func SetVolume(v float64) float64 {
 	v = dbClamp(v)
 	mgr.mu.Lock()
 	mgr.volume = v
-	vol := mgr.volumeEl
+	mgr.applyGain()
 	mgr.mu.Unlock()
-	if vol != nil {
-		vol.Set("volume", dbToGain(v))
-	}
 	mgr.bump()
 	return v
 }
@@ -480,6 +604,64 @@ func SetVolume(v float64) float64 {
 // dbClamp clamps a dB value to the Cue Inspector slider's range.
 func dbClamp(v float64) float64 {
 	return math.Max(-60, math.Min(12, v))
+}
+
+func SetMute(mute bool) {
+	mgr.mu.Lock()
+	mgr.mute = mute
+	mgr.applyGain()
+	mgr.mu.Unlock()
+}
+
+func SetBalance(balance float64) {
+	if math.IsNaN(balance) || math.IsInf(balance, 0) {
+		return
+	}
+	mgr.mu.Lock()
+	mgr.balance = math.Max(-1, math.Min(1, balance))
+	if mgr.panEl != nil {
+		mgr.panEl.Set("panorama", float32(mgr.balance))
+	}
+	mgr.mu.Unlock()
+}
+
+func clampRate(rate float64) float64 {
+	if rate == 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return 1
+	}
+	return math.Max(0.25, math.Min(4, rate))
+}
+
+func SetRate(rate float64) {
+	mgr.mu.Lock()
+	rate = clampRate(rate)
+	if mgr.rate == rate {
+		mgr.mu.Unlock()
+		return
+	}
+	mgr.rate = rate
+	p, starting := mgr.pipeline, mgr.starting
+	mgr.mu.Unlock()
+	if p != nil && !starting {
+		// A preceding flush seek may still be prerolling; its position query
+		// is temporarily unavailable. Wait before issuing the new rate seek.
+		p.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
+		if ok, pos := p.QueryPosition(gst.FormatTime); ok {
+			seekAtRate(p, float64(pos)/1e9)
+		}
+	}
+}
+
+// Every seek carries the segment rate, including loop and trim restarts.
+func seekAtRate(p *gst.Pipeline, seconds float64) bool {
+	mgr.mu.Lock()
+	current, rate := mgr.pipeline == p, mgr.rate
+	mgr.mu.Unlock()
+	if !current || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return false
+	}
+	return p.SendEvent(gst.NewSeekEvent(clampRate(rate), gst.FormatTime, gst.SeekFlagFlush,
+		gst.SeekTypeSet, int64(math.Max(0, seconds)*1e9), gst.SeekTypeEnd, -1))
 }
 
 // Seek moves playback to the given absolute position (seconds). It clamps to
@@ -506,7 +688,7 @@ func Seek(seconds float64) {
 	if seconds < inPoint && inPoint > 0 {
 		seconds = inPoint
 	}
-	p.SeekTime(time.Duration(seconds*float64(time.Second)), gst.SeekFlagFlush)
+	seekAtRate(p, seconds)
 	mgr.bump()
 }
 
@@ -516,11 +698,11 @@ func Seek(seconds float64) {
 // simply parked in PAUSED and the manager keeps its reference (Stop/Panic
 // still tear it down). With loop enabled the clip restarts from its in-point.
 // Without either, the pipeline is torn down as before.
-func (m *manager) handleEnd(p *gst.Pipeline) {
+func (m *manager) handleEnd(p *gst.Pipeline) bool {
 	m.mu.Lock()
 	if m.pipeline != p {
 		m.mu.Unlock()
-		return
+		return false
 	}
 	hold := m.hold
 	remaining := m.loopRemain
@@ -539,10 +721,10 @@ func (m *manager) handleEnd(p *gst.Pipeline) {
 		m.loopRemain = next
 		if restart {
 			m.mu.Unlock()
-			p.SeekTime(time.Duration(inPoint*float64(time.Second)), gst.SeekFlagFlush)
+			seekAtRate(p, inPoint)
 			p.SetState(gst.StatePlaying)
 			m.bump()
-			return
+			return true
 		}
 	}
 	m.mu.Unlock()
@@ -559,6 +741,7 @@ func (m *manager) handleEnd(p *gst.Pipeline) {
 	if pos > 0 && cb != nil {
 		go cb(pos)
 	}
+	return false
 }
 
 // loopSteps decides what a looping clip does at end-of-stream: whether it
@@ -581,24 +764,6 @@ func loopSteps(remaining int) (restart bool, next int) {
 // policy) and errors (always torn down). When an out-point is set, a
 // background goroutine polls the position and ends the clip there.
 func watchAndPlay(p *gst.Pipeline) {
-	p.SetState(gst.StatePlaying)
-	if inPoint := func() float64 { mgr.mu.Lock(); defer mgr.mu.Unlock(); return mgr.inPoint }(); inPoint > 0 {
-		// Seek to the in-point once dynamic pads have linked and the clock
-		// is running; a seek during pre-roll is usually dropped.
-		go func() {
-			time.Sleep(200 * time.Millisecond)
-			mgr.mu.Lock()
-			if mgr.pipeline != p {
-				mgr.mu.Unlock()
-				return
-			}
-			mgr.mu.Unlock()
-			p.SeekTime(time.Duration(inPoint*float64(time.Second)), gst.SeekFlagFlush)
-		}()
-	}
-	if outPoint := func() float64 { mgr.mu.Lock(); defer mgr.mu.Unlock(); return mgr.outPoint }(); outPoint > 0 {
-		go watchTrim(p)
-	}
 	p.GetPipelineBus().AddWatch(func(msg *gst.Message) bool {
 		// Identity precheck: if this pipeline was retired (replaced/stopped),
 		// unregister the watch by returning false. Without this the closure
@@ -615,7 +780,10 @@ func watchAndPlay(p *gst.Pipeline) {
 		switch msg.Type() {
 		case gst.MessageEOS:
 			mgr.handleEnd(p)
-			return false
+			mgr.mu.Lock()
+			current := mgr.pipeline == p
+			mgr.mu.Unlock()
+			return current
 		case gst.MessageError:
 			gerr := msg.ParseError()
 			logs.Printf(logs.GSPPipeDebug, "gsp: pipeline error debug: %s", gerr.DebugString())
@@ -625,6 +793,57 @@ func watchAndPlay(p *gst.Pipeline) {
 		}
 		return true
 	})
+	startPlayback(p)
+}
+
+func startPlayback(p *gst.Pipeline) {
+	mgr.mu.Lock()
+	if mgr.pipeline != p {
+		mgr.mu.Unlock()
+		return
+	}
+	gen := mgr.gen
+	mgr.starting = true
+	mgr.fadeLevel = 1
+	if mgr.fadeIn > 0 {
+		mgr.fadeLevel = 0
+	}
+	mgr.fadeSerial++
+	mgr.applyGain()
+	if mgr.brightEl != nil {
+		mgr.brightEl.Set("brightness", mgr.fadeLevel-1)
+	}
+	mgr.mu.Unlock()
+	// Preroll before seeking: no initial audio/frame leaks before the trim or
+	// rate is applied, and slow decoders need no guessed sleep duration.
+	p.SetState(gst.StatePaused)
+	result, _ := p.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
+	mgr.mu.Lock()
+	current := mgr.pipeline == p && mgr.gen == gen
+	inPoint, rate, outPoint := mgr.inPoint, mgr.rate, mgr.outPoint
+	mgr.mu.Unlock()
+	if !current {
+		return
+	}
+	if result == gst.StateChangeFailure || result == gst.StateChangeAsync {
+		mgr.clearIfCurrent(p)
+		return
+	}
+	if inPoint > 0 || rate != 1 {
+		seekAtRate(p, inPoint)
+	}
+	mgr.mu.Lock()
+	if mgr.pipeline != p || mgr.gen != gen {
+		mgr.mu.Unlock()
+		return
+	}
+	mgr.starting = false
+	mgr.mu.Unlock()
+	p.SetState(gst.StatePlaying)
+	go fadeIn(p, gen)
+	if outPoint > 0 {
+		go watchTrim(p)
+	}
 }
 
 // retirePipeline tears down a pipeline that is no longer (or about to stop
@@ -654,8 +873,9 @@ func watchTrim(p *gst.Pipeline) {
 		}
 		ok, pos := p.QueryPosition(gst.FormatTime)
 		if ok && float64(pos) >= outPoint*1_000_000_000 {
-			mgr.handleEnd(p)
-			return
+			if !mgr.handleEnd(p) {
+				return
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -665,6 +885,32 @@ type pipelineSpec struct {
 	isTest      bool
 	testPattern string
 	filename    string
+}
+
+// rotationMethod maps cue rotation degrees to a videoflip method.
+func rotationMethod(deg int) string {
+	switch deg {
+	case 90:
+		return "clockwise"
+	case 180:
+		return "rotate-180"
+	case 270:
+		return "counterclockwise"
+	default:
+		return "none"
+	}
+}
+
+// flipMethod maps cue mirror mode to a videoflip method.
+func flipMethod(f string) string {
+	switch f {
+	case "h":
+		return "horizontal-flip"
+	case "v":
+		return "vertical-flip"
+	default:
+		return "none"
+	}
 }
 
 // buildPipeline constructs either a video-test-pattern pipeline or a
@@ -727,10 +973,22 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		}
 
 		var elementNames []string
+		queueName := "video-queue"
 		if isAudio {
-			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "autoaudiosink"}
+			queueName = "audio-queue"
+			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", "autoaudiosink"}
 		} else {
-			elementNames = []string{"queue", "videoconvert", "videobalance", "videoscale", "autovideosink"}
+			// Two videoflip stages (rotate, then mirror) so a cue can
+			// combine e.g. 90° with a horizontal mirror; method=none
+			// passes frames through untouched.
+			elementNames = []string{"queue", "videoconvert", "videobalance", "videoscale", "videoflip", "videoflip", "autovideosink"}
+		}
+		queueName += "-" + srcPad.GetStreamID()
+		// decodebin recreates its pads after Stop -> Play. Reuse the tail;
+		// an abandoned, unlinked sink would otherwise prevent preroll forever.
+		if queue, err := pipeline.GetElementByName(queueName); err == nil && queue != nil {
+			srcPad.Link(queue.GetStaticPad("sink"))
+			return
 		}
 
 		elements, err := gst.NewElementMany(elementNames...)
@@ -739,6 +997,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			pipeline.GetPipelineBus().Post(msg)
 			return
 		}
+		elements[0].Set("name", queueName)
 		pipeline.AddMany(elements...)
 		gst.ElementLinkMany(elements...)
 
@@ -759,10 +1018,11 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			mgr.mu.Lock()
 			if mgr.pipeline == pipeline {
 				mgr.volumeEl = elements[3]
+				mgr.panEl = elements[4]
+				mgr.applyGain()
+				elements[4].Set("panorama", float32(mgr.balance))
 			}
-			gain := dbToGain(mgr.volume)
 			mgr.mu.Unlock()
-			elements[3].Set("volume", gain)
 		}
 		// Retain the video "videobalance" element so the fade-to-black ramp can
 		// drive its brightness; a fresh clip always starts at full brightness.
@@ -770,9 +1030,18 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			mgr.mu.Lock()
 			if mgr.pipeline == pipeline {
 				mgr.brightEl = elements[2]
+				elements[2].Set("brightness", mgr.fadeLevel-1)
+				// Per-cue frame geometry (§5.5): letterbox vs stretch on
+				// videoscale, rotation then mirror on the two videoflips.
+				fit := mgr.fitMode
+				if fit != "stretch" {
+					fit = "fit"
+				}
+				elements[3].Set("add-borders", fit == "fit")
+				elements[4].Set("method", rotationMethod(mgr.rotation))
+				elements[5].Set("method", flipMethod(mgr.flip))
 			}
 			mgr.mu.Unlock()
-			elements[2].Set("brightness", 0.0)
 		}
 
 		queue := elements[0]
