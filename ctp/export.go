@@ -63,7 +63,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 		FitMode      string `db:"fit_mode"`
 		Rotation     int    `db:"rotation"`
 		Flip         string `db:"flip"`
-		Volume       float64
+		Volume       float64 `db:"volume"`
 		FadeIn       int     `db:"fadeIn"`
 		Rate         float64 `db:"rate"`
 		Balance      float64 `db:"balance"`
