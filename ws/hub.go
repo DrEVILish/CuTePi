@@ -42,10 +42,31 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 	c.write.Unlock()
 
 	// Read loop: we don't expect client messages, but reading detects close.
-	// A read deadline evicts the goroutine when a client stalls (dead phone,
-	// half-closed laptop): every 5 minutes of silence returns a deadline error
-	// and breaks out.
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+	// Idle-policy: server pings every 4 minutes; a browser answers
+	// automatically with pong, which refreshes the 5-minute read deadline —
+	// a dead client (no pongs) is evicted, a healthy one lives forever.
+	const readTimeout = 5 * time.Minute
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(readTimeout))
+	})
+	_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+	ping := time.NewTicker(4 * time.Minute)
+	defer ping.Stop()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ping.C:
+				c.write.Lock()
+				_ = conn.SetWriteDeadline(time.Now().Add(writeDeadline))
+				_ = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeDeadline))
+				c.write.Unlock()
+			}
+		}
+	}()
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			break
