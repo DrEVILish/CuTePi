@@ -1235,6 +1235,7 @@ bulkSel.value = "";
   document.addEventListener("contextmenu", (e) => {
     const row = e.target instanceof Element ? e.target.closest("tr.cue-group-header") : null;
     if (!row) return;
+    if (isShowMode()) return; // sheet locked: fall through to the native menu
     e.preventDefault();
     const m = ensureMenu();
     m.dataset.groupId = row.dataset.groupId || "";
