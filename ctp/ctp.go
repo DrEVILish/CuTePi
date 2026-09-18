@@ -1967,6 +1967,16 @@ func SetCueSchedule(cuePos int, enabled bool, day int, timeSec int) error {
 	if day < 1 || day > 7 || timeSec < 0 || timeSec >= 24*3600 {
 		return errors.New("invalid schedule day or time")
 	}
+	if !enabled {
+		// Keep the stored day/time on disable (inspector path behaviour):
+		// re-enabling must resume from the same trigger, not a wiped one.
+		_, err := db.Exec(`UPDATE cuesheet SET schedule_enabled = 0 WHERE cuePos = ?;`, cuePos)
+		if err != nil {
+			return err
+		}
+		bumpCuesheetVersion()
+		return nil
+	}
 	_, err := db.Exec(`
 		UPDATE cuesheet
 		SET schedule_enabled = ?, schedule_days = ?, schedule_time_ms = ?
