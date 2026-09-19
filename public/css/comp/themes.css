@@ -412,6 +412,8 @@ html[data-theme] .btn.btn-youtube:hover {
 .trim-time {
   position: absolute;
   bottom: 0.15rem;
+  /* Nudge off the marker bar's right half so the label never overlaps it. */
+  margin-left: 2px;
   font-size: 0.7rem;
   background: color-mix(in srgb, var(--ctp-bg) 75%, transparent);
   border-radius: 0.25rem;
