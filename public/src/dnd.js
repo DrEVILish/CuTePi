@@ -316,7 +316,15 @@ function setupCuesheetDropTarget() {
       // and let the generic reorder path anchor on the line.
       // The header comes from the hover intent, not the drop event target
       // (which may be the indicator row or a child node).
-      const header = (joining || joiningFirst) && intentGroupId
+      // A DRAGGED GROUP never enters this branch: its join is a block move,
+      // handled by the generic /api/sheet/drop path below.
+      const dragGroupId = (() => {
+        try {
+          const v = e.dataTransfer.getData("application/x-cutepi-group-move") || e.dataTransfer.getData("text/x-cutepi-group-move");
+          return /^\d+$/.test(v) ? v : null;
+        } catch (err) { return null; }
+      })();
+      const header = (joining || joiningFirst) && intentGroupId && !dragGroupId
         ? document.querySelector(`#cuesheet tr.cue-group-header[data-group-id="${intentGroupId}"]`)
         : null;
       const joinFirst = !!joiningFirst;
@@ -356,14 +364,6 @@ function setupCuesheetDropTarget() {
         removeDropIndicator();
         return;
       }
-
-      // --- Group block move (drag a group header row) ---
-      const dragGroupId = (() => {
-        try {
-          const v = e.dataTransfer.getData("application/x-cutepi-group-move") || e.dataTransfer.getData("text/x-cutepi-group-move");
-          return /^\d+$/.test(v) ? v : null;
-        } catch (err) { return null; }
-      })();
 
       // Cue reorder / group move / multi-selection block: ONE literal drop.
       // The server stores the rows at the exact gap shown plus the membership
