@@ -56,8 +56,9 @@
 }
 
 /* The three time columns are identical, fixed and deterministic: values
-   are always HH:MM:SS.mmm (12 glyphs), so a monospace stack + 12.5ch
-   cannot drift with the theme's proportional font. */
+   are always HH:MM:SS.mmm (12 glyphs) in the same mono stack, so 12.5ch
+   fits everywhere; overflow is hidden so a stray glyph can never bleed
+   into the neighbouring column. */
 #cuesheet th.cue-time,
 #cuesheet td.cue-time {
   width: 12.5ch;
@@ -66,6 +67,9 @@
   text-align: right;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
+}
+#cuesheet td.cue-time {
+  overflow: hidden;
 }
 
 #cuesheet thead th {
