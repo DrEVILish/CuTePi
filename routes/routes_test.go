@@ -751,26 +751,19 @@ func TestCuesheetRendersColumnResizeMarkers(t *testing.T) {
 	}
 
 	body := get(t, r, "/").Body.String()
-	// Only the name column is resizable; the time columns are fixed width now.
-	for _, want := range []string{
-		`data-column-resize="cueName"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected the cuesheet header to contain %q, got:\n%s", want, body)
-		}
-	}
+	// No column is resizable anymore: headers carry no resize markers.
 	for _, banned := range []string{
+		`data-column-resize="cueName"`,
 		`data-column-resize="preWait"`,
 		`data-column-resize="cueDur"`,
 		`data-column-resize="postWait"`,
 	} {
 		if strings.Contains(body, banned) {
-			t.Fatalf("time columns must not be resizable, found %q:\n%s", banned, body)
+			t.Fatalf("headers must not be resizable, found %q:\n%s", banned, body)
 		}
 	}
-	// One handle for the one resizable column.
-	if got := strings.Count(body, `class="col-resize-handle"`); got != 1 {
-		t.Fatalf("expected 1 column resize handle, got %d:\n%s", got, body)
+	if got := strings.Count(body, `class="col-resize-handle"`); got != 0 {
+		t.Fatalf("expected 0 column resize handles, got %d:\n%s", got, body)
 	}
 	// Media-type column: no label, content-fixed header class.
 	if !strings.Contains(body, `class="col-type"`) || strings.Contains(body, `>Type<span`) {

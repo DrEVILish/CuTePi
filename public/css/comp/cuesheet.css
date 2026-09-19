@@ -192,22 +192,6 @@ td:hover {
   background: var(--ctp-surface-2, #26163e);
 }
 
-/* Invisible drag handle on each header's right edge. */
-#cuesheet .col-resize-handle {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 8px;
-  cursor: col-resize;
-  touch-action: none;
-  z-index: 2;
-}
-#cuesheet .col-resize-handle:hover,
-#cuesheet .col-resize-handle.dragging {
-  background-color: var(--ctp-flare, #d85cff);
-}
-
 /* Media-type icon column (width comes from the #cuesheet column rule above) */
 .cue-type {
   text-align: center;
