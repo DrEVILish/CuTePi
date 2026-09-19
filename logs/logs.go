@@ -66,7 +66,7 @@ type AuditEvent struct {
 	Title string `json:"title"` // cue / file title
 }
 
-const bufferSize = 1000
+const bufferSize = 5000
 
 // auditCapacity caps the in-memory audit trail. A show-day of cue events
 // fits easily; beyond that the oldest entries roll off. The trail is a

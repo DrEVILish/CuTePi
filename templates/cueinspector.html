@@ -80,7 +80,7 @@
                    <summary aria-label="Pick the days of week">Days&hellip;</summary>
                    <div class="day-picker-list">
                      {{ range $i, $d := listDays }}
-                     <label><input type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if hasBit $.Cue.ScheduleDays $i }}checked{{ end }}> {{ $d }}</label>
+                     <label><input type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if or (hasBit $.Cue.ScheduleDays $i) (eq $.Cue.ScheduleDays 0) }}checked{{ end }}> {{ $d }}</label>
                      {{ end }}
                    </div>
                  </details>
