@@ -60,6 +60,8 @@ func main() {
 	// Optional operator password (config.json auth_password / Settings).
 	// Applies to every route group below, including the WebSocket handshake.
 	r.Use(routes.AuthMiddleware())
+	// Client cache policy: no-store everywhere except images.
+	r.Use(routes.CachePolicy())
 	// Cap request bodies: one giant POST must not fill the disk or OOM the
 	// in-memory .CTP parse.
 	r.Use(routes.LimitBody())

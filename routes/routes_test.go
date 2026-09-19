@@ -2567,3 +2567,24 @@ func TestScheduleNextEndpoint(t *testing.T) {
 	}
 	postForm(t, r, "/api/setting/showmode", "showmode", "")
 }
+
+// The client caches nothing except images: static assets get no-store,
+// image paths get a short public cache.
+func TestCachePolicy(t *testing.T) {
+	r := gin.New()
+	r.Use(CachePolicy())
+	Public(r)
+
+	w := get(t, r, "/src/ui.js")
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("GET /src/ui.js Cache-Control = %q, want no-store", cc)
+	}
+	w = get(t, r, "/img/cutepi-logo.svg")
+	if cc := w.Header().Get("Cache-Control"); cc != "public, max-age=3600" {
+		t.Fatalf("GET /img/cutepi-logo.svg Cache-Control = %q, want public, max-age=3600", cc)
+	}
+	w = get(t, r, "/")
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("GET / Cache-Control = %q, want no-store", cc)
+	}
+}
