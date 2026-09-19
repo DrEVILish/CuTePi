@@ -109,8 +109,7 @@
               <div class="d-flex align-items-start gap-3 flex-wrap">
                             <div class="insp-rate">
                 <label class="insp-field-label" for="insp-rate">Playback rate <output id="insp-rate-value">{{ .Cue.Rate }}×</output></label>
-                <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" title="Playback speed (pitch preserved)">
-                <button type="button" class="btn btn-sm btn-outline-secondary" data-rate-reset>1×</button>
+                <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" title="Playback speed (pitch preserved). Double-click to reset to 1×">
               </div>
                              <div class="d-flex align-items-center gap-2">
                  <label class="insp-field-label" for="insp-fadeaction">Fade-stop others</label>

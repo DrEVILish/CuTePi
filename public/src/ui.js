@@ -1559,12 +1559,20 @@ document.addEventListener("input", (e) => {
   }
 });
 
+// Double-click on the playback-rate slider resets it to 1× (the old
+// dedicated button was redundant).
+document.addEventListener("dblclick", (e) => {
+  if (e.target.id !== "insp-rate") return;
+  e.target.value = 1;
+  e.target.dispatchEvent(new Event("input", {bubbles: true}));
+  e.target.dispatchEvent(new Event("change", {bubbles: true}));
+});
+
 document.addEventListener("click", (e) => {
-  const button = e.target.closest("[data-volume-step], [data-volume-reset], [data-rate-reset]");
+  const button = e.target.closest("[data-volume-step], [data-volume-reset]");
   if (!button) return;
-  const rate = button.hasAttribute("data-rate-reset");
-  const input = document.getElementById(rate ? "insp-rate" : "insp-volume");
-  input.value = rate ? 1 : button.hasAttribute("data-volume-reset") ? 0 : Number(input.value) + Number(button.dataset.volumeStep);
+  const input = document.getElementById("insp-volume");
+  input.value = button.hasAttribute("data-volume-reset") ? 0 : Number(input.value) + Number(button.dataset.volumeStep);
   input.dispatchEvent(new Event("input", {bubbles:true}));
   input.dispatchEvent(new Event("change", {bubbles:true}));
 });
