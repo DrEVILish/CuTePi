@@ -58,7 +58,7 @@
                    class="form-control form-control-sm ms-2" style="width:5em"
                    value="{{ .Cue.LoopCount }}"
                    title="Loop count: 0 = infinite, N = play N times"
-                   aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
+                   aria-label="Loop count">
                </div>
              </div>
              <div class="insp-time-field">
@@ -67,8 +67,8 @@
                  <label class="form-check-label small" for="insp-autocontinue">Auto-continue</label>
                </div>
              </div>
-             <div class="insp-time-field insp-schedule mt-1 pt-2 border-top">
-               <!-- checkbox - time - day picker (bottom left) -->
+              <div class="insp-time-field insp-schedule">
+                <!-- checkbox - time - day picker (bottom left) -->
                <input type="hidden" name="schedule_block" value="1">
                <div class="d-flex align-items-center gap-2">
                  <input class="form-check-input" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
@@ -312,15 +312,6 @@
        document-level DELEGATED and wired once (fragment-run guard below), so
        event listeners survive any later re-render of the timeline markup. -->
   <script>
-  (function () {
-    var loopCheck = document.getElementById("insp-loop");
-    var loopCount = document.getElementById("insp-loopcount");
-    if (loopCheck && loopCount) {
-      loopCheck.addEventListener("change", function () {
-        loopCount.disabled = !loopCheck.checked;
-      });
-    }
-  })();
   <script>
     // Fade-stop enable: the checkbox gates the scope/time/curve controls.
     // Disabling them keeps their values but omits them from the submit, so
