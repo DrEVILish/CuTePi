@@ -830,17 +830,48 @@ func ExtendSelection(targetCue, targetGroup int) error {
 		}
 	}
 	// Keep selection members outside the span (matches the old numeric-range
-	// behaviour of accumulating, not replacing).
+	// behaviour of accumulating, not replacing). Stale entries (cues/groups
+	// deleted since they were selected, e.g. past a bulk delete) are pruned:
+	// a dead position must not sneak back into a later bulk op.
 	have := make(map[int]bool, len(set))
 	for _, p := range set {
 		have[p] = true
 	}
-	for _, p := range SelectedSet() {
+	live, _ := selectedSetPruned()
+	for _, p := range live {
 		if !have[p] {
 			set = append(set, p)
 		}
 	}
 	return SetGroupSelection(anchor, set)
+}
+
+// selectedSetPruned returns the stored multi-selection minus entries whose
+// row no longer exists (deleted cues/groups). Dead positions otherwise hide
+// in the set until a later ExtendSelection/Bulk call resurrects them.
+func selectedSetPruned() ([]int, error) {
+	set := SelectedSet()
+	if len(set) == 0 {
+		return set, nil
+	}
+	out := make([]int, 0, len(set))
+	for _, p := range set {
+		if p < 0 {
+			var g int
+			if err := db.Get(&g, `SELECT group_id FROM cue_group WHERE group_id = ?`, -p); err == nil {
+				out = append(out, p)
+			}
+			continue
+		}
+		var c int
+		if err := db.Get(&c, `SELECT cuePos FROM cuesheet WHERE cuePos = ?`, p); err == nil {
+			out = append(out, p)
+		}
+	}
+	if len(out) != len(set) {
+		_ = setSelectedSet(out)
+	}
+	return out, nil
 }
 
 // ExtendStep grows/shrinks the multi-selection one visible unit for
@@ -2446,6 +2477,9 @@ func ClearCueSheet() (err error) {
 		log.Printf("Error clearing cuesheet: %v", err)
 		return err
 	}
+	// The multi-selection dies with the sheet: stale positions would poison
+	// a later bulk/extend action.
+	_, _ = db.Exec(`DELETE FROM state WHERE key = ?`, stateKeySelectedSet)
 	// Groups are part of the sheet: a clear (or overwrite-import) must not
 	// leave empty folders behind referencing nothing.
 	if _, err = db.Exec(`DELETE FROM cue_group;`); err != nil {

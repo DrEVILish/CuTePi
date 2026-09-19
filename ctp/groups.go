@@ -126,10 +126,13 @@ func DeleteGroupWithCues(id int) error {
 			return err
 		}
 	}
-	// A deleted group must not stay selected (dangling inspector refetch).
+	// A deleted group must not stay selected (dangling inspector refetch),
+	// and its id must not linger in the multi-selection set (selectedSet
+	// would resurrect it into a later bulk/extend action).
 	if sel, err := SelectedGroupPos(); err == nil && sel == id {
 		_ = setSelectedCuePos(0)
 	}
+	_ = setSelectedSet(nil)
 	bumpCuesheetVersion()
 	// Reindex to the compact sequence after the removals (bulk rule).
 	var byIndex []int
