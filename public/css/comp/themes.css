@@ -299,19 +299,6 @@ html[data-theme] .btn.btn-youtube:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* Cue identity badge: neutral outline, tinted with the cue's own colour when
-   set, so the badge reads the row highlight instead of always warning. */
-.inspector-cuebadge {
-  background: transparent;
-  border: 1px solid var(--ctp-border);
-  color: var(--ctp-text);
-}
-.inspector-cuebadge.has-color {
-  background: color-mix(in srgb, var(--cue-accent) 28%, transparent);
-  border-color: var(--cue-accent);
-  color: var(--ctp-text);
-}
-
 /* Colour swatch chips: 12 named palette dots + "none". A radio group keeps
    keyboard/arrow navigation and the form's instant-change save working. */
 .insp-swatches {

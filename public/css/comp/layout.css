@@ -406,17 +406,6 @@ body.inspector-groupview .inspector-tabs {
 body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   display: none;
 }
-.inspector-identity {
-  border-bottom: 1px solid var(--bs-border-color, #444);
-  padding-bottom: 0.3rem;
-}
-.inspector-identity-title {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 45%;
-}
 .inspector-tabform {
   padding: 0 0.75rem 0.75rem;
 }

@@ -24,11 +24,6 @@
     </form>
   </div>
   {{ end }}
-  <div class="inspector-identity d-flex flex-wrap align-items-center gap-2">
-    <span class="badge inspector-cuebadge{{ if .Cue.Color }} has-color{{ end }}"{{ if .Cue.Color }} style="--cue-accent: {{ .Cue.Color }}"{{ end }}>{{ .Cue.CueNum }}</span>
-    <span class="inspector-identity-title">{{ .Cue.Title }}</span>
-    <span class="text-muted small">Source: {{ .Cue.Filename }}</span>
-  </div>
   <!-- One form spans every tab pane; hidden panes' fields still submit, and
        any visible change saves instantly via htmx-triggered events. -->
   <form id="inspector-form" class="inspector-tabform"
