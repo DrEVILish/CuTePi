@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -91,6 +92,13 @@ func TemplateFuncs() map[string]any {
 		"typeIcon":    TypeIcon,
 		"displayTime": DisplayTime,
 		"progressPct": ProgressPct,
+		"formatSchedule": func(ms int) string {
+			// Cue schedule reminder: HH:MM from milliseconds since midnight.
+			if ms <= 0 {
+				return ""
+			}
+			return fmt.Sprintf("%02d:%02d", ms/3600000, (ms/60000)%60)
+		},
 		"div":         func(a, b int) int { return a / b },
 		"add":         func(a, b int) int { return a + b },
 		"mod":         func(a, b int) int { return a % b },

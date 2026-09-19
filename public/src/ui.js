@@ -834,17 +834,7 @@ function patternOptions() {
       <div class="cue-context-divider"></div>
       <div class="cue-context-item" data-cue-action="newgroup"><i class="bi bi-folder-plus"></i> <span>New group</span></div>
       <div class="cue-context-divider"></div>
-      <div class="cue-context-item cue-context-danger" data-cue-action="delete"><i class="bi bi-trash3"></i> Delete cue</div>
-<div class="cue-context-item cue-context-bulk">
-        <i class="bi bi-stack"></i> Bulk:
-        <select class="cue-bulk-select" title="Bulk operation">
-          <option value="">Select…</option>
-          <option value="color">Apply colour</option>
-          <option value="group">Apply group</option>
-          <option value="delete">Delete selected</option>
-        </select>
-        <select class="cue-bulk-group" title="Target group" hidden></select>
-      </div>`;
+      <div class="cue-context-item cue-context-danger" data-cue-action="delete"><i class="bi bi-trash3"></i> Delete cue</div>`;
     document.body.appendChild(menuEl);
     return menuEl;
   }
@@ -994,75 +984,6 @@ function patternOptions() {
     m.style.left = x + "px";
     m.style.top = y + "px";
     m.hidden = false;
-
-    // Bulk operation selector. The target-group dropdown is rebuilt from the
-    // sheet's current group headers every time the menu opens.
-    const bulkSel = m.querySelector(".cue-bulk-select");
-    const bulkGroup = m.querySelector(".cue-bulk-group");
-    if (bulkSel && bulkGroup) {
-      bulkGroup.innerHTML = "";
-      document.querySelectorAll('#cuesheet tr.cue-group-header[data-group-id]').forEach((h) => {
-        const opt = document.createElement("option");
-        opt.value = h.dataset.groupId;
-        opt.textContent = h.dataset.cueName || ("Group " + h.dataset.groupId);
-        bulkGroup.appendChild(opt);
-      });
-bulkSel.value = "";
-      bulkGroup.hidden = true;
-      const bulkCount = JSON.parse(menuEl.dataset.bulk || "[]").length;
-      // §12.4: bulk ops only exist for a MULTI-selection. On a single click
-      // the whole bulk row is hidden — the per-cue Colour / Fade / Auto-
-      // continue / New group / Delete items stay.
-      if (bulkCount < 2) {
-        m.querySelector(".cue-context-bulk").hidden = true;
-      } else {
-        m.querySelector(".cue-context-bulk").hidden = false;
-      }
-      bulkSel.onchange = function () {
-        const op = bulkSel.value;
-        bulkGroup.hidden = op !== "group";
-        if (!op || op === "") return;
-        if (op === "group" && !bulkGroup.value) {
-          showToast("Choose a target group first");
-          return;
-        }
-        let positions = [];
-        try { positions = livePositions(JSON.parse(menuEl.dataset.bulk || "[]")); } catch (err) {}
-        if (!positions || positions.length === 0) {
-          bulkGroup.hidden = true;
-          bulkSel.value = "";
-          return;
-        }
-        bulkGroup.hidden = op !== "group";
-        hideMenu();
-        const anchor = menuEl.dataset.cuePos;
-        if (op === "delete") {
-          fetch("/api/cue/bulk", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({op: "delete", value: "", positions}),
-          })
-            .then((res) => {
-              if (!res.ok) throw new Error("server returned " + res.status);
-              return res.text();
-            })
-            .then((html) => replaceCuesheet(html))
-            .catch((err) => {
-              console.error("CuTePi: bulk delete failed", err);
-              showToast("Bulk delete failed: " + err.message);
-            });
-        } else if (op === "group") {
-          bulkPut("group", bulkGroup.value, anchor, "group");
-        } else if (op === "color") {
-          // Read the picked swatch: the old code sent "" and wiped every
-          // selected cue's colour instead of applying it.
-          const sel = m.querySelector(".cue-context-color select");
-          bulkPut("color", sel ? sel.value : "", anchor, "color");
-        } else {
-          bulkPut(op, "", anchor, op);
-        }
-      };
-    }
   });
 
   document.addEventListener("click", (e) => {
@@ -1202,7 +1123,6 @@ bulkSel.value = "";
       </div>
       <div class="cue-context-divider"></div>
       <div class="cue-context-item" data-group-action="newgroup"><i class="bi bi-folder-plus"></i> New group</div>
-      <div class="cue-context-item" data-group-action="newsubgroup"><i class="bi bi-folder2-plus"></i> New subgroup</div>
       <div class="cue-context-divider"></div>
       <div class="cue-context-item cue-context-danger" data-group-action="delete"><i class="bi bi-trash3"></i> Delete group</div>`;
     document.body.appendChild(menuEl);
@@ -1290,11 +1210,6 @@ bulkSel.value = "";
       postCuesheet("/api/group/" + id + "/collapse");
     } else if (action === "newgroup") {
       postCuesheet("/api/group/add");
-    } else if (action === "newsubgroup") {
-      // Nested folder: created inside the right-clicked group.
-      const form = new FormData();
-      form.append("parentGroupID", id);
-      postCuesheet("/api/group/add", "POST", form);
     } else if (action === "delete") {
       postCuesheet("/api/group/" + id, "DELETE");
       // The group inspector panel was showing the deleted group: reset it to

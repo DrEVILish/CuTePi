@@ -14,9 +14,9 @@
         <th scope="col" class="col-type" title="Media type"></th>
         <th scope="col" class="col-cue-num" title="Cue number">Number</th>
         <th scope="col" data-column-resize="cueName">Name<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
-        <th scope="col" data-column-resize="preWait">PreWait<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
-        <th scope="col" data-column-resize="cueDur">Duration<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
-        <th scope="col" data-column-resize="postWait">PostWait<span class="col-resize-handle" title="Drag to resize column" aria-hidden="true"></span></th>
+        <th scope="col" class="cue-time">PreWait</th>
+        <th scope="col" class="cue-time">Duration</th>
+        <th scope="col" class="cue-time">PostWait</th>
       </tr>
     </thead>
     <tbody>
@@ -46,7 +46,8 @@
                 hx-trigger="dblclick" hx-post="/api/group/{{ .Group.GroupID }}/edit/name"
                 hx-swap="outerHTML" aria-label="Edit group name {{ .Group.Name }}">{{ .Group.Name }}</span>
             </span>
-            <span class="text-muted small ms-2" id="cue-group-members-{{ .Group.GroupID }}">{{ .MemberCount }} cue{{ if ne .MemberCount 1 }}s{{ end }}</span>
+              <span class="cue-group-sep" aria-hidden="true"> · </span>
+              <span class="text-muted small ms-2" id="cue-group-members-{{ .Group.GroupID }}">{{ .MemberCount }} cue{{ if ne .MemberCount 1 }}s{{ end }}</span>
           </td>
         </tr>
         {{ else }}
@@ -63,27 +64,24 @@
           <td class="cue-name">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/title" hx-swap="outerHTML">{{ .Cue.Title }}</span>
             {{ if .Cue.WaitKind }}<span class="cue-wait-pill" title="{{ if eq .Cue.WaitKind "post" }}PostWait{{ else }}PreWait{{ end }} in progress">{{ .Cue.WaitLeftS }}s</span>{{ end }}
+            {{ if and .Cue.ScheduleEnabled (gt .Cue.ScheduleTimeMs 0) }}<span class="cue-slotsched" title="Scheduled trigger"> · <i class="bi bi-clock"></i> {{ formatSchedule .Cue.ScheduleTimeMs }}</span>{{ end }}
           </td>
-          <td>
+          <td class="cue-time">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/preWait" hx-swap="outerHTML">{{ .Cue.PreWaitFmt }}</span>
           </td>
-          <td>
+          <td class="cue-time cue-dur">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/cueDuration" hx-swap="outerHTML">{{ .Cue.CueDurationFmt }}</span>
-          </td>
-          <td>
-            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/postWait" hx-swap="outerHTML">{{ .Cue.PostWaitFmt }}</span>
-          </td>
-        </tr>
-        {{ if .Cue.Playing }}
-        <tr class="cue-progress" data-cue-pos="{{ .Cue.CuePos }}">
-          <td colspan="6">
+            {{ if .Cue.Playing }}
             <div class="cue-progress-bar" data-pos="{{ .Cue.PlayPos }}" data-dur="{{ .Cue.PlayDur }}" role="progressbar" tabindex="0"
                  title="{{ displayTime .Cue.PlayPos }} of {{ displayTime .Cue.PlayDur }}">
               <div class="cue-progress-fill" style="width: {{ progressPct .Cue.PlayPos .Cue.PlayDur }}%"></div>
             </div>
+            {{ end }}
+          </td>
+          <td class="cue-time">
+            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/postWait" hx-swap="outerHTML">{{ .Cue.PostWaitFmt }}</span>
           </td>
         </tr>
-        {{ end }}
         {{ end }}
       {{ end }}
       {{ if not .Cuesheet.Cues }}
