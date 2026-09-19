@@ -184,6 +184,9 @@ func InitDB() error {
 		{"fit_mode", "TEXT NOT NULL DEFAULT 'fit'"},
 		{"rotation", "INTEGER NOT NULL DEFAULT 0"},
 		{"flip", "TEXT NOT NULL DEFAULT 'none'"},
+		{"schedule_enabled", "INTEGER NOT NULL DEFAULT 0"},
+		{"schedule_days", "INTEGER NOT NULL DEFAULT 0"},
+		{"schedule_time_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"sheet_index", "REAL NOT NULL DEFAULT 0"},
 	}
 	for _, nc := range newCols {
@@ -331,6 +334,9 @@ func migrateLegacyCuesheetDefault(d *sqlx.DB) error {
 			fit_mode TEXT NOT NULL DEFAULT 'fit',
 			rotation INTEGER NOT NULL DEFAULT 0,
 			flip TEXT NOT NULL DEFAULT 'none',
+			schedule_enabled INTEGER NOT NULL DEFAULT 0,
+			schedule_days INTEGER NOT NULL DEFAULT 0,
+			schedule_time_ms INTEGER NOT NULL DEFAULT 0,
 			sheet_index REAL NOT NULL DEFAULT 0,
 			FOREIGN KEY (media_id) REFERENCES mediapool (media_id)
 				ON UPDATE CASCADE ON DELETE CASCADE
