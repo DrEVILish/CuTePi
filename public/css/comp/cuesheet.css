@@ -83,7 +83,7 @@
   background: color-mix(in srgb, var(--ctp-accent, #2fd6ff) 85%, transparent);
 }
 
-td:hover {
+#cuesheet td:hover {
   cursor: default;
 }
 
@@ -113,10 +113,8 @@ td:hover {
   background: rgba(216, 92, 255, 0.08);
 }
 
-/* User-adjustable CueList column widths. Fixed table layout keeps the table
-   at 100% of its pane (no horizontal scroll) and makes explicit per-column
-   widths authoritative; widths are set inline by public/src/ui.js and
-   persist in localStorage. */
+/* Fixed table layout keeps the table at 100% of its pane (no horizontal
+   scroll) with the explicit per-column widths authoritative. */
 #cuesheet table {
   table-layout: fixed;
   width: 100%;
@@ -218,10 +216,6 @@ td:hover {
   background-color: color-mix(in srgb, var(--cue-accent, transparent) 30%, transparent) !important;
   box-shadow: inset 0 0 0 9999px transparent !important;
 }
-/* The selected row keeps a stronger, definitely visible highlight (and
-   readable text) over the tint — cue rows and group headers alike. Uncoloured
-   rows have --cue-accent undefined, which would mix to an invisible tint,
-   so both fall back to the cyan accent used everywhere else in the UI. */
 /* The selected row keeps a stronger, definitely visible highlight (and
    readable text) over the tint — cue rows and group headers alike. Uncoloured
    rows have --cue-accent undefined, which would mix to an invisible tint,
@@ -408,8 +402,6 @@ td:hover {
 .cue-group-header td {
   vertical-align: middle;
 }
-/* Group names render exactly like cue names (same inherited size/weight):
-   the folder icon, tint and member count already say "folder". */
 /* Visual feedback while dragging a group header row. */
 .cue-group-header.dragging {
   opacity: 0.4;
@@ -421,12 +413,6 @@ td:hover {
 .cue-group-header.dnd-drop-target {
   background: rgba(216, 92, 255, 0.22) !important;
   outline: 1px dashed var(--ctp-accent-2, #d85cff);
-}
-.cue-group-header.dnd-drop-target .cue-group-toggle {
-  display: inline-flex;
-  padding: 0 0.15rem;
-  top: 50%;
-  transform: translateY(-50%);
 }
 /* Only the NAME is indented inside a group; the number column stays
    aligned with top-level numbers. Each nesting level adds 1.1rem. */
@@ -470,16 +456,14 @@ td:hover {
   border-left: 1px solid var(--folder-line);
   border-right: 1px solid var(--folder-line);
 }
-/* The header's solid colour bar on the left edge. */
+/* The header's solid colour bar uses the same tr border-left the cue rows
+   use, so the accent sits in the same place on every row kind. */
 #cuesheet tr.cue-group-header {
-  box-shadow: inset 3px 0 0 var(--cue-accent, var(--ctp-accent, #2fd6ff));
+  border-left: 3px solid var(--cue-accent, transparent);
 }
 #cuesheet tr.cue-in-group td {
   border-left: 1px solid var(--folder-line);
   border-right: 1px solid var(--folder-line);
-}
-#cuesheet tr.cue.cue-gfirst td {
-  border-top: 1px solid var(--folder-line);
 }
 #cuesheet tr.cue.cue-glast td {
   border-bottom: 1px solid var(--folder-line);
