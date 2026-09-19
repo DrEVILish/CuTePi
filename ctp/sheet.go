@@ -432,21 +432,44 @@ func SheetDrop(cues []int, groupID int, beforeKind string, beforeID int, join bo
 		}
 	}
 
-	// Find the insertion index for the gap "before the target row".
-	at := len(rest) // end of sheet
-	if beforeKind == "cue" {
-		for i, item := range rest {
-			if item.Kind == "cue" && item.CuePos == beforeID {
-				at = i
+	// Find the insertion index for the gap "before the target row". The
+	// anchor row may itself be one of the DRAGGED rows (dropping the block
+	// on one of its own bands): search the original sequence and count the
+	// surviving rows before it — searching `rest` misses, and the block
+	// would silently fall to end-of-sheet.
+	restIdx := func(seqIdx int) int {
+		n := 0
+		for i, item := range seq {
+			if i >= seqIdx {
 				break
+			}
+			key := "c" + fmt.Sprint(item.CuePos)
+			if item.Kind == "group" {
+				key = "g" + fmt.Sprint(item.GroupID)
+			}
+			if !dragSet[key] {
+				n++
 			}
 		}
-	} else if beforeKind == "group" {
-		for i, item := range rest {
-			if item.Kind == "group" && item.GroupID == beforeID {
-				at = i
-				break
+		return n
+	}
+	seqIndexOf := func(kind string, id int) (int, bool) {
+		for i, item := range seq {
+			if item.Kind != kind {
+				continue
 			}
+			if (kind == "cue" && item.CuePos == id) || (kind == "group" && item.GroupID == id) {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+	at := len(rest) // end of sheet
+	if i, ok := seqIndexOf("cue", beforeID); beforeKind == "cue" && ok {
+		at = restIdx(i)
+	} else if beforeKind == "group" {
+		if i, ok := seqIndexOf("group", beforeID); ok {
+			at = restIdx(i)
 		}
 	}
 
@@ -478,11 +501,8 @@ func SheetDrop(cues []int, groupID int, beforeKind string, beforeID int, join bo
 		}
 	}
 	if join && beforeKind == "group" && joinFirst {
-		for i, item := range rest {
-			if item.Kind == "group" && item.GroupID == beforeID {
-				at = i + 1
-				break
-			}
+		if i, ok := seqIndexOf("group", beforeID); ok {
+			at = restIdx(i) + 1
 		}
 		if isGroup {
 			if err := ValidateGroupParent(groupID, beforeID); err != nil {
@@ -529,13 +549,28 @@ func SheetDrop(cues []int, groupID int, beforeKind string, beforeID int, join bo
 	}
 
 	// Member-slot drops: after a specific cue wins over the end-of-group
-	// default. Not reached by group moves after cuePos anchoring.
+	// default. Not reached by group moves after cuePos anchoring. Same
+	// dragged-anchor rule as above: count surviving rows up to and
+	// including the anchor, so a block dropped on its own band stays at
+	// that slot instead of falling to end-of-sheet.
 	if after > 0 {
-		for i, item := range rest {
-			if item.Kind == "cue" && item.CuePos == after {
-				at = i + 1
-				break
+		if i, ok := seqIndexOf("cue", after); ok {
+			isDragged := func(it SheetItem) bool {
+				return it.Kind == "cue" && dragSet["c"+fmt.Sprint(it.CuePos)]
 			}
+			// A dragged anchor: skip the dragged run that follows it, so the
+			// block lands after itself (the slot the line showed) instead of
+			// cutting the block in half around its own anchor. A surviving
+			// anchor: the slot is right after it.
+			j := i
+			if isDragged(seq[j]) {
+				for j < len(seq) && isDragged(seq[j]) {
+					j++
+				}
+			} else {
+				j = i + 1
+			}
+			at = restIdx(j)
 		}
 	}
 

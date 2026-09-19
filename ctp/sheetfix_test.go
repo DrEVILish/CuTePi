@@ -1,6 +1,8 @@
 package ctp
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -464,5 +466,61 @@ func TestOutlineEnclosesMemberAfterNestedSubgroup(t *testing.T) {
 	}
 	if !rows[lastG1].LastInGroup {
 		t.Fatal("last G1 member after the subgroup is not LastInGroup — folder outline never closes under it")
+	}
+}
+
+// A multi-selection dropped on the band of one of its OWN rows (the
+// selection already includes members of the target group) must land at the
+// slot the line showed: the old anchor lookup searched the row-removed
+// sequence, missed, and the block silently fell to end-of-sheet.
+func TestSheetDropDraggedAnchorStaysAtBand(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	mustRegisterMedia(t, "anchor-drag.mp4")
+	for i := 0; i < 5; i++ {
+		if err := AddCue("anchor-drag.mp4", ""); err != nil {
+			t.Fatalf("AddCue %d: %v", i, err)
+		}
+	}
+	gid, err := CreateGroup("G", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if err := SetCueGroup(itoa(4), gid); err != nil {
+		t.Fatalf("join 4: %v", err)
+	}
+	if err := SetCueGroup(itoa(5), gid); err != nil {
+		t.Fatalf("join 5: %v", err)
+	}
+	gidInt := gid
+	// Selection [4,1]: 4 is already a member of G. Drop on 4's own
+	// lower-half band (after=4): the block must land after cue 4, not at
+	// the end of the sheet.
+	if err := SheetDrop([]int{4, 1}, 0, "cue", 4, false, false, false, &gidInt, 4); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	seq, err := loadSheetSequence()
+	if err != nil {
+		t.Fatalf("loadSheetSequence: %v", err)
+	}
+	var order []string
+	for _, it := range seq {
+		if it.Kind == "group" {
+			order = append(order, "G")
+		} else {
+			order = append(order, fmt.Sprint(it.CuePos))
+		}
+	}
+	want := "2,3,G,4,1,5"
+	if strings.Join(order, ",") != want {
+		t.Fatalf("order = %s, want %s", strings.Join(order, ","), want)
+	}
+	parents, _ := storedParents()
+	for _, p := range []int{4, 1} {
+		if parents[p] != gid {
+			t.Fatalf("cue %d parent = %d, want %d", p, parents[p], gid)
+		}
 	}
 }
