@@ -143,7 +143,7 @@ func Groups(rg *gin.RouterGroup) {
 			c.String(http.StatusBadRequest, "invalid group id")
 			return
 		}
-		if err := ctp.DeleteGroup(id); err != nil {
+		if err := ctp.DeleteGroupWithCues(id); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}

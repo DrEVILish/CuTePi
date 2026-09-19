@@ -469,7 +469,7 @@ func TestGroupRoutesCreateAssignUpdateDelete(t *testing.T) {
 	}
 
 
-	// Deleting the group releases the cue.
+	// Deleting the group deletes its member cues too.
 	w = del(t, r, "/api/group/1")
 	if w.Code != http.StatusOK {
 		t.Fatalf("DELETE /api/group/1 = %d: %s", w.Code, w.Body.String())
@@ -477,8 +477,8 @@ func TestGroupRoutesCreateAssignUpdateDelete(t *testing.T) {
 	if strings.Contains(w.Body.String(), "cue-group-header") {
 		t.Fatalf("group should be gone, got:\n%s", w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `data-cue-pos="1"`) {
-		t.Fatalf("released cue should still render, got:\n%s", w.Body.String())
+	if strings.Contains(w.Body.String(), `data-cue-pos="1"`) {
+		t.Fatalf("member cue should be deleted with the group, got:\n%s", w.Body.String())
 	}
 }
 
