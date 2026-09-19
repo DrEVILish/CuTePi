@@ -249,31 +249,31 @@
 /* ------------------------------------------------------------------ */
 /* 5 STATES (on .row — both kinds pick them up)                       */
 /* ------------------------------------------------------------------ */
-/* Selected row (anchor or multi-selection member): a stronger, clearly
-   visible highlight. Uncoloured rows have --cue-accent undefined, which
-   would mix to an invisible tint, so both kinds fall back to the cyan
-   selection accent. The ring is painted as per-cell inset box-shadows
-   IN THE SAME declaration as the 9999px stripe-kill shadow (an outline
-   on the <tr> renders as random partial segments in Chromium). */
+/* Selected row (anchor or multi-selection member): tinted with the
+   PRIMARY theme accent, not the row's own colour accent — selection is
+   an operator state, the colour accent belongs to the row itself. The
+   ring is painted as per-cell inset box-shadows IN THE SAME declaration
+   as the 9999px stripe-kill shadow (an outline on the <tr> renders as
+   random partial segments in Chromium). */
 #cuesheet tr.row.table-warning > td {
   --bs-table-accent-bg: transparent;
-  background-color: color-mix(in srgb, var(--cue-accent, var(--ctp-accent, #2fd6ff)) 55%, var(--ctp-surface, #3c3c50)) !important;
+  background-color: color-mix(in srgb, var(--ctp-accent, #2fd6ff) 55%, var(--ctp-surface, #3c3c50)) !important;
   box-shadow:
-    inset 0 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset 0 -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset 0 2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
+    inset 0 -2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
     inset 0 0 0 9999px transparent !important;
   color: var(--ctp-text, #fff) !important;
 }
 #cuesheet tr.row.table-warning > td:first-child {
   box-shadow:
-    inset 2px 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset 0 -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset 2px 2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
+    inset 0 -2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
     inset 0 0 0 9999px transparent !important;
 }
 #cuesheet tr.row.table-warning > td:last-child {
   box-shadow:
-    inset 0 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset -2px -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset 0 2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
+    inset -2px -2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
     inset 0 0 0 9999px transparent !important;
 }
 
