@@ -106,6 +106,14 @@
 /* ------------------------------------------------------------------ */
 /* 2 ROW BASE — shared by .cue and .cuegroup                          */
 /* ------------------------------------------------------------------ */
+/* `.row` collides with Bootstrap's grid class (display:flex on the tr):
+   neutralize it back to a table row before styling the shared bits. */
+#cuesheet tr.row {
+  display: table-row;
+  margin-left: 0;
+  margin-right: 0;
+  --bs-gutter-x: 0;
+}
 #cuesheet tr.row td,
 #cuesheet tr.row th {
   padding-top: 0.1rem;
