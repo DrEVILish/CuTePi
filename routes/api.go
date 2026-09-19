@@ -1001,12 +1001,26 @@ func Api(rg *gin.RouterGroup) {
 		if fa := strings.TrimSpace(c.PostForm("fadeAction")); fa != "" {
 			fields["fadeAction"] = fa
 		}
-		// fadeOut is always submitted; an empty field clears the fade time.
-		fo := strings.TrimSpace(c.PostForm("fadeOut"))
-		if fo == "" {
-			fo = "0"
+		// fadeOut is always submitted; the enable checkbox ARMS the fade:
+		// unchecked → the stored time is cleared (0) no matter what the
+		// field says, while scope/curve keep their values.
+		if _, present := c.GetPostForm("fadeEnabled"); present {
+			if _, on := c.GetPostForm("fadeEnabled"); on {
+				fo := strings.TrimSpace(c.PostForm("fadeOut"))
+				if fo == "" {
+					fo = "0"
+				}
+				fields["fadeOut"] = fo
+			} else {
+				fields["fadeOut"] = "0"
+			}
+		} else {
+			fo := strings.TrimSpace(c.PostForm("fadeOut"))
+			if fo == "" {
+				fo = "0"
+			}
+			fields["fadeOut"] = fo
 		}
-		fields["fadeOut"] = fo
 		// Recurring schedule block (day bitmask + HH:MM[:SS] time). The
 		// hidden schedule_block marker marks the block as rendered; an
 		// unchecked enable box clears enabled but keeps day/time so
