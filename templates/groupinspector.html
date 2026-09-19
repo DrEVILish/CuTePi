@@ -3,11 +3,6 @@
      GET /api/cue/inspector into #cueinspector-body, so rendering a group
      here must still present that id or every later cue re-render dies. -->
 <div id="cueinspector-body" class="groupinspector-body" data-group-id="{{ .Group.GroupID }}">
-  <div class="d-flex justify-content-between align-items-center mb-2">
-    <h6 class="mb-0"><i class="bi {{ if .Group.Slideshow }}bi-images{{ else }}bi-folder-fill{{ end }} me-1"></i>Group</h6>
-    <span class="text-muted small">{{ .MemberCount }} cue{{ if ne .MemberCount 1 }}s{{ end }}</span>
-  </div>
-
   {{ if .Group.Slideshow }}
   <div class="alert alert-info py-2 px-3 small">
     <i class="bi bi-play-circle me-1"></i>
