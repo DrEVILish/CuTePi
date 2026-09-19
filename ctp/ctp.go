@@ -179,7 +179,7 @@ func GetCue(cuePos string) (cue Cue, err error) {
 		return Cue{}, err // Return an empty Cue
 	}
 	cue.PreWaitFmt = FormatTime(cue.PreWait)
-	cue.CueDurationFmt = FormatTime(effectiveCueDuration(cue))
+	cue.CueDurationFmt = FormatTime(EffectiveCueDuration(cue))
 	cue.PostWaitFmt = FormatTime(cue.PostWait)
 	cue.MediaType = mediaTypeFromMimetype(cue.Mimetype)
 	return cue, nil // Return the found Cue
@@ -204,7 +204,7 @@ func mediaTypeFromMimetype(mimetype string) string {
 	}
 }
 
-func effectiveCueDuration(cue Cue) int {
+func EffectiveCueDuration(cue Cue) int {
 	// Rate correction: playback duration is source duration divided by rate
 	rate := cue.Rate
 	if rate <= 0 {
@@ -1047,7 +1047,7 @@ func GetCuesheet() (cuesheet Cuesheet, err error) {
 			cues[i].InSelection = true
 		}
 		cues[i].PreWaitFmt = FormatTime(cues[i].PreWait)
-		cues[i].CueDurationFmt = FormatTime(effectiveCueDuration(cues[i]))
+		cues[i].CueDurationFmt = FormatTime(EffectiveCueDuration(cues[i]))
 		cues[i].PostWaitFmt = FormatTime(cues[i].PostWait)
 		cues[i].MediaType = mediaTypeFromMimetype(cues[i].Mimetype)
 	}
@@ -1772,7 +1772,7 @@ func CueColumnValue(cue Cue, col string) (string, error) {
 	case "preWait":
 		return FormatTime(cue.PreWait), nil
 	case "cueDuration":
-		return FormatTime(effectiveCueDuration(cue)), nil
+		return FormatTime(EffectiveCueDuration(cue)), nil
 	case "postWait":
 		return FormatTime(cue.PostWait), nil
 	case "hold":

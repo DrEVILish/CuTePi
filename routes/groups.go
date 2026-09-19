@@ -656,7 +656,15 @@ func slideshowRunner(g ctp.Group) {
 				return
 			}
 			_ = ctp.SetCue(strconv.Itoa(cue.CuePos)) // highlight = current image
-			time.Sleep(hold)
+			// Images show for the group hold; video slides play their own
+			// duration (rate/trim-corrected): a 30s clip is not a 5s slide.
+			ms := hold.Milliseconds()
+			if !strings.HasPrefix(cue.Mimetype, "image/") {
+				if eff := ctp.EffectiveCueDuration(cue); eff > 0 {
+					ms = int64(eff)
+				}
+			}
+			time.Sleep(time.Duration(ms) * time.Millisecond)
 
 			// Operator intervention aborts the slideshow (same identity guard
 			// shape as auto-continue).
