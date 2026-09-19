@@ -430,10 +430,9 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   gap: 0.05rem;
 }
 .insp-field-label {
-  /* Match the checkbox labels' scale so every label reads the same. */
-  font-size: 0.875em;
-  line-height: 1.3;
-  color: var(--ctp-text, inherit);
+  font-size: 0.8em;
+  line-height: 1.05;
+  color: var(--ctp-muted, #adb5bd);
   white-space: nowrap;
   margin-bottom: 0;
 }
