@@ -44,12 +44,12 @@
   text-align: center;
 }
 
-/* Cue-number column: content-fixed, centred. */
+/* Cue-number column: content-fixed, centred; wide enough for the
+   "Number" header label. */
 #cuesheet th.col-cue-num,
 #cuesheet td.cue-num {
-  width: 3.3em;
-  min-width: 3.3em;
-  max-width: 3.3em;
+  width: 4.6em;
+  min-width: 4.6em;
   overflow: hidden;
   white-space: nowrap;
   text-align: center;
@@ -149,13 +149,26 @@
 /* ------------------------------------------------------------------ */
 /* 3 KINDS                                                            */
 /* ------------------------------------------------------------------ */
-/* .cue — a playable cue row. */
-#cuesheet tr.cue.cue-in-group td.cue-name {
-  /* Only the NAME indents inside a group; the number column stays
-     aligned with top-level numbers. Each level adds 1.1rem. */
-  padding-left: calc(1.5rem + (var(--depth, 1) - 1) * 1.1rem);
+/* Tree indent, one rule for every row kind (QLab): the name text starts
+   at the same base for top-level cues AND top-level group headers, and
+   each nesting level steps in uniformly. A group's chevron hangs LEFT
+   of its name text (absolute, inside the box), so names stay flush. */
+#cuesheet tr.row > td.cue-name {
+  padding-left: calc(1.5rem + var(--depth, 0) * 1.1rem);
 }
-
+.cue-group-header > td.cue-name {
+  position: relative;
+}
+.cue-group-header .cue-group-toggle {
+  position: absolute;
+  /* Just right of the box's own vertical (0.6rem + depth·step), left of
+     the name text. */
+  left: calc(0.8rem + var(--depth, 0) * 1.1rem);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 0.35rem;
+  font-size: 1.1em;
+}
 /* .cuegroup — a folder header row. */
 .cue-group-header {
   cursor: default;
@@ -164,15 +177,6 @@
 .cue-group-header td {
   vertical-align: middle;
   cursor: default;
-}
-#cuesheet tr.cue-group-header > td.cue-name {
-  /* Folder names indent with the member-name step at their own depth. */
-  padding-left: calc(1.5rem + var(--depth, 0) * 1.1rem);
-}
-.cue-group-header .cue-group-toggle {
-  display: inline-flex;
-  padding: 0 0.35rem 0 0;
-  font-size: 1.1em;
 }
 
 /* Media-type icon column (width comes from the column rule above). */
