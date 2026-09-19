@@ -442,6 +442,10 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   padding: 0.01rem 0.3rem;
   font-size: 0.78rem;
 }
+/* The schedule row's checkbox keeps Bootstrap's default top offset. */
+.insp-schedule .form-check-input {
+  margin-top: 0;
+}
 /* Schedule block lives in the same narrow column: day + time stack full
    width inside it (auto widths overflowed the 11rem column). */
 .insp-schedule .form-select-sm,
@@ -459,7 +463,9 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
 .day-picker summary {
   list-style: none;
   cursor: pointer;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   height: 100%;
   padding: 0.01rem 0.3rem;
