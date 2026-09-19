@@ -85,51 +85,49 @@
               <button class="btn btn-sm btn-outline-secondary" type="button" id="trim-zoom-reset" title="Show the full length">
                 Zoom reset
               </button>
-             </div>
-              <div class="insp-time-options">
-              <div class="insp-time-checks">
-               <div class="d-flex align-items-center">
-                 <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
-                 <label class="form-check-label small" for="insp-loop">Loop</label>
-                 <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
-                   class="form-control form-control-sm ms-2" style="width:5em"
-                   value="{{ .Cue.LoopCount }}"
-                   title="Loop count: 0 = infinite, N = play N times"
-                   aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
-               </div>
-               <div class="d-flex align-items-center">
-                 <input class="form-check-input me-1" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
-                 <label class="form-check-label small" for="insp-hold">Hold last frame</label>
-               </div>
-               <div class="d-flex align-items-center">
-                 <input class="form-check-input me-1" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
-                 <label class="form-check-label small" for="insp-autocontinue">Auto-continue</label>
-                </div>
-              </div>
-              <div class="d-flex align-items-start gap-3 flex-wrap">
-                            <div class="insp-rate">
-                <label class="insp-field-label" for="insp-rate">Playback rate <output id="insp-rate-value">{{ .Cue.Rate }}×</output></label>
+              <div class="insp-rate">
+                <label class="insp-field-label" for="insp-rate">Rate <output id="insp-rate-value">{{ .Cue.Rate }}×</output></label>
                 <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" title="Playback speed (pitch preserved). Double-click to reset to 1×">
               </div>
-                             <div class="d-flex align-items-center gap-2">
-                 <label class="insp-field-label" for="insp-fadeaction">Fade-stop others</label>
-                 <select id="insp-fadeaction" name="fadeAction" class="form-select form-select-sm" style="width:auto" title="Which other cues fade out when this one starts">
-                   <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
-                   <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
-                   <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
-                 </select>
-                 <input id="insp-fadeout" name="fadeOut" class="form-control form-control-sm" style="width:4.5em"
-                   value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
-                 <select id="insp-fadecurve" name="fadeCurve" class="form-select form-select-sm" style="width:auto"
-                   title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential">
-                   <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
-                   <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
-                   <option value="log" {{ if eq .Cue.FadeCurve "log" }}selected{{ end }}>Log</option>
-                   <option value="exp" {{ if eq .Cue.FadeCurve "exp" }}selected{{ end }}>Exp</option>
-                 </select>
-               </div>
              </div>
-          </div>
+               <div class="insp-time-checks">
+                <div class="d-flex align-items-center">
+                  <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
+                  <label class="form-check-label small" for="insp-loop">Loop</label>
+                  <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
+                    class="form-control form-control-sm ms-2" style="width:5em"
+                    value="{{ .Cue.LoopCount }}"
+                    title="Loop count: 0 = infinite, N = play N times"
+                    aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
+                </div>
+                <div class="d-flex align-items-center">
+                  <input class="form-check-input me-1" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
+                  <label class="form-check-label small" for="insp-hold">Hold last frame</label>
+                </div>
+                <div class="d-flex align-items-center">
+                  <input class="form-check-input me-1" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
+                  <label class="form-check-label small" for="insp-autocontinue">Auto-continue</label>
+                 </div>
+                <div class="d-flex align-items-center gap-2">
+                  <input class="form-check-input" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
+                  <label class="form-check-label small" for="insp-fadestop">Fade-stop others</label>
+                  <select id="insp-fadeaction" name="fadeAction" class="form-select form-select-sm" style="width:auto" title="Which other cues fade out when this one starts" {{ if not (gt .Cue.FadeOut 0) }}disabled{{ end }}>
+                    <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
+                    <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
+                    <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
+                  </select>
+                  <input id="insp-fadeout" name="fadeOut" class="form-control form-control-sm" style="width:4.5em"
+                    value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)" {{ if not (gt .Cue.FadeOut 0) }}disabled{{ end }}>
+                  <select id="insp-fadecurve" name="fadeCurve" class="form-select form-select-sm" style="width:auto"
+                    title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential" {{ if not (gt .Cue.FadeOut 0) }}disabled{{ end }}>
+                    <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
+                    <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
+                    <option value="log" {{ if eq .Cue.FadeCurve "log" }}selected{{ end }}>Log</option>
+                    <option value="exp" {{ if eq .Cue.FadeCurve "exp" }}selected{{ end }}>Exp</option>
+                  </select>
+                </div>
+               </div>
+           </div>
           <!-- Recurring schedule: the cue fires at this wall-clock time
                on the chosen day, regardless of what else is playing. -->
           <div class="insp-schedule mt-3 pt-2 border-top">
@@ -322,6 +320,24 @@
       });
     }
   })();
+  <script>
+    // Fade-stop enable: the checkbox gates the scope/time/curve controls.
+    // Disabling them keeps their values but omits them from the submit, so
+    // an unchecked box clears the fade (fadeOut empty = off).
+    (function () {
+      var cb = document.getElementById("insp-fadestop");
+      if (!cb) return;
+      var sync = function () {
+        ["insp-fadeaction", "insp-fadeout", "insp-fadecurve"].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.disabled = !cb.checked;
+        });
+      };
+      cb.addEventListener("change", sync);
+      sync();
+    })();
+  </script>
+  <script>
   (function () {
     // Idempotent wiring: the drag/click handlers are document-level delegates,
     // re-running the script must not add a second set.

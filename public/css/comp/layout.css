@@ -471,10 +471,12 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   font-size: 0.75rem;
   line-height: 1.2;
 }
+/* Option row: the checkbox items spread evenly across the width. */
 .insp-time-checks {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: space-between;
   gap: 0.5rem 1.1rem;
   margin-top: 0.25rem;
 }
@@ -492,14 +494,23 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   padding: 0.01rem 0.3rem;
   font-size: 0.78rem;
 }
-.insp-time-options { display: flex; align-items: flex-start; gap: 1.5rem; }
-.insp-rate { display: flex; flex-direction: column; gap: 0.2rem; max-width: 12rem; margin-top: 0.25rem; }
-.insp-rate .btn { align-self: flex-start; padding: 0 0.5rem; }
+/* Playback rate rides in the trim-button strip: inline label + slider,
+   same compact height as the buttons. */
+.insp-rate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.insp-rate input {
+  width: 7rem;
+  height: 1.45rem;
+  accent-color: var(--ctp-accent);
+}
 .insp-fadein { max-width: 11rem; }
 .insp-audio-wrap { display: flex; gap: 3rem; align-items: flex-start; justify-content: flex-start; padding-top: 0.75rem; }
 .insp-audio-settings { display: flex; flex-direction: column; gap: 0.45rem; }
 .insp-audio-settings input[type="range"] { min-width: 0; }
-.insp-rate input, .insp-audio-settings input { accent-color: var(--ctp-accent); }
+.insp-audio-settings input { accent-color: var(--ctp-accent); }
 
 .inspector-tabpanes[data-active-tab="audio"] .inspector-tabpane[data-tabpane="audio"] {
   display: block;
