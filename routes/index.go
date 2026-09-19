@@ -336,28 +336,28 @@ func nowplayingData() gin.H {
 		if idx, err := ctp.SelectUnitIndex(); err == nil {
 			if units, err := ctp.SelectUnits(); err == nil && idx >= 0 && idx < len(units) {
 				u := units[idx]
-			describe := func(u ctp.SelectUnit) (string, string, string) {
-				if u.IsGroup {
-					for _, g := range sheet.Groups {
-						if g.GroupID == u.GroupID {
-							return g.CueNum, g.Name, g.Color
+				describe := func(u ctp.SelectUnit) (string, string, string) {
+					if u.IsGroup {
+						for _, g := range sheet.Groups {
+							if g.GroupID == u.GroupID {
+								return g.CueNum, g.Name, g.Color
+							}
+						}
+					} else {
+						for _, cue := range sheet.Cues {
+							if cue.CuePos == u.CuePos {
+								return cue.CueNum, cue.Title, cue.Color
+							}
 						}
 					}
-				} else {
-					for _, cue := range sheet.Cues {
-						if cue.CuePos == u.CuePos {
-							return cue.CueNum, cue.Title, cue.Color
-						}
-					}
+					return "", "", ""
 				}
-				return "", "", ""
-			}
-			data["GoNum"], data["GoTitle"], data["GoColor"] = describe(u)
-			data["GoHasSel"] = true
-			if idx+1 < len(units) {
-				data["GoNextNum"], data["GoNextTitle"], _ = describe(units[idx+1])
-				data["GoHasNext"] = true
-			}
+				data["GoNum"], data["GoTitle"], data["GoColor"] = describe(u)
+				data["GoHasSel"] = true
+				if idx+1 < len(units) {
+					data["GoNextNum"], data["GoNextTitle"], _ = describe(units[idx+1])
+					data["GoHasNext"] = true
+				}
 			}
 		}
 		if playingPos := gsp.CurrentCuePos(); playingPos != 0 {
@@ -410,24 +410,32 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 }
 
 // loadAndPlayCue builds LoadOpts for a cue and plays it. Shared by the cue
+// transport and automation (auto-continue, queue-after-fade). keepBackground
+// is only true for slideshow image slides: they ride ON the soundtrack
+// instead of restarting it.
 // play route and the fade-then-play path.
 func loadAndPlayCue(cue ctp.Cue) error {
+	return loadAndPlayCueKeep(cue, false)
+}
+
+func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
 	opts := gsp.LoadOpts{
-		InPoint:      float64(cue.PosStart) / 1000,
-		OutPoint:     float64(cue.PosEnd) / 1000,
-		Hold:         cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")),
-		Loop:         cue.Loop,
-		LoopCount:    cue.LoopCount,
-		Volume:       cue.Volume,
-		LoudnessGain: cue.LoudnessGain,
-		Rate:         cue.Rate,
-		Balance:      cue.Balance,
-		Mute:         cue.Mute,
-		FadeIn:       cue.FadeIn,
-		FadeCurve:    cue.FadeCurve,
-		FitMode:      cue.FitMode,
-		Rotation:     cue.Rotation,
-		Flip:         cue.Flip,
+		InPoint:        float64(cue.PosStart) / 1000,
+		OutPoint:       float64(cue.PosEnd) / 1000,
+		Hold:           cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")),
+		Loop:           cue.Loop,
+		LoopCount:      cue.LoopCount,
+		Volume:         cue.Volume,
+		LoudnessGain:   cue.LoudnessGain,
+		Rate:           cue.Rate,
+		Balance:        cue.Balance,
+		Mute:           cue.Mute,
+		FadeIn:         cue.FadeIn,
+		FadeCurve:      cue.FadeCurve,
+		FitMode:        cue.FitMode,
+		Rotation:       cue.Rotation,
+		Flip:           cue.Flip,
+		KeepBackground: keepBackground,
 	}
 	if err := gsp.LoadWithOpts(cue.Filename, opts); err != nil {
 		ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
@@ -597,9 +605,9 @@ func renderCuesheet(c *gin.Context) {
 	}
 	enrichCuesheetWithPlayback(&cuesheet)
 	c.HTML(http.StatusOK, "cuesheet.html", gin.H{
-		"Cuesheet": cuesheet,
-		"Rows":     sheetRowsWithSelection(&cuesheet),
-		"GoBar":    computeGoBar(&cuesheet),
+		"Cuesheet":  cuesheet,
+		"Rows":      sheetRowsWithSelection(&cuesheet),
+		"GoBar":     computeGoBar(&cuesheet),
 		"GoAdvance": ctp.GetGoAdvance(),
 	})
 }

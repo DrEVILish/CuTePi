@@ -17,13 +17,13 @@ import (
 // GoBar is the top-of-sheet trigger strip (§12.1): what GO fires (the
 // selected unit — cue or group) and the unit that follows it.
 type GoBar struct {
-	HasSel    bool
+	HasSel     bool
 	SelIsGroup bool
-	SelNum    string // cueNum for cues, group cue_num for groups
-	SelTitle  string // cue title or group name
-	HasNext   bool
-	NextNum   string
-	NextTitle string
+	SelNum     string // cueNum for cues, group cue_num for groups
+	SelTitle   string // cue title or group name
+	HasNext    bool
+	NextNum    string
+	NextTitle  string
 }
 
 // computeGoBar derives the strip from the shared selection walk, so the
@@ -90,7 +90,7 @@ func sheetRowsWithSelection(sheet *ctp.Cuesheet) []SheetRow {
 	}
 	for _, r := range flat {
 		row := SheetRow{Group: r.Group, Cue: r.Cue, Depth: r.Depth,
-			GroupColor: r.GroupColor,
+			GroupColor:   r.GroupColor,
 			FirstInGroup: r.FirstInGroup, LastInGroup: r.LastInGroup}
 		if r.Group != nil {
 			row.MemberCount = members[r.Group.GroupID]
@@ -651,7 +651,7 @@ func slideshowRunner(g ctp.Group) {
 
 	for {
 		for _, cue := range members {
-			if err := loadAndPlayCue(cue); err != nil {
+			if err := loadAndPlayCueKeep(cue, strings.HasPrefix(cue.Mimetype, "image/")); err != nil {
 				log.Printf("slideshow: loading %q failed: %v", cue.Filename, err)
 				return
 			}

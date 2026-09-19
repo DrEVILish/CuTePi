@@ -38,9 +38,9 @@ type manager struct {
 	panEl        *gst.Element
 	fadeIn       int
 	fadeCurve    string
-	fitMode      string // fit|stretch frame fitting ("", fit = letterbox)
-	rotation     int    // 0|90|180|270 clockwise degrees
-	flip         string // none|h|v mirror ("", none = off)
+	fitMode      string  // fit|stretch frame fitting ("", fit = letterbox)
+	rotation     int     // 0|90|180|270 clockwise degrees
+	flip         string  // none|h|v mirror ("", none = off)
 	fadeLevel    float64 // shared audio/video envelope, 0..1
 	fadeSerial   uint64  // cancels an earlier ramp on the same pipeline
 	starting     bool
@@ -109,7 +109,9 @@ func Generation() uint64 {
 // swap atomically stops/releases the current pipeline (if any) and installs
 // newPipeline as the active one, under the manager lock.
 func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadOpts) {
-	stopBackground() // a new playback decision always kills the soundtrack
+	if !opts.KeepBackground {
+		stopBackground() // a new playback decision always kills the soundtrack
+	}
 	m.mu.Lock()
 	if m.pipeline != nil {
 		retirePipeline(m.pipeline)
@@ -183,21 +185,22 @@ func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 // the clip loops back to its in-point at end-of-stream, and the per-cue
 // master audio gain in dB (0 = 0dB). Playback volume is per-cue, never global.
 type LoadOpts struct {
-	InPoint      float64 // 0 = start of file
-	OutPoint     float64 // 0 = end of file
-	Hold         bool    // freeze last frame at end / trim-out
-	Loop         bool    // restart from in-point at end / trim-out
-	LoopCount    int     // finite loop count; 0 = infinite (ignored when Loop is false)
-	Volume       float64 // per-cue master gain in dB, 0 = 0dB (range -60..12)
-	LoudnessGain float64 // per-media EBU R128 correction in dB
-	Rate         float64 // 0 defaults to 1; valid range 0.25..4, pitch preserved
-	Balance      float64 // -1 left, 0 centre, +1 right
-	Mute         bool
-	FadeIn       int    // milliseconds
-	FadeCurve    string // envelope shape: linear|smooth|log|exp (§12.7); "" = linear
-	FitMode      string // fit|stretch frame fitting ("" = fit)
-	Rotation     int    // 0|90|180|270 clockwise degrees
-	Flip         string // none|h|v mirror ("" = none)
+	InPoint        float64 // 0 = start of file
+	OutPoint       float64 // 0 = end of file
+	Hold           bool    // freeze last frame at end / trim-out
+	Loop           bool    // restart from in-point at end / trim-out
+	LoopCount      int     // finite loop count; 0 = infinite (ignored when Loop is false)
+	Volume         float64 // per-cue master gain in dB, 0 = 0dB (range -60..12)
+	LoudnessGain   float64 // per-media EBU R128 correction in dB
+	Rate           float64 // 0 defaults to 1; valid range 0.25..4, pitch preserved
+	Balance        float64 // -1 left, 0 centre, +1 right
+	Mute           bool
+	FadeIn         int    // milliseconds
+	FadeCurve      string // envelope shape: linear|smooth|log|exp (§12.7); "" = linear
+	FitMode        string // fit|stretch frame fitting ("" = fit)
+	Rotation       int    // 0|90|180|270 clockwise degrees
+	Flip           string // none|h|v mirror ("" = none)
+	KeepBackground bool   // keep the background playlist alive across this load (slideshow slides are images ON the soundtrack, not new decisions)
 }
 
 func Play() {
