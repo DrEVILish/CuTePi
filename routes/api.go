@@ -1002,17 +1002,23 @@ func Api(rg *gin.RouterGroup) {
 			fo = "0"
 		}
 		fields["fadeOut"] = fo
-		// Recurring schedule block (day number + HH:MM[:SS] time). Present
-		// only when the inspector renders the block; an unchecked box clears
-		// enabled but keeps day/time so re-enabling restores them.
-		if dayStr, present := c.GetPostForm("schedule_days"); present {
+		// Recurring schedule block (day bitmask + HH:MM[:SS] time). The
+		// hidden schedule_block marker marks the block as rendered; an
+		// unchecked enable box clears enabled but keeps day/time so
+		// re-enabling restores them.
+		if _, present := c.GetPostForm("schedule_block"); present {
 			_, on := c.GetPostForm("schedule_enabled")
 			if !on {
 				fields["schedule_enabled"] = "0"
 			} else {
-				day, derr := strconv.Atoi(strings.TrimSpace(dayStr))
-				if derr != nil || day < 1 || day > 7 {
-					c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "pick a schedule day"})
+				mask := 0
+				for _, d := range c.PostFormArray("schedule_day") {
+					if n, nerr := strconv.Atoi(strings.TrimSpace(d)); nerr == nil && n >= 1 && n <= 7 {
+						mask |= 1 << (n - 1)
+					}
+				}
+				if mask == 0 {
+					c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "pick at least one schedule day"})
 					return
 				}
 				hh, mm, ss, terr := splitHhMmSs(strings.TrimSpace(c.PostForm("schedule_time")))
@@ -1021,7 +1027,7 @@ func Api(rg *gin.RouterGroup) {
 					return
 				}
 				fields["schedule_enabled"] = "1"
-				fields["schedule_days"] = strconv.Itoa(1 << (day - 1))
+				fields["schedule_days"] = strconv.Itoa(mask)
 				fields["schedule_time_ms"] = strconv.Itoa((hh*3600 + mm*60 + ss) * 1000)
 			}
 		}

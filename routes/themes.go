@@ -100,6 +100,7 @@ func TemplateFuncs() map[string]any {
 			return fmt.Sprintf("%02d:%02d", ms/3600000, (ms/60000)%60)
 		},
 		"div":         func(a, b int) int { return a / b },
+		"hasBit":      func(mask, bit int) bool { return mask&(1<<uint(bit)) != 0 },
 		"add":         func(a, b int) int { return a + b },
 		"mod":         func(a, b int) int { return a % b },
 		"listDays": func() []string {

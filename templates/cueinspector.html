@@ -50,7 +50,46 @@
               <label class="insp-field-label" for="insp-postwait">PostWait</label>
               <input id="insp-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="hh:mm:ss.ms" title="Wait this long after the cue ends">
              </div>
-           </div>
+             <div class="insp-time-field">
+               <div class="d-flex align-items-center">
+                 <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
+                 <label class="form-check-label small" for="insp-loop">Loop</label>
+                 <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
+                   class="form-control form-control-sm ms-2" style="width:5em"
+                   value="{{ .Cue.LoopCount }}"
+                   title="Loop count: 0 = infinite, N = play N times"
+                   aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
+               </div>
+             </div>
+             <div class="insp-time-field">
+               <div class="d-flex align-items-center">
+                 <input class="form-check-input me-1" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
+                 <label class="form-check-label small" for="insp-autocontinue">Auto-continue</label>
+               </div>
+             </div>
+             <div class="insp-time-field insp-schedule mt-1 pt-2 border-top">
+               <!-- checkbox - time - multi-day picker (bottom left) -->
+               <input type="hidden" name="schedule_block" value="1">
+               <div class="d-flex align-items-center gap-2">
+                 <input class="form-check-input" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
+                 <label class="insp-field-label" for="insp-schedule">Schedule</label>
+                 <input id="insp-schedule-time" name="schedule_time" type="time" class="form-control form-control-sm" step="1"
+                   value="{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}"
+                   aria-label="Time of day, to the second" title="Time of day, to the second">
+               </div>
+               <details class="day-picker" id="insp-schedule-days">
+                 <summary aria-label="Pick the days of week">Days&hellip;</summary>
+                 <div class="day-picker-list">
+                   {{ range $i, $d := listDays }}
+                   <label><input type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if hasBit $.Cue.ScheduleDays $i }}checked{{ end }}> {{ $d }}</label>
+                   {{ end }}
+                 </div>
+               </details>
+               <div id="schedule-help" class="text-muted small mt-1">
+                 Fires regardless of what is currently playing.
+               </div>
+             </div>
+            </div>
            <div class="insp-time-right">
             <div class="trim-timeline" id="trim-timeline"
               data-filename="{{ .Cue.Filename }}"
@@ -92,22 +131,9 @@
              </div>
                <div class="insp-time-checks">
                 <div class="d-flex align-items-center">
-                  <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
-                  <label class="form-check-label small" for="insp-loop">Loop</label>
-                  <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
-                    class="form-control form-control-sm ms-2" style="width:5em"
-                    value="{{ .Cue.LoopCount }}"
-                    title="Loop count: 0 = infinite, N = play N times"
-                    aria-label="Loop count" {{ if not .Cue.Loop }}disabled{{ end }}>
-                </div>
-                <div class="d-flex align-items-center">
                   <input class="form-check-input me-1" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
                   <label class="form-check-label small" for="insp-hold">Hold last frame</label>
                 </div>
-                <div class="d-flex align-items-center">
-                  <input class="form-check-input me-1" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
-                  <label class="form-check-label small" for="insp-autocontinue">Auto-continue</label>
-                 </div>
                 <div class="d-flex align-items-center gap-2">
                   <input class="form-check-input" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
                   <label class="form-check-label small" for="insp-fadestop">Fade-stop others</label>
@@ -127,33 +153,11 @@
                   </select>
                 </div>
                </div>
-           </div>
-          <!-- Recurring schedule: the cue fires at this wall-clock time
-               on the chosen day, regardless of what else is playing. -->
-          <div class="insp-schedule mt-3 pt-2 border-top">
-            <div class="d-flex align-items-center gap-2 mb-2">
-              <input class="form-check-input" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
-              <label class="form-check-label small" for="insp-schedule">Schedule this cue</label>
             </div>
-            <div class="d-flex align-items-center gap-2 flex-wrap">
-              <select id="insp-schedule-day" name="schedule_days" class="form-select form-select-sm" aria-label="Day of week">
-                <option value="">Day&hellip;</option>
-                {{ range $i, $d := listDays }}
-                <option value="{{ add $i 1 }}" {{ if eq $.ScheduleDay (add $i 1) }}selected{{ end }}>{{ $d }}</option>
-                {{ end }}
-              </select>
-              <input id="insp-schedule-time" name="schedule_time" type="time" class="form-control form-control-sm" step="1"
-                value="{{ if .Cue.ScheduleEnabled }}{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}{{ end }}"
-                aria-label="Time of day, to the second">
-            </div>
-            <div id="schedule-help" class="text-muted small mt-1">
-              Fires regardless of what is currently playing.
-            </div>
+        </div>
           </div>
        </div>
-         </div>
-      </div>
-      {{ else if hasPrefix .Cue.Mimetype "image/" }}
+       {{ else if hasPrefix .Cue.Mimetype "image/" }}
         <div class="insp-time-row mt-2">
           <div class="insp-time-fields">
             <div class="insp-time-field">
@@ -335,6 +339,18 @@
       };
       cb.addEventListener("change", sync);
       sync();
+    })();
+    // Multi-day schedule picker: the summary line counts the ticked days.
+    (function () {
+      var det = document.getElementById("insp-schedule-days");
+      if (!det) return;
+      var upd = function () {
+        var n = det.querySelectorAll("input:checked").length;
+        det.querySelector("summary").textContent =
+          n === 0 ? "Days\u2026" : n === 1 ? "1 day" : n + " days";
+      };
+      det.addEventListener("change", upd);
+      upd();
     })();
   </script>
   <script>
