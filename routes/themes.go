@@ -2,6 +2,7 @@ package routes
 
 import (
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/url"
 	"os"
@@ -100,7 +101,11 @@ func TemplateFuncs() map[string]any {
 			return fmt.Sprintf("%02d:%02d", ms/3600000, (ms/60000)%60)
 		},
 		"div":         func(a, b int) int { return a / b },
-		"hasBit":      func(mask, bit int) bool { return mask&(1<<uint(bit)) != 0 },
+		"hasBit":      func(mask, bit int) bool { return mask & (1 << uint(bit)) != 0 },
+		// safeCSS passes server-generated CSS values (e.g. a colour with a
+		// var() fallback) through html/template's style sanitizer, which
+		// otherwise rewrites them to ZgotmplZ.
+		"safeCSS":     func(s string) template.CSS { return template.CSS(s) },
 		"add":         func(a, b int) int { return a + b },
 		"mod":         func(a, b int) int { return a % b },
 		"listDays": func() []string {
