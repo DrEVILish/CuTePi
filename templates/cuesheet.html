@@ -22,9 +22,9 @@
     <tbody>
       {{ range .Rows }}
         {{ if .Group }}
-        <tr class="cue-group-header{{ if .Selected }} table-warning{{ end }}{{ if .Group.Collapse }} cue-gcollapsed{{ end }}{{ if .BlockSel }} cue-blocksel cue-blockhead{{ end }}{{ if .BlockLast }} cue-blocklast{{ end }}" data-group-id="{{ .Group.GroupID }}" data-group-collapsed="{{ .Group.Collapse }}"
+        <tr class="cue-group-header{{ if .Selected }} table-warning{{ end }}{{ if .Group.Collapse }} cue-gcollapsed{{ end }}" data-group-id="{{ .Group.GroupID }}" data-group-collapsed="{{ .Group.Collapse }}"
           data-cue-color="{{ .Group.Color }}" data-cue-name="{{ .Group.Name }}"
-          style="--depth: {{ .Depth }};{{ if .Group.Color }} --cue-accent: {{ .Group.Color }};{{ end }}{{ if .BlockSel }} --block-indent: {{ .BlockIndent }};{{ end }}"
+          style="--depth: {{ .Depth }};{{ if .Group.Color }} --cue-accent: {{ .Group.Color }};{{ end }}{{ if ge .SpanDepth 0 }} --span-depth: {{ .SpanDepth }};{{ end }}"
           draggable="true"
           hx-trigger="click delay:250ms[!justEdited()]" hx-post="/api/group/{{ .Group.GroupID }}/select" hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML"
           aria-label="Group {{ .Group.Name }}">
@@ -32,14 +32,14 @@
             <i class="bi {{ if .Group.Slideshow }}bi-images{{ else }}bi-folder-fill{{ end }}"></i>
           </td>
           <td class="cue-num col-group-num">
+            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/group/{{ .Group.GroupID }}/edit/cueNum" hx-swap="outerHTML">{{ .Group.CueNum }}</span>
+          </td>
+          <td class="cue-name">
             <span class="cue-group-toggle" role="button" tabindex="0" title="Collapse / expand"
               hx-post="/api/group/{{ .Group.GroupID }}/collapse" hx-target="#cuesheet" hx-swap="outerHTML"
               hx-on:click="event.stopPropagation()">
               <i class="bi {{ if .Group.Collapse }}bi-chevron-right{{ else }}bi-chevron-down{{ end }}"></i>
             </span>
-            <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/group/{{ .Group.GroupID }}/edit/cueNum" hx-swap="outerHTML">{{ .Group.CueNum }}</span>
-          </td>
-          <td class="cue-name">
             <span class="cue-group-select" role="button" tabindex="0" title="Select this group (double-click the name to rename)">
               <span class="cue-group-name cue-inline-edit" title="{{ .Group.Name }}"
                 hx-target="this"
@@ -54,7 +54,7 @@
           <td class="cue-time"></td>
         </tr>
         {{ else }}
-        <tr class="cue{{ if .Cue.Selected }} table-warning{{ end }}{{ if .Cue.InSelection }} table-warning{{ end }}{{ if .Cue.Playing }} cue-playing{{ end }}{{ if ne .Cue.Parent 0 }} cue-in-group{{ end }}{{ if .FirstInGroup }} cue-gfirst{{ end }}{{ if .LastInGroup }} cue-glast{{ end }}{{ if .BlockSel }} cue-blocksel{{ end }}{{ if .BlockLast }} cue-blocklast{{ end }}" style="--depth: {{ .Depth }};{{ if .Cue.Color }} --cue-accent: {{ .Cue.Color }};{{ end }}{{ if .GroupColor }} --group-accent: {{ .GroupColor }};{{ end }}{{ if .BlockSel }} --block-indent: {{ .BlockIndent }};{{ end }}" data-cue-pos="{{ .Cue.CuePos }}" data-cue-auto-continue="{{ .Cue.AutoContinue }}" data-cue-color="{{ .Cue.Color }}" data-cue-fade-action="{{ .Cue.FadeAction }}" data-cue-fade-out="{{ .Cue.FadeOut }}" data-cue-missing="{{ .Cue.Missing }}" data-cue-result="{{ .Cue.LastResult }}" data-cue-sel="{{ if .Cue.InSelection }}1{{ else }}0{{ end }}" data-cue-anchor="{{ if .Cue.Selected }}1{{ else }}0{{ end }}" data-cue-group="{{ .Cue.Parent }}" draggable="true"
+        <tr class="cue{{ if .Cue.Selected }} table-warning{{ end }}{{ if .Cue.InSelection }} table-warning{{ end }}{{ if .Cue.Playing }} cue-playing{{ end }}{{ if ne .Cue.Parent 0 }} cue-in-group{{ end }}{{ if .FirstInGroup }} cue-gfirst{{ end }}{{ if .LastInGroup }} cue-glast{{ end }}" style="--depth: {{ .Depth }};{{ if .Cue.Color }} --cue-accent: {{ .Cue.Color }};{{ end }}{{ if .GroupColor }} --group-accent: {{ .GroupColor }};{{ end }}{{ if ge .SpanDepth 0 }} --span-depth: {{ .SpanDepth }};{{ end }}" data-cue-pos="{{ .Cue.CuePos }}" data-cue-auto-continue="{{ .Cue.AutoContinue }}" data-cue-color="{{ .Cue.Color }}" data-cue-fade-action="{{ .Cue.FadeAction }}" data-cue-fade-out="{{ .Cue.FadeOut }}" data-cue-missing="{{ .Cue.Missing }}" data-cue-result="{{ .Cue.LastResult }}" data-cue-sel="{{ if .Cue.InSelection }}1{{ else }}0{{ end }}" data-cue-anchor="{{ if .Cue.Selected }}1{{ else }}0{{ end }}" data-cue-group="{{ .Cue.Parent }}" draggable="true"
           hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML" {{ if not .Cue.Selected }}hx-trigger="click delay:250ms[!justEdited()]" hx-post="/api/cue/{{ .Cue.CuePos }}"{{ end }}>
           <td class="cue-type" title="{{ .Cue.Mimetype }}">
             <i class="bi {{ typeIcon .Cue.MediaType }}"></i>

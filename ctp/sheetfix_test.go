@@ -581,10 +581,11 @@ func TestBulkGroupNewAtNestsInAnchorGroup(t *testing.T) {
 	t.Fatal("new group header not rendered")
 }
 
-// Selecting a group draws the block outline around its whole span: header,
-// nested subgroup headers and member rows all carry BlockSel; the span's
-// last rendered row carries BlockLast.
-func TestFlattenSheetSelectedBlockOutline(t *testing.T) {
+// Folder boxes are structural (every open span draws one, themed colour):
+// a row's SpanDepth is the innermost open span it sits in (verticals run
+// from depth 0 to that depth), top-level rows carry -1, and every span
+// closes LastInGroup at its TRUE last row (nested headers included).
+func TestFlattenSheetFolderBoxes(t *testing.T) {
 	db.Exec(`DELETE FROM cue_group`)
 	if err := ClearCueSheet(); err != nil {
 		t.Fatalf("ClearCueSheet: %v", err)
@@ -613,19 +614,35 @@ func TestFlattenSheetSelectedBlockOutline(t *testing.T) {
 		t.Fatalf("join 4 to E: %v", err)
 	}
 	cs, _ := GetCuesheet()
-	cs.SelectedGroups = map[int]bool{d: true}
 	rows := FlattenSheet(&cs)
-	marked := 0
-	for _, r := range rows {
-		if r.BlockSel {
-			marked++
+	type want struct {
+		kind string
+		id   int
+		sd   int
+	}
+	// Sequence: cue1, D, cue2, E, cue3, cue4.
+	wants := []want{{"cue", 1, -1}, {"group", d, 0}, {"cue", 2, 0},
+		{"group", e, 1}, {"cue", 3, 1}, {"cue", 4, 1}}
+	if len(rows) != len(wants) {
+		t.Fatalf("rows = %d, want %d", len(rows), len(wants))
+	}
+	for i, w := range wants {
+		r := rows[i]
+		gotSD := r.SpanDepth
+		if w.kind == "group" {
+			if r.Group == nil || r.Group.GroupID != w.id {
+				t.Fatalf("row %d: want group %d, got %+v", i, w.id, r)
+			}
+		} else {
+			if r.Cue == nil || r.Cue.CuePos != w.id {
+				t.Fatalf("row %d: want cue %d, got %+v", i, w.id, r)
+			}
+		}
+		if gotSD != w.sd {
+			t.Fatalf("row %d: SpanDepth = %d, want %d", i, gotSD, w.sd)
 		}
 	}
-	if marked != 4 { // D header + E header + cues 3,4
-		t.Fatalf("BlockSel rows = %d, want 4 (header, nested header, both members)", marked)
-	}
-	last := rows[len(rows)-1]
-	if !last.BlockLast {
-		t.Fatal("last row of the selected block does not close the outline")
+	if !rows[len(rows)-1].LastInGroup {
+		t.Fatal("last row does not close the outer folder box")
 	}
 }

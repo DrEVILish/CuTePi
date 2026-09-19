@@ -88,10 +88,6 @@ type Cue struct {
 type Cuesheet struct {
 	Cues   []Cue
 	Groups []Group // cue groups (folder membership is a presentation layer)
-	// SelectedGroups: groups currently selected (anchor or multi-selection
-	// member, gid → true). FlattenSheet draws the selected block outline
-	// around their spans.
-	SelectedGroups map[int]bool
 }
 
 type Mediapool struct {
@@ -549,12 +545,10 @@ type FlatRow struct {
 	// first/last rendered member of its direct group's run.
 	FirstInGroup bool
 	LastInGroup  bool
-	// Selected-group block outline (§5.4): the row sits inside the span of
-	// a selected group (header included); BlockLast closes the box.
-	// BlockIndent is the selected group's depth (rem multiple for CSS).
-	BlockSel    bool
-	BlockLast   bool
-	BlockIndent int
+	// SpanDepth: depth of the innermost OPEN group span this row sits in
+	// (-1 = none). The folder box draws one vertical line per open span,
+	// so nested groups stack their left edges on deeper rows.
+	SpanDepth int
 }
 
 // groupAncestors returns the chain of parent group ids above gid (nearest
@@ -659,7 +653,6 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 		lastRow  int  // index in rows of the last emitted row of this span
 		skipping bool
 	}
-	selGroups := cs.SelectedGroups
 	var stack []span
 	closeTo := func(depth int) {
 		for len(stack) > 0 && stack[len(stack)-1].depth >= depth {
@@ -667,21 +660,20 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 			stack = stack[:len(stack)-1]
 			if top.lastRow >= 0 && top.lastRow < len(rows) {
 				rows[top.lastRow].LastInGroup = true // bottom edge of the folder outline
-				if selGroups[top.groupID] {
-					rows[top.lastRow].BlockLast = true // selected block outline closes here
-				}
 			}
 		}
 	}
-	// Any row inside a selected group's open span carries BlockSel (header
-	// rows included) — the box encloses nested groups and their members.
-	inSelSpan := func() (bool, int) {
+	// The innermost open (non-gapped) span's depth: one folder-box line is
+	// drawn per open span, so a row's verticals run from depth 0 to this.
+	// Gapped spans (stray rows parked inside them) draw nothing until the
+	// span resumes (§6.4).
+	spanDepth := func() int {
 		for i := len(stack) - 1; i >= 0; i-- {
-			if selGroups[stack[i].groupID] {
-				return true, stack[i].depth
+			if stack[i].lastRow != -1 {
+				return stack[i].depth
 			}
 		}
-		return false, 0
+		return -1
 	}
 	for it := range items {
 		if items[it].kind == "group" {
@@ -693,8 +685,7 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 				stack = append(stack, span{groupID: g.GroupID, depth: d, lastRow: -1, skipping: true})
 				continue
 			}
-		sel, selDepth := inSelSpan()
-		rows = append(rows, FlatRow{Group: g, Depth: d, BlockSel: sel, BlockIndent: selDepth})
+		rows = append(rows, FlatRow{Group: g, Depth: d, SpanDepth: d})
 		// A collapsed group's own members are hidden too (not just
 		// descendants of collapsed ancestors): the header stays, its span
 		// skips. Without this, collapsing changed state but rendered
@@ -704,10 +695,9 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 		}
 		// A cue: member of the innermost open span.
 		if len(stack) == 0 {
-			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0})
+			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0, SpanDepth: -1})
 			continue
 		}
-		sel, selDepth := inSelSpan()
 		// The cue's STORED parent may belong to an outer open span (its
 		// visual position sits after a nested subgroup): surface that span
 		// by closing the inner spans first, or the cue leaks out of its
@@ -734,9 +724,11 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 			if top.lastRow >= 0 && top.lastRow < len(rows) {
 				rows[top.lastRow].LastInGroup = true
 			}
-			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0, BlockSel: sel, BlockIndent: selDepth})
+			// Gapping the innermost span first: the stray row's verticals
+			// only cover spans that stay open (the closed one resumes after).
 			top.lastRow = -1
 			stack[len(stack)-1] = top
+			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0, SpanDepth: spanDepth()})
 			continue
 		}
 		// The innermost open span's colour draws the member's folder
@@ -751,7 +743,7 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 		// 1.5rem, +1.1rem per nesting level after.
 		rows = append(rows, FlatRow{Cue: cue, Depth: top.depth + 1, GroupColor: groupColor,
 			FirstInGroup: top.lastRow >= 0 && rows[top.lastRow].Group != nil,
-			BlockSel: sel, BlockIndent: selDepth})
+			SpanDepth:    spanDepth()})
 		// Every open span contains this row: nested subgroup headers and
 		// member rows extend each enclosing span's visual last row, so the
 		// folder outline and the selected block outline close at the span's
@@ -1095,18 +1087,7 @@ func GetCuesheet() (cuesheet Cuesheet, err error) {
 		cues[i].MediaType = mediaTypeFromMimetype(cues[i].Mimetype)
 	}
 	groups, _ := Groups()
-	// Selected groups: the group-anchored selection plus negative entries in
-	// the multi-selection set — their spans draw the block outline.
-	selGroups := make(map[int]bool)
-	if gid, _ := SelectedGroupPos(); gid != 0 {
-		selGroups[gid] = true
-	}
-	for _, p := range SelectedSet() {
-		if p < 0 {
-			selGroups[-p] = true
-		}
-	}
-	return Cuesheet{Cues: cues, Groups: groups, SelectedGroups: selGroups}, nil
+	return Cuesheet{Cues: cues, Groups: groups}, nil
 }
 
 func GetMediapool() (pool Mediapool, err error) {

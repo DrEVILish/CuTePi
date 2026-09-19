@@ -248,23 +248,9 @@
     inset -2px -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
     inset 0 0 0 9999px transparent !important;
 }
-/* Group expander sits in the gutter LEFT of the group number, so folder
-   names line up exactly with cue names at the same level. Deeper nesting
-   levels indent by 1.1rem each (the row carries --depth inline). */
-.cue-group-header .col-group-num {
-  position: relative;
-  padding-left: calc(1.5rem + var(--depth, 0) * 1.1rem);
-}
-.cue-group-header .cue-group-toggle {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  display: inline-flex;
-  padding: 0 0.2rem;
-  font-size: 1.1em;
-  z-index: 1;
-}
+/* The group number column holds just the number: the expander lives
+   inline before the folder name (see the folder-box rules), so numbers
+   align with cue numbers at every level. */
 .cue.table-warning {
   border-left: 3px solid var(--cue-accent, var(--ctp-accent, #2fd6ff));
 }
@@ -402,40 +388,10 @@
 .cue-group-header td {
   vertical-align: middle;
 }
-/* Group names render in the NAME column now (the old colspan spanned the
-   time cells): indent matches the cue-name formula at the same depth, so
-   folder names line up with their members' names. */
-#cuesheet tr.cue-group-header td.cue-name {
+/* Folder names indent with the same per-level step as member names at
+   their own depth, so nested groups read as a tree (mock layout). */
+#cuesheet tr.cue-group-header > td.cue-name {
   padding-left: calc(1.5rem + var(--depth, 0) * 1.1rem);
-}
-/* Selected group's block outline (§5.4): a themed box around the whole
-   block a selected header owns — header row to the span's last row — so
-   the operator sees exactly what a bulk action will take. Colour follows
-   the theme's success tone; --sel-block restyles it per theme. */
-#cuesheet tr.cue-blocksel > td.cue-name {
-  position: relative;
-}
-#cuesheet tr.cue-blocksel > td.cue-name::before,
-#cuesheet tr.cue-blocksel > td.cue-name::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--sel-block, var(--ctp-success, #42ddb2));
-  pointer-events: none;
-}
-#cuesheet tr.cue-blocksel > td.cue-name::before {
-  left: calc(0.6rem + var(--block-indent, 0) * 1.1rem);
-}
-#cuesheet tr.cue-blocksel > td.cue-name::after {
-  right: 0.2rem;
-}
-#cuesheet tr.cue-blockhead > td.cue-name {
-  box-shadow: inset 0 1px 0 var(--sel-block, var(--ctp-success, #42ddb2));
-}
-#cuesheet tr.cue-blocklast > td.cue-name {
-  box-shadow: inset 0 -1px 0 var(--sel-block, var(--ctp-success, #42ddb2));
 }
 
 /* Visual feedback while dragging a group header row. */
@@ -474,35 +430,54 @@
   #cuesheet tr.cue.cue-playing > td { animation: none; }
 }
 
-/* Folder outline (§5.4): an open group's block is enclosed by a fine
-   border in the group's own colour — header draws the top edge, the last
-   member the bottom edge, every member row the sides — so membership reads
-   at a glance like QLab. Collapsed groups draw nothing (no members to
-   enclose). --folder-line picks the innermost group's colour, else a
-   softened accent: the old dark hairline fallback vanished on the dark
-   table. */
-#cuesheet tr.cue-group-header,
-#cuesheet tr.cue-in-group {
-  --folder-line: color-mix(in srgb, var(--group-accent, var(--cue-accent, var(--ctp-accent-2, #4d7dff))) 78%, transparent);
+/* Group expander sits INLINE before the folder name (mock layout): the
+   number column holds just the number, aligned with cue numbers. */
+.cue-group-header .cue-group-toggle {
+  display: inline-flex;
+  padding: 0 0.35rem 0 0;
+  font-size: 1.1em;
+  vertical-align: middle;
 }
-#cuesheet tr.cue-group-header:not(.cue-gcollapsed) td {
-  border-top: 1px solid var(--folder-line);
+/* Folder boxes (§5.4): EVERY open group's span draws a themed box around
+   the name column — header row = top edge, span's last row = bottom edge,
+   every row inside = verticals at each nesting level's indent. Colour
+   follows the theme (restyled via --folder-line; green is the default). */
+#cuesheet tr.cue-in-group > td.cue-name,
+#cuesheet tr.cue-group-header > td.cue-name {
+  position: relative;
+  --folder-line: var(--sel-block, var(--ctp-success, #42ddb2));
 }
-#cuesheet tr.cue-group-header td {
-  border-left: 1px solid var(--folder-line);
-  border-right: 1px solid var(--folder-line);
+#cuesheet tr.cue-in-group > td.cue-name::before,
+#cuesheet tr.cue-group-header > td.cue-name::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0.6rem;
+  width: calc(var(--span-depth, -1) * 1.1rem + 1px);
+  background: repeating-linear-gradient(90deg,
+    var(--folder-line) 0 1px,
+    transparent 1px 1.1rem);
+  pointer-events: none;
 }
-/* The header's solid colour bar uses the same tr border-left the cue rows
-   use, so the accent sits in the same place on every row kind. */
-#cuesheet tr.cue-group-header {
-  border-left: 3px solid var(--cue-accent, transparent);
+#cuesheet tr.cue-in-group > td.cue-name::after,
+#cuesheet tr.cue-group-header > td.cue-name::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0.2rem;
+  width: 1px;
+  background: var(--folder-line);
+  pointer-events: none;
 }
-#cuesheet tr.cue-in-group td {
-  border-left: 1px solid var(--folder-line);
-  border-right: 1px solid var(--folder-line);
+/* Top edge: the header row's name cell (spans its box's width). */
+#cuesheet tr.cue-group-header:not(.cue-gcollapsed) > td.cue-name {
+  box-shadow: inset 0 1px 0 var(--folder-line);
 }
-#cuesheet tr.cue.cue-glast td {
-  border-bottom: 1px solid var(--folder-line);
+/* Bottom edge: the span's last rendered row. */
+#cuesheet tr.cue-glast > td.cue-name {
+  box-shadow: inset 0 -1px 0 var(--folder-line);
 }
 /* Block rectangle ONLY: no internal lines inside an open group — not the
    header's underline nor the separators between members. Edges of the
