@@ -482,7 +482,12 @@ func SheetDrop(cues []int, groupID int, beforeKind string, beforeID int, join bo
 	if parent != nil && *parent != 0 {
 		target := *parent
 		if isGroup {
+			// Explicit band drop of a group block: actually NEST it (the
+			// join-header paths did this inline; this path only validated).
 			if err := ValidateGroupParent(groupID, target); err != nil {
+				return err
+			}
+			if _, err := db.Exec(`UPDATE cue_group SET parent_group_id = ? WHERE group_id = ?`, target, groupID); err != nil {
 				return err
 			}
 		}

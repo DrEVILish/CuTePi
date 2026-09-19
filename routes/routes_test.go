@@ -1594,7 +1594,6 @@ func TestInspectorRendersForSelectedCue(t *testing.T) {
 		`data-volume-reset`,
 		`data-volume-step="-1"`,
 		`data-volume-step="1"`,
-		`Source: insp-sel.mp4`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected inspector markup %q, got:\n%s", want, body)

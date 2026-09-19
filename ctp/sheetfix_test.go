@@ -646,3 +646,62 @@ func TestFlattenSheetFolderBoxes(t *testing.T) {
 		t.Fatal("last row does not close the outer folder box")
 	}
 }
+
+// Dragging a group block onto a member band of another group nests it
+// (parent_group_id) — the old path validated but never wrote the nesting,
+// so the block landed inside the span as a stray top-level header.
+func TestSheetDropGroupBandNestsBlock(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	mustRegisterMedia(t, "band-nest.mp4")
+	for i := 0; i < 4; i++ {
+		if err := AddCue("band-nest.mp4", ""); err != nil {
+			t.Fatalf("AddCue %d: %v", i, err)
+		}
+	}
+	a, err := CreateGroup("A", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup A: %v", err)
+	}
+	b, err := CreateGroup("B", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup B: %v", err)
+	}
+	for _, p := range []int{1, 2} {
+		if err := SetCueGroup(itoa(p), a); err != nil {
+			t.Fatalf("join c%d to A: %v", p, err)
+		}
+	}
+	for _, p := range []int{3, 4} {
+		if err := SetCueGroup(itoa(p), b); err != nil {
+			t.Fatalf("join c%d to B: %v", p, err)
+		}
+	}
+	aInt := a
+	// Drop B's block onto the member band after cue 2 (inside A).
+	if err := SheetDrop([]int{}, b, "cue", 2, false, false, false, &aInt, 2); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	var bp int
+	if err := db.Get(&bp, `SELECT parent_group_id FROM cue_group WHERE group_id = ?`, b); err != nil {
+		t.Fatalf("read parent: %v", err)
+	}
+	if bp != a {
+		t.Fatalf("group B parent = %d, want %d", bp, a)
+	}
+	cs, _ := GetCuesheet()
+	rows := FlattenSheet(&cs)
+	for _, r := range rows {
+		if r.Group != nil && r.Group.GroupID == b && r.Depth != 1 {
+			t.Fatalf("nested header B rendered at depth %d, want 1", r.Depth)
+		}
+	}
+	// A's own members keep their indent (depth 1) with the subgroup inside.
+	for _, r := range rows {
+		if r.Cue != nil && r.Cue.Parent == a && r.Depth != 1 {
+			t.Fatalf("cue %d (member of A) rendered at depth %d, want 1", r.Cue.CuePos, r.Depth)
+		}
+	}
+}
