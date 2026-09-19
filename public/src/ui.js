@@ -306,14 +306,14 @@ window.addEventListener("keydown", (e) => {
   const plain = !active || (tag !== "input" && tag !== "textarea" && tag !== "select" && tag !== "button");
   const arrowTarget = plain || (tag === "input" && (itype === "radio" || itype === "checkbox"));
   const arrows = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
-  if (plain && ["Space", "Enter"].concat(arrows).indexOf(e.code) > -1) {
+  if (plain && ["Space"].concat(arrows).indexOf(e.code) > -1) {
     e.preventDefault();
   } else if (arrowTarget && arrows.indexOf(e.code) > -1) {
     e.preventDefault(); // stop native radio/checkbox arrow navigation
   }
-  // Space and Enter are GO: both fire the selected cue via the same
-  // hidden trigger the transport button uses.
-  if (plain && ["Space", "Enter"].indexOf(e.code) > -1) {
+  // Space (not Enter) is GO: Enter is reserved for menu/inline-edit commit
+  // and must never fire the selected cue.
+  if (plain && ["Space"].indexOf(e.code) > -1) {
     htmx.trigger("#spaceBar", "spaceBar")
   }
   // Shift+Up/Down extends the multi-selection instead of moving it.
@@ -1304,6 +1304,52 @@ bulkSel.value = "";
         htmx.ajax("GET", "/api/cue/inspector", { target: "#cueinspector-collapse", swap: "innerHTML" });
       }
     }
+  });
+})();
+
+// --- Blank-space context menu: right-click empty cuesheet area offers
+// New group (row menus keep their own right-click behaviour) ---
+(function () {
+  let menuEl = null;
+  function ensureMenu() {
+    if (menuEl) return menuEl;
+    menuEl = document.createElement("div");
+    menuEl.id = "sheet-context-menu";
+    menuEl.className = "cue-context-menu";
+    menuEl.hidden = true;
+    menuEl.innerHTML = `
+      <div class="cue-context-item" data-sheet-action="newgroup"><i class="bi bi-folder-plus"></i> New group</div>`;
+    document.body.appendChild(menuEl);
+    // Clicks anywhere else dismiss the menu (same contract as the other menus).
+    document.addEventListener("pointerdown", (e) => {
+      if (menuEl && !menuEl.contains(e.target)) menuEl.hidden = true;
+    });
+    menuEl.addEventListener("click", (e) => {
+      const item = e.target instanceof Element ? e.target.closest("[data-sheet-action]") : null;
+      if (!item) return;
+      menuEl.hidden = true;
+      if (window.htmx) {
+        htmx.ajax("POST", "/api/group/add", {target: "#cuesheet", swap: "outerHTML"});
+      }
+    });
+    return menuEl;
+  }
+  document.addEventListener("contextmenu", (e) => {
+    const t = e.target instanceof Element ? e.target : null;
+    if (!t || !t.closest("#cuesheet")) return;
+    // Cue rows and group headers own their menus; blank space (table body
+    // gaps, the blank-row filler, empty sheet) is ours.
+    if (t.closest("tr.cue[data-cue-pos]") || t.closest(".cue-group-header")) return;
+    if (isShowMode()) return; // sheet locked: native menu
+    e.preventDefault();
+    const m = ensureMenu();
+    const rw = m.offsetWidth, rh = m.offsetHeight;
+    let x = e.clientX, y = e.clientY;
+    if (x + rw > window.innerWidth) x = window.innerWidth - rw;
+    if (y + rh > window.innerHeight) y = window.innerHeight - rh;
+    m.style.left = x + "px";
+    m.style.top = y + "px";
+    m.hidden = false;
   });
 })();
 
