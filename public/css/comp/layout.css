@@ -625,16 +625,6 @@ body.cueinspector-collapsed #cueinspector-expand-btn i {
   color: var(--bs-success, #198754);
   font-weight: 700;
 }
-/* The CuTePi logo doubles as the inspector's open/close icon. */
-.inspector-logo {
-  height: 1rem;
-  width: auto;
-  display: inline-block;
-  vertical-align: -0.125rem;
-}
-.inspector-header h6 .inspector-logo {
-  margin-right: 0.4rem;
-}
 body.cueinspector-collapsed #cueinspector-expand-btn:hover {
   background-color: var(--bs-success, #198754);
   border-color: var(--bs-success, #198754);
