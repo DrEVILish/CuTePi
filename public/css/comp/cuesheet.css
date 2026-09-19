@@ -214,7 +214,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 0.6rem;
+  left: 0;
   width: calc(var(--span-depth, -1) * 1.1rem + 1px);
   background: repeating-linear-gradient(90deg,
     var(--folder-line) 0 1px,
@@ -227,7 +227,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  right: 0.2rem;
+  right: 0;
   width: 1px;
   background: var(--folder-line);
   pointer-events: none;
