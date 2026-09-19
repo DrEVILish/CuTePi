@@ -68,7 +68,7 @@
                </div>
              </div>
              <div class="insp-time-field insp-schedule mt-1 pt-2 border-top">
-               <!-- checkbox - time - multi-day picker (bottom left) -->
+               <!-- checkbox - time - day picker (bottom left) -->
                <input type="hidden" name="schedule_block" value="1">
                <div class="d-flex align-items-center gap-2">
                  <input class="form-check-input" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
@@ -76,17 +76,14 @@
                  <input id="insp-schedule-time" name="schedule_time" type="time" class="form-control form-control-sm" step="1"
                    value="{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}"
                    aria-label="Time of day, to the second" title="Time of day, to the second">
-               </div>
-               <details class="day-picker" id="insp-schedule-days">
-                 <summary aria-label="Pick the days of week">Days&hellip;</summary>
-                 <div class="day-picker-list">
-                   {{ range $i, $d := listDays }}
-                   <label><input type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if hasBit $.Cue.ScheduleDays $i }}checked{{ end }}> {{ $d }}</label>
-                   {{ end }}
-                 </div>
-               </details>
-               <div id="schedule-help" class="text-muted small mt-1">
-                 Fires regardless of what is currently playing.
+                 <details class="day-picker" id="insp-schedule-days">
+                   <summary aria-label="Pick the days of week">Days&hellip;</summary>
+                   <div class="day-picker-list">
+                     {{ range $i, $d := listDays }}
+                     <label><input type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if hasBit $.Cue.ScheduleDays $i }}checked{{ end }}> {{ $d }}</label>
+                     {{ end }}
+                   </div>
+                 </details>
                </div>
              </div>
             </div>

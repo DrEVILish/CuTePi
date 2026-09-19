@@ -548,11 +548,6 @@ type FlatRow struct {
 	// (-1 = none). The folder box draws one vertical line per open span,
 	// so nested groups stack their left edges on deeper rows.
 	SpanDepth int
-	// Folder-box verticals: SpanBase colours the line at the cell's left
-	// edge (the outermost open span); SpanShadows stacks one 1px line per
-	// further open span, each in ITS OWN group's colour (never the cue's).
-	SpanBase    string
-	SpanShadows string
 }
 
 // groupAncestors returns the chain of parent group ids above gid (nearest
@@ -679,40 +674,10 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 		}
 		return -1
 	}
-	// spanPaint answers "what colour is each vertical on this row?": one
-	// line per OPEN span, coloured by THAT span's group (uncoloured groups
-	// fall back to the theme's success tone — never the cue's colour).
-	// Returns the outermost line's colour and a box-shadow stack for the
-	// deeper lines (1.1rem per level). Empty when no span is open.
-	spanPaint := func() (string, string) {
-		type paint struct {
-			depth int
-			color string
-		}
-		var open []paint
-		for _, s := range stack {
-			if s.lastRow == -1 {
-				continue // gapped span: its box closes and resumes around strays
-			}
-			color := "var(--ctp-success, #42ddb2)"
-			if g, ok := byID[s.groupID]; ok && g.Color != "" {
-				color = g.Color
-			}
-			open = append(open, paint{depth: s.depth, color: color})
-		}
-		if len(open) == 0 {
-			return "", ""
-		}
-		base := open[0].color
-		var sb strings.Builder
-		for k := 1; k < len(open); k++ {
-			if k > 1 {
-				sb.WriteString(", ")
-			}
-			fmt.Fprintf(&sb, "%.1frem 0 0 %s", float64(open[k].depth)*1.1, open[k].color)
-		}
-		return base, sb.String()
-	}
+	// The innermost open (non-gapped) span's depth: one folder-box line is
+	// drawn per open span, so a row's verticals run from depth 0 to this.
+	// Gapped spans (stray rows parked inside them) draw nothing until the
+	// span resumes (§6.4).
 	for it := range items {
 		if items[it].kind == "group" {
 			g := items[it].g
@@ -729,8 +694,6 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 		// skips. Without this, collapsing changed state but rendered
 		// nothing — the button and arrow keys looked dead.
 		stack = append(stack, span{groupID: g.GroupID, depth: d, lastRow: len(rows) - 1, skipping: g.Collapse})
-		// Verticals for the header row: outer open spans plus its own.
-		rows[len(rows)-1].SpanBase, rows[len(rows)-1].SpanShadows = spanPaint()
 		continue
 		}
 		// A cue: member of the innermost open span.
@@ -768,9 +731,7 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 			// only cover spans that stay open (the closed one resumes after).
 			top.lastRow = -1
 			stack[len(stack)-1] = top
-			base, shadows := spanPaint()
-			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0, SpanDepth: spanDepth(),
-				SpanBase: base, SpanShadows: shadows})
+			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0, SpanDepth: spanDepth()})
 			continue
 		}
 		// The innermost open span's colour draws the member's folder
@@ -783,9 +744,8 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 		// Members sit one level deeper than their group header (§6.4):
 		// top-depth + 1 so the CSS indent formula puts the first level at
 		// 1.5rem, +1.1rem per nesting level after.
-		base, shadows := spanPaint()
 		rows = append(rows, FlatRow{Cue: cue, Depth: top.depth + 1, GroupColor: groupColor,
-			SpanDepth: spanDepth(), SpanBase: base, SpanShadows: shadows})
+			SpanDepth: spanDepth()})
 		// Every open span contains this row: nested subgroup headers and
 		// member rows extend each enclosing span's visual last row, so the
 		// folder outline and the selected block outline close at the span's

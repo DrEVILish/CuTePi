@@ -217,9 +217,10 @@
   top: 0;
   bottom: 0;
   left: 0;
-  width: 1px;
-  background: var(--span-base, transparent);
-  box-shadow: var(--span-shadows, none);
+  width: calc(var(--span-depth, -1) * 1.1rem + 1px);
+  background: repeating-linear-gradient(90deg,
+    var(--folder-line) 0 1px,
+    transparent 1px 1.1rem);
   pointer-events: none;
 }
 #cuesheet tr.cue-in-group > td.cue-name::after,

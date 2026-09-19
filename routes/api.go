@@ -331,6 +331,11 @@ func Api(rg *gin.RouterGroup) {
 	})
 
 	rg.POST("/test/*pattern", func(c *gin.Context) {
+		// Tests are an Edit-mode tool: Show mode locks the sheet.
+		if ctp.GetShowMode() {
+			c.String(http.StatusForbidden, "tests are only available in Edit mode")
+			return
+		}
 		pattern := strings.TrimPrefix(c.Param("pattern"), "/")
 		if pattern == "" {
 			pattern = "smpte-rp-219"
