@@ -405,3 +405,64 @@ func TestMemberDepthIndents(t *testing.T) {
 		t.Fatalf("depths: header %d, member %d, want 0 / 1", headerDepth, memberDepth)
 	}
 }
+
+// The folder outline must keep enclosing every literal member even when its
+// visual position sits after a nested subgroup's header: the previously
+// drawn mode closed the parent span around the subgroup, so members after
+// it rendered as depth-0 strays with no side borders.
+func TestOutlineEnclosesMemberAfterNestedSubgroup(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	mustRegisterMedia(t, "sub-after.mp4")
+	for i := 0; i < 4; i++ {
+		if err := AddCue("sub-after.mp4", ""); err != nil {
+			t.Fatalf("AddCue %d: %v", i, err)
+		}
+	}
+	gid, err := CreateGroup("G1", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	sub, err := CreateGroup("Sub", gid)
+	if err != nil {
+		t.Fatalf("CreateGroup sub: %v", err)
+	}
+	// c1,c2 -> G1; c3 -> Sub; c4 -> G1 again (ordered after the subgroup).
+	for _, p := range []int{1, 2} {
+		if err := SetCueGroup(itoa(p), gid); err != nil {
+			t.Fatalf("SetCueGroup c%d: %v", p, err)
+		}
+	}
+	if err := SetCueGroup(itoa(3), sub); err != nil {
+		t.Fatalf("SetCueGroup c3: %v", err)
+	}
+	if err := SetCueGroup(itoa(4), gid); err != nil {
+		t.Fatalf("SetCueGroup c4: %v", err)
+	}
+	// Push c4's sheet_index past the Sub header (gap-indexed layout).
+	if _, err := db.Exec(`UPDATE cuesheet SET sheet_index = 6000 WHERE cuePos = 4`); err != nil {
+		t.Fatalf("bump c4 index: %v", err)
+	}
+	cs, err := GetCuesheet()
+	if err != nil {
+		t.Fatalf("GetCuesheet: %v", err)
+	}
+	rows := FlattenSheet(&cs)
+	lastG1 := -1
+	for i, r := range rows {
+		if r.Cue != nil && r.Cue.Parent == gid {
+			if r.Depth == 0 {
+				t.Fatalf("cue %d (member of G1) rendered at depth 0 — escaped the folder outline", r.Cue.CuePos)
+			}
+			lastG1 = i
+		}
+	}
+	if lastG1 < 0 {
+		t.Fatal("no G1 member rows rendered")
+	}
+	if !rows[lastG1].LastInGroup {
+		t.Fatal("last G1 member after the subgroup is not LastInGroup — folder outline never closes under it")
+	}
+}

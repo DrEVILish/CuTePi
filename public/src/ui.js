@@ -938,7 +938,7 @@ function patternOptions() {
     // Multi-selection (§12.4): remember the selected set so menu actions
     // apply to all of them; the anchor cue is the single-selection fallback.
     m.dataset.bulk = JSON.stringify(
-      [...document.querySelectorAll('#cuesheet tr.cue[data-cue-sel="1"]')]
+      [...document.querySelectorAll('#cuesheet tr.cue[data-cue-sel="1"], #cuesheet tr.cue[data-cue-anchor="1"]')]
         .map((r) => parseInt(r.dataset.cuePos, 10))
     );
     m.dataset.cueAutoContinue = row.dataset.cueAutoContinue || "false";

@@ -682,6 +682,19 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0})
 			continue
 		}
+		// The cue's STORED parent may belong to an outer open span (its
+		// visual position sits after a nested subgroup): surface that span
+		// by closing the inner spans first, or the cue leaks out of its
+		// folder outline as a depth-0 stray (regression: the outline closed
+		// around the subgroup and members after it drew no side borders).
+		if items[it].cue.Parent != stack[len(stack)-1].groupID {
+			for i := len(stack) - 1; i >= 0; i-- {
+				if stack[i].groupID == items[it].cue.Parent {
+					closeTo(stack[i].depth + 1) // close strictly deeper spans; the parent stays open
+					break
+				}
+			}
+		}
 		top := stack[len(stack)-1]
 		if top.skipping && cueInCollapsed(items[it].cue, top.groupID, byID) {
 			continue // member of a collapsed group's subtree: not rendered

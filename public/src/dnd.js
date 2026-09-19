@@ -369,7 +369,7 @@ function setupCuesheetDropTarget() {
       // The server stores the rows at the exact gap shown plus the membership
       // the hovered band carried (§5.4). No re-derivation anywhere.
       if (dropCuePos || dragGroupId) {
-        const selected = [...document.querySelectorAll('#cuesheet tr.cue[data-cue-sel="1"]')]
+        const selected = [...document.querySelectorAll('#cuesheet tr.cue[data-cue-sel="1"], #cuesheet tr.cue[data-cue-anchor="1"]')]
           .map((r) => parseInt(r.dataset.cuePos, 10));
         const body = (() => {
           // Header join intents win: join-first or join-last.
