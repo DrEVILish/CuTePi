@@ -77,6 +77,8 @@ type SheetRow struct {
 	GroupColor   string // innermost containing group's colour (member rows)
 	LastInGroup  bool   // folder outline flags (§5.4)
 	SpanDepth    int    // innermost open folder span (folder-box verticals)
+	SpanBase     string // outermost vertical's colour (its own group's)
+	SpanShadows  string // one stacked vertical per deeper open span
 }
 
 // sheetRowsWithSelection folds the sheet and flags the row that the persisted
@@ -92,7 +94,8 @@ func sheetRowsWithSelection(sheet *ctp.Cuesheet) []SheetRow {
 		row := SheetRow{Group: r.Group, Cue: r.Cue, Depth: r.Depth,
 			GroupColor: r.GroupColor,
 			LastInGroup: r.LastInGroup,
-			SpanDepth:   r.SpanDepth}
+			SpanDepth:   r.SpanDepth,
+			SpanBase:    r.SpanBase, SpanShadows: r.SpanShadows}
 		if r.Group != nil {
 			row.MemberCount = members[r.Group.GroupID]
 		}

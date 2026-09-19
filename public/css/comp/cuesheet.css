@@ -204,11 +204,15 @@
 #cuesheet tr.cue-in-group > td.cue-name,
 #cuesheet tr.cue-group-header > td.cue-name {
   position: relative;
-  /* Each vertical takes ITS group's colour — the server stacks them in
-     --span-base (outermost) + --span-shadows (one line per deeper open
-     span). The right edge and the top/bottom edges use the innermost
-     group's colour; the cue's own colour never paints these lines. */
+}
+/* Line colours: member rows take the innermost GROUP's colour (the cue's
+   own colour never paints them); header rows take their own group's
+   colour (--cue-accent). Uncoloured groups fall back to the theme. */
+#cuesheet tr.cue-in-group > td.cue-name {
   --folder-line: var(--group-accent, var(--ctp-success, #42ddb2));
+}
+#cuesheet tr.cue-group-header > td.cue-name {
+  --folder-line: var(--cue-accent, var(--ctp-success, #42ddb2));
 }
 #cuesheet tr.cue-in-group > td.cue-name::before,
 #cuesheet tr.cue-group-header > td.cue-name::before {
@@ -217,10 +221,9 @@
   top: 0;
   bottom: 0;
   left: 0;
-  width: calc(var(--span-depth, -1) * 1.1rem + 1px);
-  background: repeating-linear-gradient(90deg,
-    var(--folder-line) 0 1px,
-    transparent 1px 1.1rem);
+  width: 1px;
+  background: var(--span-base, var(--folder-line));
+  box-shadow: var(--span-shadows, none);
   pointer-events: none;
 }
 #cuesheet tr.cue-in-group > td.cue-name::after,
