@@ -1,6 +1,289 @@
+/* =====================================================================
+   CUESHEET STYLESHEET — one component file, labelled sections:
+     1 STRUCTURE  table, columns, sticky header, filler
+     2 ROW BASE   .row — everything cue rows and group headers share
+     3 KINDS      .cue / .cuegroup — how the two row kinds differ
+     4 FOLDER BOX span outlines drawn per open group
+     5 STATES     selection, playing, drag-and-drop
+     6 WIDGETS    GO bar, glyphs, pills, overlays, context menu
+   Contract: .row owns what both kinds share; kind rules may not restyle
+   what .row already owns. States sit on .row so both kinds pick them up.
+   Colour: theme custom properties only, with hard fallbacks.
+   ===================================================================== */
+
+/* ------------------------------------------------------------------ */
+/* 1 STRUCTURE                                                        */
+/* ------------------------------------------------------------------ */
+#cuesheet {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* Per-cell borders own their edges (§5.4 folder boxes). Bootstrap's
+     border-collapse:collapse merges adjacent cell borders and resolves
+     ties by document order; separate keeps them. */
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* Fixed layout keeps the table at 100% of its pane (no horizontal
+   scroll) with the explicit per-column widths authoritative. */
+#cuesheet table {
+  table-layout: fixed;
+  width: 100%;
+  margin-bottom: 0;
+}
+
+/* Media-type icon column: content-fixed. */
+#cuesheet th.col-type,
+#cuesheet td.cue-type {
+  width: 1.6em;
+  min-width: 1.6em;
+  max-width: 1.6em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* Cue-number column: content-fixed, centred. */
+#cuesheet th.col-cue-num,
+#cuesheet td.cue-num {
+  width: 3.3em;
+  min-width: 3.3em;
+  max-width: 3.3em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* The three time columns are identical, fixed and deterministic: values
+   are always HH:MM:SS.mmm (12 glyphs), so a monospace stack + 12.5ch
+   cannot drift with the theme's proportional font. */
+#cuesheet th.cue-time,
+#cuesheet td.cue-time {
+  width: 12.5ch;
+  min-width: 12.5ch;
+  white-space: nowrap;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+#cuesheet thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--ctp-surface-2, #26163e);
+}
+
+/* Empty cuesheet: a single guidance row inside the always-rendered
+   table, so the table chrome + striped filler still fill the pane. */
+.cuesheet-empty td {
+  text-align: center;
+  padding: 4rem 0;
+  color: var(--ctp-muted);
+  border-style: hidden;
+}
+#cuesheet.dnd-dragover .cuesheet-empty td {
+  color: var(--ctp-accent-2) !important;
+  background: rgba(216, 92, 255, 0.08);
+}
+
+/* Continue the table's alternating row rhythm through unused pane space. */
+.cuesheet-blank-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.025) 0,
+      rgba(255, 255, 255, 0.025) 22px,
+      rgba(255, 255, 255, 0.055) 22px,
+      rgba(255, 255, 255, 0.055) 44px
+    );
+}
+
+/* ------------------------------------------------------------------ */
+/* 2 ROW BASE — shared by .cue and .cuegroup                          */
+/* ------------------------------------------------------------------ */
+#cuesheet tr.row td,
+#cuesheet tr.row th {
+  padding-top: 0.1rem;
+  padding-bottom: 0.1rem;
+  font-size: 0.85rem;
+}
+#cuesheet tr.row td:hover {
+  cursor: default;
+}
+/* Per-row colour accent: a left bar + a soft tint in the row's colour.
+   --cue-accent is set inline on the row only when it HAS a colour; it
+   must stay UNDEFINED (not "transparent") on plain rows, or the var()
+   fallbacks below would be dead. Beats Bootstrap's table-dark/tinted
+   accent box-shadow (which paints OVER our tint on odd rows). */
+#cuesheet tr.row {
+  border-left: 3px solid var(--cue-accent, transparent);
+}
+#cuesheet tr.row td {
+  --bs-table-accent-bg: transparent;
+  background-color: color-mix(in srgb, var(--cue-accent, transparent) 30%, transparent) !important;
+  box-shadow: inset 0 0 0 9999px transparent !important;
+}
+#cuesheet tr.row .cue-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------ */
+/* 3 KINDS                                                            */
+/* ------------------------------------------------------------------ */
+/* .cue — a playable cue row. */
+#cuesheet tr.cue.cue-in-group td.cue-name {
+  /* Only the NAME indents inside a group; the number column stays
+     aligned with top-level numbers. Each level adds 1.1rem. */
+  padding-left: calc(1.5rem + (var(--depth, 1) - 1) * 1.1rem);
+}
+
+/* .cuegroup — a folder header row. */
+.cue-group-header {
+  cursor: default;
+  background: rgba(216, 92, 255, 0.07) !important;
+}
+.cue-group-header td {
+  vertical-align: middle;
+  cursor: default;
+}
+#cuesheet tr.cue-group-header > td.cue-name {
+  /* Folder names indent with the member-name step at their own depth. */
+  padding-left: calc(1.5rem + var(--depth, 0) * 1.1rem);
+}
+.cue-group-header .cue-group-toggle {
+  display: inline-flex;
+  padding: 0 0.35rem 0 0;
+  font-size: 1.1em;
+}
+
+/* Media-type icon column (width comes from the column rule above). */
+.cue-type {
+  color: var(--ctp-muted, #b8a5d6);
+  font-size: 1.05rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* 4 FOLDER BOX (§5.4)                                                */
+/* Every open group's span draws a themed box around the name column: */
+/* header row = top edge, the span's last row = bottom edge, and each */
+/* row inside stacks a vertical per open nesting level. Restyle the   */
+/* colour per theme via --folder-line (green default).                */
+/* ------------------------------------------------------------------ */
+#cuesheet tr.cue-in-group > td.cue-name,
+#cuesheet tr.cue-group-header > td.cue-name {
+  position: relative;
+  --folder-line: var(--sel-block, var(--ctp-success, #42ddb2));
+}
+#cuesheet tr.cue-in-group > td.cue-name::before,
+#cuesheet tr.cue-group-header > td.cue-name::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0.6rem;
+  width: calc(var(--span-depth, -1) * 1.1rem + 1px);
+  background: repeating-linear-gradient(90deg,
+    var(--folder-line) 0 1px,
+    transparent 1px 1.1rem);
+  pointer-events: none;
+}
+#cuesheet tr.cue-in-group > td.cue-name::after,
+#cuesheet tr.cue-group-header > td.cue-name::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0.2rem;
+  width: 1px;
+  background: var(--folder-line);
+  pointer-events: none;
+}
+#cuesheet tr.cue-group-header:not(.cue-gcollapsed) > td.cue-name {
+  box-shadow: inset 0 1px 0 var(--folder-line);
+}
+#cuesheet tr.cue-glast > td.cue-name {
+  box-shadow: inset 0 -1px 0 var(--folder-line);
+}
+
+/* ------------------------------------------------------------------ */
+/* 5 STATES (on .row — both kinds pick them up)                       */
+/* ------------------------------------------------------------------ */
+/* Selected row (anchor or multi-selection member): a stronger, clearly
+   visible highlight. Uncoloured rows have --cue-accent undefined, which
+   would mix to an invisible tint, so both kinds fall back to the cyan
+   selection accent. The ring is painted as per-cell inset box-shadows
+   IN THE SAME declaration as the 9999px stripe-kill shadow (an outline
+   on the <tr> renders as random partial segments in Chromium). */
+#cuesheet tr.row.table-warning > td {
+  --bs-table-accent-bg: transparent;
+  background-color: color-mix(in srgb, var(--cue-accent, var(--ctp-accent, #2fd6ff)) 55%, var(--ctp-surface, #3c3c50)) !important;
+  box-shadow:
+    inset 0 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset 0 -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset 0 0 0 9999px transparent !important;
+  color: var(--ctp-text, #fff) !important;
+}
+#cuesheet tr.row.table-warning > td:first-child {
+  box-shadow:
+    inset 2px 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset 0 -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset 0 0 0 9999px transparent !important;
+}
+#cuesheet tr.row.table-warning > td:last-child {
+  box-shadow:
+    inset 0 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset -2px -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
+    inset 0 0 0 9999px transparent !important;
+}
+
+/* Firing-row glow (§5.2): the playing cue pulses a soft cyan glow.
+   Reduced-motion users get the static playing tint instead. */
+@keyframes cue-fire {
+  0%, 100% { box-shadow: inset 0 0 10px 0 color-mix(in srgb, var(--ctp-accent, #2fd6ff) 22%, transparent), inset 0 0 0 9999px transparent; }
+  50% { box-shadow: inset 0 0 22px 3px color-mix(in srgb, var(--ctp-accent, #2fd6ff) 45%, transparent), inset 0 0 0 9999px transparent; }
+}
+#cuesheet tr.cue.cue-playing:not(.table-warning) > td {
+  animation: cue-fire 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  #cuesheet tr.cue.cue-playing > td { animation: none; }
+}
+
+/* Drag-and-drop feedback (§5.4). */
+#cuesheet tr.row.dragging {
+  opacity: 0.4;
+  outline: 2px dashed var(--ctp-accent-2, #d85cff);
+  outline-offset: -2px;
+}
+.cue-group-header.dnd-drop-target {
+  background: rgba(216, 92, 255, 0.22) !important;
+  outline: 1px dashed var(--ctp-accent-2, #d85cff);
+}
+/* Drop-on-folder affordance: hovering the LOWER half of a header
+   highlights the whole folder row — the drop will JOIN. */
+.cue-group-header.dnd-join {
+  outline: 2px solid var(--ctp-flare, #d85cff);
+  outline-offset: -2px;
+  background: rgba(216, 92, 255, 0.22) !important;
+}
+
+.row-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* 6 WIDGETS                                                          */
+/* ------------------------------------------------------------------ */
 /* GO bar (§12.1): what fires next, the unit after it, and the advance
-   toggle. The GO button is the loudest thing on the sheet — it is the
-   operator's one big target. */
+   toggle. The GO button is the loudest thing on the sheet. */
 .go-bar {
   border: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
   border-radius: var(--ctp-radius, 0.2rem);
@@ -57,8 +340,7 @@
   color: var(--ctp-accent-2, #4d7dff);
 }
 
-/* Cue health glyphs (§12.3) in the icon column: a quiet tick for a clean
-   last play, a loud octagon for a failure — visible on a mid-show scan. */
+/* Cue health glyphs (§12.3) in the icon column. */
 .cue-result-ok {
   color: var(--ctp-success, #42ddb2);
   font-size: 0.85em;
@@ -70,9 +352,7 @@
   margin-left: 0.2rem;
 }
 
-/* Wait countdown pill (§12.2): shown on the cue a chain wait is counting
-   down on. The cuesheet re-renders ~1/s during a wait, so the number ticks
-   without any client-side timer. */
+/* Wait countdown pill (§12.2). */
 .cue-wait-pill {
   display: inline-block;
   margin-left: 0.5rem;
@@ -82,215 +362,6 @@
   color: var(--ctp-bg, #020b16);
   background: color-mix(in srgb, var(--ctp-accent, #2fd6ff) 85%, transparent);
 }
-
-#cuesheet td:hover {
-  cursor: default;
-}
-
-#cuesheet {
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  /* Per-cell borders own their edges (§5.4 folder outline, selection ring).
-     Bootstrap's border-collapse:collapse merges adjacent cell borders and
-     resolves ties by document order, so a group's left/right/top edges
-     often lost to the neighbouring row's border. Separate keeps them. */
-  border-collapse: separate;
-  border-spacing: 0;
-}
-
-/* Empty cuesheet: a single guidance row inside the always-rendered table,
-   so the table chrome + striped filler still fill the pane. */
-.cuesheet-empty td {
-  text-align: center;
-  padding: 4rem 0;
-  color: var(--ctp-muted);
-  border-style: hidden;
-}
-
-#cuesheet.dnd-dragover .cuesheet-empty td {
-  color: var(--ctp-accent-2) !important;
-  background: rgba(216, 92, 255, 0.08);
-}
-
-/* Fixed table layout keeps the table at 100% of its pane (no horizontal
-   scroll) with the explicit per-column widths authoritative. */
-#cuesheet table {
-  table-layout: fixed;
-  width: 100%;
-  margin-bottom: 0;
-}
-
-/* The media-type and Cue No columns are content-fixed: as wide as their
-   widest icon / header title, never resized or stretched by fixed layout. */
-#cuesheet th.col-type,
-#cuesheet td.cue-type {
-  width: 1.6em;
-  min-width: 1.6em;
-  max-width: 1.6em;
-  overflow: hidden;
-  white-space: nowrap;
-  text-align: center;
-}
-/* As narrow as the column can get while fitting a 3-digit cue number plus group toggle gutter. */
-#cuesheet th.col-cue-num,
-#cuesheet td.cue-num {
-  width: 3.3em;
-  min-width: 3.3em;
-  max-width: 3.3em;
-  overflow: hidden;
-  white-space: nowrap;
-  text-align: center;
-}
-
-/* Time columns are FIXED width (no drag handles), all three IDENTICAL:
-   they only ever hold HH:MM:SS.mmm (12 glyphs + padding). */
-#cuesheet th.cue-time,
-#cuesheet td.cue-time {
-  width: 13ch;
-  min-width: 13ch;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-/* Continue the table's alternating row rhythm through unused pane space. */
-.cuesheet-blank-rows {
-  flex: 1 1 auto;
-  min-height: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background:
-    repeating-linear-gradient(
-      to bottom,
-      rgba(255, 255, 255, 0.025) 0,
-      rgba(255, 255, 255, 0.025) 22px,
-      rgba(255, 255, 255, 0.055) 22px,
-      rgba(255, 255, 255, 0.055) 44px
-    );
-}
-
-#cuesheet th {
-  position: relative;
-}
-
-/* Compact rows: the cuesheet is a live show list, not the settings page.
-   Cell padding and font are ~60% of Bootstrap table-sm defaults so many more
-   cues fit on screen; name ellipsis keeps text fit. */
-#cuesheet td,
-#cuesheet th {
-  padding-top: 0.1rem;
-  padding-bottom: 0.1rem;
-  font-size: 0.85rem;
-}
-
-#cuesheet thead th {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  background: var(--ctp-surface-2, #26163e);
-}
-
-/* Media-type icon column (width comes from the #cuesheet column rule above) */
-.cue-type {
-  text-align: center;
-  color: var(--ctp-muted, #b8a5d6);
-  font-size: 1.05rem;
-}
-
-/* Per-cue colour accent: a left border on the row + a swatch in the name cell.
-   --cue-accent is set inline on the row only when the cue HAS a colour; it
-   must stay UNDEFINED (not "transparent") on plain rows, or every var()
-   fallback below would be dead — the highlight rules rely on the fallback to
-   give uncoloured cues the cyan selection accent. */
-.cue {
-  border-left: 3px solid var(--cue-accent, transparent);
-}
-/* Multi-selection members share the anchor's table-warning highlight —
-   one selection look for every selected row (anchor identity lives in the
-   GO bar and the persisted selection, not in a second tint). */
-/* Beats Bootstrap's `.table-dark > :not(caption) > * > *` and its
-   `.table-striped` accent box-shadow (which paint OVER our tint on odd rows).
-   !important so every table variant resolves the same. */
-#cuesheet .cue td {
-  --bs-table-accent-bg: transparent;
-  background-color: color-mix(in srgb, var(--cue-accent, transparent) 30%, transparent) !important;
-  box-shadow: inset 0 0 0 9999px transparent !important;
-}
-/* The selected row keeps a stronger, definitely visible highlight (and
-   readable text) over the tint — cue rows and group headers alike. Uncoloured
-   rows have --cue-accent undefined, which would mix to an invisible tint,
-   so both fall back to the cyan accent used everywhere else in the UI. */
-#cuesheet tr.cue.table-warning > td,
-#cuesheet tr.cue-group-header.table-warning > td {
-  --bs-table-accent-bg: transparent;
-  background-color: color-mix(in srgb, var(--cue-accent, var(--ctp-accent, #2fd6ff)) 55%, var(--ctp-surface, #3c3c50)) !important;
-  /* Selected-row ring. An `outline` on the <tr> is unreliable in Chromium
-     (collapsed table borders clip it at cell corners — it renders as random
-     partial segments), so the ring is painted as per-cell inset box-shadows
-     IN THE SAME declaration as the 9999px stripe-kill shadow (a separate
-     lower-specificity rule would lose this cascade and the ring vanish).
-     Every cell draws top+bottom; first/last cells add the side edges. */
-  box-shadow:
-    inset 0 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset 0 -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset 0 0 0 9999px transparent !important;
-  color: var(--ctp-text, #fff) !important;
-}
-#cuesheet tr.table-warning > td:first-child {
-  box-shadow:
-    inset 2px 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset 0 -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset 0 0 0 9999px transparent !important;
-}
-#cuesheet tr.table-warning > td:last-child {
-  box-shadow:
-    inset 0 2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset -2px -2px 0 0 var(--sel-ring, var(--cue-accent, var(--ctp-accent, #2fd6ff))),
-    inset 0 0 0 9999px transparent !important;
-}
-/* The group number column holds just the number: the expander lives
-   inline before the folder name (see the folder-box rules), so numbers
-   align with cue numbers at every level. */
-.cue.table-warning {
-  border-left: 3px solid var(--cue-accent, var(--ctp-accent, #2fd6ff));
-}
-.cue-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Inline edit forms replace a span inside a table cell: keep them on the
-   same line as their neighbours (a bare form is display:block) and sized to
-   the cell text so opening the editor never changes the row height. */
-#updateValue {
-  display: inline-block;
-  width: 100%;
-  vertical-align: middle;
-}
-#updateValue input.form-control {
-  display: block;
-  width: 100%;
-  height: auto;
-  min-height: 0;
-  padding: 0 0.1rem;
-  font-size: 0.85rem;
-  line-height: inherit;
-  border: 0;
-  border-radius: 0.15rem;
-  background-color: color-mix(in srgb, var(--ctp-accent-2, #2fd6ff) 10%, transparent);
-  outline: 1px solid var(--bs-primary, #0d6efd);
-}
-
-/* Row-state visuals apply to group header rows too (per-cue/colour tint) */
-#cuesheet .cue-group-header td {
-  --bs-table-accent-bg: transparent;
-  background-color: color-mix(in srgb, var(--cue-accent, transparent) 30%, transparent) !important;
-  box-shadow: inset 0 0 0 9999px transparent !important;
-}
-
-/* In-group cues: only the NAME is indented; the number column stays aligned
-   with top-level numbers. */
 
 /* Progress overlay lives INSIDE the playing cue's Duration cell: a film
    over the top of the time text, seekable (ui.js wiring is unchanged). */
@@ -315,8 +386,31 @@
   transition: width 0.4s linear;
 }
 
-/* Right-click context menu for cue rows. Single fixed-position element,
-   shown at the cursor. */
+/* Inline edit forms replace a span inside a table cell: keep them on the
+   same line as their neighbours (a bare form is display:block) and sized
+   to the cell text so opening the editor never changes the row height. */
+#updateValue {
+  display: inline-block;
+  width: 100%;
+  vertical-align: middle;
+}
+#updateValue input.form-control {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  padding: 0 0.1rem;
+  font-size: 0.85rem;
+  line-height: inherit;
+  border: 0;
+  border-radius: 0.15rem;
+  background-color: color-mix(in srgb, var(--ctp-accent-2, #2fd6ff) 10%, transparent);
+  outline: 1px solid var(--bs-primary, #0d6efd);
+}
+
+/* Right-click context menu. Single fixed-position element, shown at the
+   cursor; shared by cue rows, group headers, blank sheet space and media
+   tiles. */
 .cue-context-menu {
   position: fixed;
   z-index: 2000;
@@ -371,128 +465,4 @@
   width: 1.6em;
   height: 1.6em;
   border-radius: 4px;
-}
-
-/* Cue-group header rows: a visual folder containing contiguous member cues.
-   Dropping a cue row onto the header assigns membership (see dnd.js).
-   The row keeps the default arrow cursor — no pointer/hand on folders. */
-.cue-group-header {
-  background: rgba(216, 92, 255, 0.07) !important;
-  cursor: default;
-}
-.cue-group-header td,
-.cue-group-header .cue-group-toggle,
-.cue-group-header .cue-group-select {
-  cursor: default;
-}
-.cue-group-header td {
-  vertical-align: middle;
-}
-/* Folder names indent with the same per-level step as member names at
-   their own depth, so nested groups read as a tree (mock layout). */
-#cuesheet tr.cue-group-header > td.cue-name {
-  padding-left: calc(1.5rem + var(--depth, 0) * 1.1rem);
-}
-
-/* Visual feedback while dragging a group header row. */
-.cue-group-header.dragging {
-  opacity: 0.4;
-  outline: 2px dashed var(--ctp-accent-2, #d85cff);
-  outline-offset: -2px;
-}
-/* Drop target highlights: when a group block is the drop target,
-   highlight the entire group block (header + all member rows). */
-.cue-group-header.dnd-drop-target {
-  background: rgba(216, 92, 255, 0.22) !important;
-  outline: 1px dashed var(--ctp-accent-2, #d85cff);
-}
-/* Only the NAME is indented inside a group; the number column stays
-   aligned with top-level numbers. Each nesting level adds 1.1rem. */
-#cuesheet tr.cue.cue-in-group td.cue-name {
-  padding-left: calc(1.5rem + (var(--depth, 1) - 1) * 1.1rem);
-}
-.row-disabled {
-  opacity: 0.45;
-  pointer-events: none;
-}
-
-/* Firing-row glow (§5.2): the playing cue's row pulses a soft cyan glow so
-   the operator can find the firing cue in the periphery. Reduced-motion
-   users get the static playing tint instead. */
-@keyframes cue-fire {
-  0%, 100% { box-shadow: inset 0 0 10px 0 color-mix(in srgb, var(--ctp-accent, #2fd6ff) 22%, transparent), inset 0 0 0 9999px transparent; }
-  50% { box-shadow: inset 0 0 22px 3px color-mix(in srgb, var(--ctp-accent, #2fd6ff) 45%, transparent), inset 0 0 0 9999px transparent; }
-}
-#cuesheet tr.cue.cue-playing:not(.table-warning) > td {
-  animation: cue-fire 1.8s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  #cuesheet tr.cue.cue-playing > td { animation: none; }
-}
-
-/* Group expander sits INLINE before the folder name (mock layout): the
-   number column holds just the number, aligned with cue numbers. */
-.cue-group-header .cue-group-toggle {
-  display: inline-flex;
-  padding: 0 0.35rem 0 0;
-  font-size: 1.1em;
-  vertical-align: middle;
-}
-/* Folder boxes (§5.4): EVERY open group's span draws a themed box around
-   the name column — header row = top edge, span's last row = bottom edge,
-   every row inside = verticals at each nesting level's indent. Colour
-   follows the theme (restyled via --folder-line; green is the default). */
-#cuesheet tr.cue-in-group > td.cue-name,
-#cuesheet tr.cue-group-header > td.cue-name {
-  position: relative;
-  --folder-line: var(--sel-block, var(--ctp-success, #42ddb2));
-}
-#cuesheet tr.cue-in-group > td.cue-name::before,
-#cuesheet tr.cue-group-header > td.cue-name::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0.6rem;
-  width: calc(var(--span-depth, -1) * 1.1rem + 1px);
-  background: repeating-linear-gradient(90deg,
-    var(--folder-line) 0 1px,
-    transparent 1px 1.1rem);
-  pointer-events: none;
-}
-#cuesheet tr.cue-in-group > td.cue-name::after,
-#cuesheet tr.cue-group-header > td.cue-name::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 0.2rem;
-  width: 1px;
-  background: var(--folder-line);
-  pointer-events: none;
-}
-/* Top edge: the header row's name cell (spans its box's width). */
-#cuesheet tr.cue-group-header:not(.cue-gcollapsed) > td.cue-name {
-  box-shadow: inset 0 1px 0 var(--folder-line);
-}
-/* Bottom edge: the span's last rendered row. */
-#cuesheet tr.cue-glast > td.cue-name {
-  box-shadow: inset 0 -1px 0 var(--folder-line);
-}
-/* Block rectangle ONLY: no internal lines inside an open group — not the
-   header's underline nor the separators between members. Edges of the
-   rectangle: header top, sides down the membership, last member closes. */
-#cuesheet tr.cue-in-group > td {
-  border-bottom: 0;
-}
-#cuesheet tr.cue-group-header:not(.cue-gcollapsed) > td {
-  border-bottom: 0;
-}
-/* Drop-on-folder affordance (§5.4): hovering the LOWER half of a group
-   header with a cue highlights the whole folder row — the drop will JOIN.
-   The upper half draws the normal reorder line instead. */
-.cue-group-header.dnd-join {
-  outline: 2px solid var(--ctp-flare, #d85cff);
-  outline-offset: -2px;
-  background: rgba(216, 92, 255, 0.22) !important;
 }

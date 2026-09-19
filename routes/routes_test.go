@@ -314,7 +314,7 @@ func TestCuesheetRendersAddedCue(t *testing.T) {
 	if !strings.Contains(body, "routes-test.mp4") {
 		t.Fatalf("expected the rendered cuesheet to contain the cue's title, got:\n%s", body)
 	}
-	if !strings.Contains(body, `class="cue table-warning"`) {
+	if !strings.Contains(body, `class="row cue table-warning"`) {
 		t.Fatalf("expected the selected cue to be highlighted, got:\n%s", body)
 	}
 	if !strings.Contains(body, "00:00:10.000") {

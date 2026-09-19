@@ -542,9 +542,8 @@ type FlatRow struct {
 	// carried so member rows can draw the folder outline in it.
 	GroupColor string
 	// Group-boundary flags for the folder outline (§5.4): a cue is the
-	// first/last rendered member of its direct group's run.
-	FirstInGroup bool
-	LastInGroup  bool
+	// last rendered member of its direct group's run.
+	LastInGroup bool
 	// SpanDepth: depth of the innermost OPEN group span this row sits in
 	// (-1 = none). The folder box draws one vertical line per open span,
 	// so nested groups stack their left edges on deeper rows.
@@ -742,8 +741,7 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 		// top-depth + 1 so the CSS indent formula puts the first level at
 		// 1.5rem, +1.1rem per nesting level after.
 		rows = append(rows, FlatRow{Cue: cue, Depth: top.depth + 1, GroupColor: groupColor,
-			FirstInGroup: top.lastRow >= 0 && rows[top.lastRow].Group != nil,
-			SpanDepth:    spanDepth()})
+			SpanDepth: spanDepth()})
 		// Every open span contains this row: nested subgroup headers and
 		// member rows extend each enclosing span's visual last row, so the
 		// folder outline and the selected block outline close at the span's

@@ -307,6 +307,9 @@ document.addEventListener("change", (e) => {
   }
 });
 
+// Column resizing was removed; clear the old persisted widths.
+try { localStorage.removeItem("cutepi.cuesheet.colWidths"); } catch (e) {}
+
 window.addEventListener("keydown", (e) => {
   const active = document.activeElement;
   const tag = active && active.nodeName ? active.nodeName.toLowerCase() : "";
