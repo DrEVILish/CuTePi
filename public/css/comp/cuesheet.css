@@ -204,7 +204,9 @@
 #cuesheet tr.cue-in-group > td.cue-name,
 #cuesheet tr.cue-group-header > td.cue-name {
   position: relative;
-  --folder-line: var(--sel-block, var(--ctp-success, #42ddb2));
+  /* The box follows the group's own colour (innermost group on member
+     rows); theme green remains the fallback for uncoloured groups. */
+  --folder-line: var(--group-accent, var(--cue-accent, var(--ctp-success, #42ddb2)));
 }
 #cuesheet tr.cue-in-group > td.cue-name::before,
 #cuesheet tr.cue-group-header > td.cue-name::before {
@@ -232,9 +234,13 @@
 }
 /* Box completeness: top edge ON the group header row, bottom edge at the
    BOTTOM of the span's last row. Borders, not box-shadows — the row
-   base's !important stripe-kill shadow would swallow inset shadows. */
-#cuesheet tr.cue-group-header:not(.cue-gcollapsed) > td.cue-name {
+   base's !important stripe-kill shadow would swallow inset shadows.
+   A collapsed group's box closes around its own header row. */
+#cuesheet tr.cue-group-header > td.cue-name {
   border-top: 1px solid var(--folder-line);
+}
+#cuesheet tr.cue-group-header.cue-gcollapsed > td.cue-name {
+  border-bottom: 1px solid var(--folder-line);
 }
 #cuesheet tr.cue-glast > td.cue-name {
   border-bottom: 1px solid var(--folder-line);

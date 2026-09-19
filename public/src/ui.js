@@ -1030,7 +1030,6 @@ function patternOptions() {
     menuEl.className = "cue-context-menu";
     menuEl.hidden = true;
     menuEl.innerHTML = `
-      <div class="cue-context-item" data-group-action="play"><i class="bi bi-play-fill"></i> Play</div>
       <div class="cue-context-item" data-group-action="inspector"><i class="bi bi-sliders"></i> Inspector</div>
       <div class="cue-context-item" data-group-action="collapse"><i class="bi bi-chevron-down"></i> <span>Collapse</span></div>
       <div class="cue-context-item cue-context-color">
@@ -1115,9 +1114,7 @@ function patternOptions() {
     e.stopPropagation();
     const action = item.dataset.groupAction;
     hideMenu();
-    if (action === "play") {
-      postCuesheet("/api/group/" + id + "/play"); // fire-and-forget; play returns 200
-    } else if (action === "inspector") {
+    if (action === "inspector") {
       if (window.htmx && document.getElementById("cueinspector-collapse")) {
         htmx.ajax("GET", "/api/group/" + id + "/inspector",
           {target: "#cueinspector-collapse", swap: "innerHTML"});
