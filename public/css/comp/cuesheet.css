@@ -143,12 +143,12 @@
   text-align: center;
 }
 
-/* Time columns are FIXED width (no drag handles): they only ever hold
-   HH:MM:SS.mmm, so Resize handles on them were noise. */
+/* Time columns are FIXED width (no drag handles), all three IDENTICAL:
+   they only ever hold HH:MM:SS.mmm (12 glyphs + padding). */
 #cuesheet th.cue-time,
 #cuesheet td.cue-time {
-  width: 8.5ch;
-  min-width: 8.5ch;
+  width: 13ch;
+  min-width: 13ch;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -402,6 +402,42 @@
 .cue-group-header td {
   vertical-align: middle;
 }
+/* Group names render in the NAME column now (the old colspan spanned the
+   time cells): indent matches the cue-name formula at the same depth, so
+   folder names line up with their members' names. */
+#cuesheet tr.cue-group-header td.cue-name {
+  padding-left: calc(1.5rem + var(--depth, 0) * 1.1rem);
+}
+/* Selected group's block outline (§5.4): a themed box around the whole
+   block a selected header owns — header row to the span's last row — so
+   the operator sees exactly what a bulk action will take. Colour follows
+   the theme's success tone; --sel-block restyles it per theme. */
+#cuesheet tr.cue-blocksel > td.cue-name {
+  position: relative;
+}
+#cuesheet tr.cue-blocksel > td.cue-name::before,
+#cuesheet tr.cue-blocksel > td.cue-name::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--sel-block, var(--ctp-success, #42ddb2));
+  pointer-events: none;
+}
+#cuesheet tr.cue-blocksel > td.cue-name::before {
+  left: calc(0.6rem + var(--block-indent, 0) * 1.1rem);
+}
+#cuesheet tr.cue-blocksel > td.cue-name::after {
+  right: 0.2rem;
+}
+#cuesheet tr.cue-blockhead > td.cue-name {
+  box-shadow: inset 0 1px 0 var(--sel-block, var(--ctp-success, #42ddb2));
+}
+#cuesheet tr.cue-blocklast > td.cue-name {
+  box-shadow: inset 0 -1px 0 var(--sel-block, var(--ctp-success, #42ddb2));
+}
+
 /* Visual feedback while dragging a group header row. */
 .cue-group-header.dragging {
   opacity: 0.4;

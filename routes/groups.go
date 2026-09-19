@@ -77,6 +77,9 @@ type SheetRow struct {
 	GroupColor   string // innermost containing group's colour (member rows)
 	FirstInGroup bool   // folder outline flags (§5.4)
 	LastInGroup  bool
+	BlockSel     bool // selected-group block outline (§5.4)
+	BlockLast    bool
+	BlockIndent  int
 }
 
 // sheetRowsWithSelection folds the sheet and flags the row that the persisted
@@ -91,7 +94,8 @@ func sheetRowsWithSelection(sheet *ctp.Cuesheet) []SheetRow {
 	for _, r := range flat {
 		row := SheetRow{Group: r.Group, Cue: r.Cue, Depth: r.Depth,
 			GroupColor:   r.GroupColor,
-			FirstInGroup: r.FirstInGroup, LastInGroup: r.LastInGroup}
+			FirstInGroup: r.FirstInGroup, LastInGroup: r.LastInGroup,
+			BlockSel: r.BlockSel, BlockLast: r.BlockLast, BlockIndent: r.BlockIndent}
 		if r.Group != nil {
 			row.MemberCount = members[r.Group.GroupID]
 		}

@@ -524,3 +524,108 @@ func TestSheetDropDraggedAnchorStaysAtBand(t *testing.T) {
 		}
 	}
 }
+
+// Grouping cues that live inside a group nests the new folder under THAT
+// group, at the anchor's slot (§12.4): the block must not escape to the
+// top level or strand members outside the span.
+func TestBulkGroupNewAtNestsInAnchorGroup(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	mustRegisterMedia(t, "nest-anchor.mp4")
+	for i := 0; i < 4; i++ {
+		if err := AddCue("nest-anchor.mp4", ""); err != nil {
+			t.Fatalf("AddCue %d: %v", i, err)
+		}
+	}
+	outer, err := CreateGroup("Outer", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if err := SetCueGroup(itoa(3), outer); err != nil {
+		t.Fatalf("join 3: %v", err)
+	}
+	if err := SetCueGroup(itoa(4), outer); err != nil {
+		t.Fatalf("join 4: %v", err)
+	}
+	// Select cues 3,4 (inside Outer), right-click 4, Add to New Group.
+	nid, err := BulkGroupNewAt([]int{3, 4}, 4)
+	if err != nil {
+		t.Fatalf("BulkGroupNewAt: %v", err)
+	}
+	g, err := GetGroup(nid)
+	if err != nil {
+		t.Fatalf("GetGroup: %v", err)
+	}
+	if g.ParentGroupID != outer {
+		t.Fatalf("new group parent = %d, want %d (nested under the anchor's group)", g.ParentGroupID, outer)
+	}
+	parents, _ := storedParents()
+	for _, p := range []int{3, 4} {
+		if parents[p] != nid {
+			t.Fatalf("cue %d parent = %d, want %d", p, parents[p], nid)
+		}
+	}
+	// The nested header must render INSIDE Outer's span (depth 1).
+	cs, _ := GetCuesheet()
+	rows := FlattenSheet(&cs)
+	for i, r := range rows {
+		if r.Group != nil && r.Group.GroupID == nid {
+			if r.Depth != 1 {
+				t.Fatalf("nested header rendered at depth %d, want 1 (row %d)", r.Depth, i)
+			}
+			return
+		}
+	}
+	t.Fatal("new group header not rendered")
+}
+
+// Selecting a group draws the block outline around its whole span: header,
+// nested subgroup headers and member rows all carry BlockSel; the span's
+// last rendered row carries BlockLast.
+func TestFlattenSheetSelectedBlockOutline(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	mustRegisterMedia(t, "blocksel.mp4")
+	for i := 0; i < 4; i++ {
+		if err := AddCue("blocksel.mp4", ""); err != nil {
+			t.Fatalf("AddCue %d: %v", i, err)
+		}
+	}
+	d, err := CreateGroup("D", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup D: %v", err)
+	}
+	e, err := CreateGroup("E", d)
+	if err != nil {
+		t.Fatalf("CreateGroup E: %v", err)
+	}
+	if err := SetCueGroup(itoa(2), d); err != nil {
+		t.Fatalf("join 2 to D: %v", err)
+	}
+	if err := SetCueGroup(itoa(3), e); err != nil {
+		t.Fatalf("join 3 to E: %v", err)
+	}
+	if err := SetCueGroup(itoa(4), e); err != nil {
+		t.Fatalf("join 4 to E: %v", err)
+	}
+	cs, _ := GetCuesheet()
+	cs.SelectedGroups = map[int]bool{d: true}
+	rows := FlattenSheet(&cs)
+	marked := 0
+	for _, r := range rows {
+		if r.BlockSel {
+			marked++
+		}
+	}
+	if marked != 4 { // D header + E header + cues 3,4
+		t.Fatalf("BlockSel rows = %d, want 4 (header, nested header, both members)", marked)
+	}
+	last := rows[len(rows)-1]
+	if !last.BlockLast {
+		t.Fatal("last row of the selected block does not close the outline")
+	}
+}

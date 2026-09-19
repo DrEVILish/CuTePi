@@ -71,6 +71,20 @@ document.body.addEventListener("htmx:before:swap", (e) => {
 // Error responses are deliberately not swapped into application panels. Keep
 // the originating YouTube form useful by showing its sanitized server error
 // in the modal instead of failing silently.
+
+// A GROUP inspector fetch that 404s means the group is gone (deleted while
+// its panel was shown): the auto-follow would keep re-requesting it forever
+// (stale dataset.groupId, endless red toasts). Fall back to the empty cue
+// inspector once — the stale id clears with the swap.
+document.body.addEventListener("htmx:responseError", (e) => {
+  const ctx = e.detail;
+  if (!isInspectorTarget(ctx?.target)) return;
+  const path = ctx.request?.path || ctx.sourceElement?.getAttribute?.("hx-get") || "";
+  if (/\/api\/group\/\d+\/inspector/.test(path) && window.htmx) {
+    htmx.ajax("GET", "/api/cue/inspector?_=" + Date.now(), {target: "#cueinspector-body", swap: "outerHTML"});
+  }
+});
+
 htmx.on("htmx:after:request", (e) => {
   const el = e.detail.ctx?.sourceElement;
   const ok = (e.detail.ctx?.request?.status ?? 500) < 400;
