@@ -453,6 +453,12 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   padding: 0.01rem 0.3rem;
   font-size: 0.78rem;
 }
+/* Schedule block lives in the same narrow column: day + time stack full
+   width inside it (auto widths overflowed the 11rem column). */
+.insp-schedule .form-select-sm,
+.insp-schedule .form-control-sm {
+  width: 100%;
+}
 #insp-fadeaction,
 #insp-fadeout {
   height: 1.45rem;

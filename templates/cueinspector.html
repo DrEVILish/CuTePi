@@ -144,13 +144,13 @@
               <label class="form-check-label small" for="insp-schedule">Schedule this cue</label>
             </div>
             <div class="d-flex align-items-center gap-2 flex-wrap">
-              <select id="insp-schedule-day" name="schedule_days" class="form-select form-select-sm" style="width:auto" aria-label="Day of week">
+              <select id="insp-schedule-day" name="schedule_days" class="form-select form-select-sm" aria-label="Day of week">
                 <option value="">Day&hellip;</option>
                 {{ range $i, $d := listDays }}
                 <option value="{{ add $i 1 }}" {{ if eq $.ScheduleDay (add $i 1) }}selected{{ end }}>{{ $d }}</option>
                 {{ end }}
               </select>
-              <input id="insp-schedule-time" name="schedule_time" type="time" class="form-control form-control-sm" style="width:7.5em" step="1"
+              <input id="insp-schedule-time" name="schedule_time" type="time" class="form-control form-control-sm" step="1"
                 value="{{ if .Cue.ScheduleEnabled }}{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}{{ end }}"
                 aria-label="Time of day, to the second">
             </div>

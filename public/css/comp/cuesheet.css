@@ -56,20 +56,30 @@
 }
 
 /* The three time columns are identical, fixed and deterministic: values
-   are always HH:MM:SS.mmm (12 glyphs) in the same mono stack, so 12.5ch
+   are always HH:MM:SS.mmm (12 glyphs) in the same mono stack, so 13ch
    fits everywhere; overflow is hidden so a stray glyph can never bleed
-   into the neighbouring column. */
+   into the neighbouring column. Header labels sit left over their
+   column; the values themselves stay right-aligned. */
 #cuesheet th.cue-time,
 #cuesheet td.cue-time {
-  width: 12.5ch;
-  min-width: 12.5ch;
+  width: 13ch;
+  min-width: 13ch;
   white-space: nowrap;
   text-align: right;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
+#cuesheet th.cue-time {
+  text-align: left;
+}
 #cuesheet td.cue-time {
   overflow: hidden;
+}
+
+/* Column headers align left over their content (NUMBER, NAME, the time
+   labels) — values keep their own alignment. */
+#cuesheet thead th {
+  text-align: left;
 }
 
 #cuesheet thead th {
@@ -161,9 +171,8 @@
 }
 .cue-group-header .cue-group-toggle {
   position: absolute;
-  /* Just right of the box's own vertical (0.6rem + depth·step), left of
-     the name text. */
-  left: calc(0.8rem + var(--depth, 0) * 1.1rem);
+  /* LEFT of the group outline's own vertical (0.6rem + depth·step). */
+  left: calc(-0.25rem + var(--depth, 0) * 1.1rem);
   top: 50%;
   transform: translateY(-50%);
   padding: 0 0.35rem;
@@ -221,11 +230,14 @@
   background: var(--folder-line);
   pointer-events: none;
 }
+/* Box completeness: top edge ON the group header row, bottom edge at the
+   BOTTOM of the span's last row. Borders, not box-shadows — the row
+   base's !important stripe-kill shadow would swallow inset shadows. */
 #cuesheet tr.cue-group-header:not(.cue-gcollapsed) > td.cue-name {
-  box-shadow: inset 0 1px 0 var(--folder-line);
+  border-top: 1px solid var(--folder-line);
 }
 #cuesheet tr.cue-glast > td.cue-name {
-  box-shadow: inset 0 -1px 0 var(--folder-line);
+  border-bottom: 1px solid var(--folder-line);
 }
 
 /* ------------------------------------------------------------------ */
