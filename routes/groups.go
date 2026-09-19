@@ -171,7 +171,12 @@ func Groups(rg *gin.RouterGroup) {
 		if cn := strings.TrimSpace(c.PostForm("cueNum")); len(cn) <= 24 {
 			g.CueNum = cn
 		}
-		g.Collapse = c.PostForm("collapse") == "true" || c.PostForm("collapse") == "on"
+		// Collapse only changes when the field is PRESENT: the inspector
+		// has no collapse control any more, and every instant-save PUT
+		// omits it — writing it unconditionally would uncollapse the group.
+		if _, present := c.GetPostForm("collapse"); present {
+			g.Collapse = c.PostForm("collapse") == "true" || c.PostForm("collapse") == "on"
+		}
 		g.Slideshow = c.PostForm("slideshow") == "true" || c.PostForm("slideshow") == "on"
 		g.Shuffle = c.PostForm("shuffle") == "true" || c.PostForm("shuffle") == "on"
 		g.Loop = c.PostForm("loop") == "true" || c.PostForm("loop") == "on"

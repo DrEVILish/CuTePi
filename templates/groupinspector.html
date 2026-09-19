@@ -16,6 +16,7 @@
   {{ end }}
 
   <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML"
+    hx-trigger="change delay:200ms, submit"
     class="gi-form vstack gap-2" style="max-width: 42rem;">
     <div class="d-flex gap-2">
       <div class="flex-grow-1">
@@ -44,17 +45,6 @@
           {{ end }}
         </div>
       </div>
-      <div class="col-auto align-self-end">
-        <label class="form-label small mb-1 d-block" for="group-parent" style="visibility:hidden">.</label>
-        <select id="group-parent" name="parentGroupID" class="form-select form-select-sm" aria-label="Parent group" title="Nest this group inside another">
-          <option value="0" {{ if not .Group.ParentGroupID }}selected{{ end }}>Top level</option>
-          {{ range .OtherGroups }}
-          {{ if ne .GroupID $.Group.GroupID }}
-          <option value="{{ .GroupID }}" {{ if eq $.Group.ParentGroupID .GroupID }}selected{{ end }}{{ if .IsDescendantOf }}disabled{{ end }}>{{ .Indent }}{{ .Name }}</option>
-          {{ end }}
-          {{ end }}
-        </select>
-      </div>
     </div>
     <div class="d-flex flex-wrap gap-2">
       <div class="form-check form-check-inline">
@@ -81,13 +71,6 @@
         <input id="group-fade" name="fadeSecs" type="number" min="0" step="1" class="form-control form-control-sm" style="width:8em"
           value="{{ if .Group.FadeMS }}{{ div .Group.FadeMS 1000 }}{{ end }}" placeholder="0">
       </div>
-    </div>
-    <div class="d-flex justify-content-between align-items-center">
-      <div class="form-check">
-        <input class="form-check-input" type="checkbox" id="group-collapse" name="collapse" value="true" {{ if .Group.Collapse }}checked{{ end }}>
-        <label class="form-check-label small" for="group-collapse">Collapsed</label>
-      </div>
-      <button class="btn btn-sm btn-primary" type="submit">Save</button>
     </div>
   </form>
 
