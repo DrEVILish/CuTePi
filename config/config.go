@@ -41,7 +41,7 @@ const (
 	defaultPort         = 3000
 	defaultPollInterval = 100
 	minPollInterval     = 10
-	defaultWorkingDir   = "CTP"
+	defaultWorkingDir   = "cutepi"
 	defaultConfigDir    = "config"
 	defaultConfig       = "config.json"
 	defaultDb           = "ctp.db"

@@ -1,19 +1,17 @@
 [Unit]
 Description=CuTePi - Cue-based media playback controller
-Documentation=https://github.com/anomalyco/CuTePi
+Documentation=https://github.com/DrEVILish/CuTePi
 After=network-online.target sound.target
 Wants=network-online.target
 
 [Service]
-# Runtime prefix used by install.sh: binary + templates/ + public/ live here,
-# and WorkingDirectory must point at it because the app reads ./templates and
-# ./public relative to its cwd.
+# App installation (binary + templates/ + public/): WorkingDirectory must
+# point here because the app reads ./templates and ./public relative to cwd.
 WorkingDirectory=/opt/cutepi
-# Owned data tree: config/config.json + ctp.db, media/, thumbnails/ all fall
-# back to living under WORKING_DIR, so setting this one var relocates them all.
-Environment=WORKING_DIR=/opt/cutepi/data
-# Listen on all interfaces so the control UI is reachable over the network.
-Environment=PORT=3000
+# User data (config/, ctp.db, media/, thumbnails/) defaults to ~/cutepi:
+# WORKING_DIR is unset and the app falls back to $HOME/cutepi. Set this var
+# to relocate the data tree.
+Environment=PORT=3001
 # So the UI's Restart button runs `systemctl restart cutepi` under this unit.
 Environment=CUTEPI_SERVICE=cutepi
 
