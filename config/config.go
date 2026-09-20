@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -105,12 +106,16 @@ func resolveDefaults(getenv func(string) string, homePath string) Config {
 }
 
 func init() {
-	// os.UserHomeDir: $HOME on unix, USERPROFILE on Windows. An error means
-	// no home is set - resolveDefaults handles the empty string (paths then
-	// come from the env overrides / working dir).
+	// os.UserHomeDir reads $HOME, but a systemd service runs without it (and
+	// an empty home silently turns "cutepi" into a relative path beside the
+	// binary). Fall back to the invoking user's passwd entry.
 	homePath, err := os.UserHomeDir()
-	if err != nil {
-		homePath = ""
+	if err != nil || homePath == "" {
+		if u, uerr := user.Current(); uerr == nil && u.HomeDir != "" {
+			homePath = u.HomeDir
+		} else {
+			homePath = ""
+		}
 	}
 	conf = resolveDefaults(os.Getenv, homePath)
 }

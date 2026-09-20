@@ -156,7 +156,7 @@ func TestResolveDefaultsDerivesPathsFromWorkingDir(t *testing.T) {
 func TestResolveDefaultsWithNoEnvUsesHomeDir(t *testing.T) {
 	c := resolveDefaults(fakeEnv(nil), "/home/pi")
 
-	if c.WorkingDir != filepath.Join("/home/pi", "CTP") {
+	if c.WorkingDir != filepath.Join("/home/pi", "cutepi") {
 		t.Errorf("WorkingDir = %q, want under home dir", c.WorkingDir)
 	}
 	if c.Port != defaultPort {
