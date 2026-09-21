@@ -296,7 +296,12 @@ function applyAppTheme(id) {
     // No href at all for "custom": href="" would resolve to this page and the
     // browser would fetch the HTML document and try to parse it as CSS.
     if (id === "custom") link.removeAttribute("href");
-    else link.href = appThemeMap[id].href;
+    else {
+      // Keep the ?v= stamp the boot script put on the link so the swapped-in
+      // stylesheet caches under the same deployment version.
+      const v = (link.getAttribute("href") || "").split("?")[1];
+      link.href = appThemeMap[id].href + (v ? "?" + v : "");
+    }
   }
   document.documentElement.dataset.theme = theme;
   document.documentElement.dataset.themeId = id;
