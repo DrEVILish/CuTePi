@@ -683,11 +683,36 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
 }
 
 /* --- Sticky footer: panel toggles, Tests, Settings, Edit/Show mode ------ */
-#app-footer {
+/* === ftl-themes shell adoption ==========================================
+   .app-shell mirrors the library's .ft-app contract: topbar = bar,
+   app-content = main, footer = status, plus an aria-hidden decorative rail.
+   Under this app's own themes no ftl stylesheet is linked, so the .ftl-*
+   classes are inert and :where() (zero specificity) keeps these rules from
+   out-ranking a shared theme's shell rules when one IS linked. */
+:where(body.app-body) > :where(.app-shell) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hidden by default (empty aside); a shared theme's own .ftl-app-rail rule,
+   which loads later at equal specificity, turns the rail on. */
+.ftl-app-rail {
+  display: none;
+}
+
+/* The footer's own id-level background/border must not out-rank a shared
+   theme's .ftl-app-status styling: :where() drops it to zero specificity
+   while rendering identically under this app's own themes. */
+:where(#app-footer) {
   flex: 0 0 auto;
   border-top: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
   background-color: var(--ctp-surface, #07172a);
   overflow-x: auto;
+  /* replaces the px-2/py-1 utilities (those are !important and would beat a
+     shared theme's .ftl-app-status padding) */
+  padding: 0.25rem 0.5rem;
 }
 /* The panel buttons were floating overlays; in the footer they are plain
    static buttons. Visibility still follows the body collapse classes. */

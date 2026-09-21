@@ -2,9 +2,15 @@
 
 
 <body data-bs-theme="dark" class="app-body{{ if .ShowMode }} show-mode{{ end }}">
-    {{ template "topbar.html" }}
+    <!-- ftl-themes shell adoption (.ftl-app contract): topbar = bar,
+      app-content = main, footer = status, plus a decorative rail. The
+      .ftl-* classes are inert under this app's own themes (no ftl
+      stylesheet is linked), so only shared ftl:* themes re-arrange. -->
+    <div class="app-shell ftl-app">
+      {{ template "topbar.html" }}
+      <aside class="ftl-app-rail" aria-hidden="true"></aside>
 
-    <div class="container-fluid app-content">
+    <div class="container-fluid app-content ftl-app-main">
       <div class="app-main-row">
         <div class="app-pane d-flex flex-column" id="mediapool-pane">
           {{ template "mediapool.html" . }}
@@ -44,7 +50,7 @@
       <div id="cueinspector-resizer" title="Resize the cue inspector (drag)" aria-label="Resize the cue inspector"></div>
     </div>
 
-    <footer id="app-footer" class="d-flex align-items-center gap-2 px-2 py-1">
+    <footer id="app-footer" class="ftl-app-status d-flex align-items-center gap-2">
       <button type="button" id="mode-toggle" class="mode-switch" role="switch"
         aria-checked="{{ if .ShowMode }}true{{ else }}false{{ end }}"
         aria-label="Edit or Show mode"
@@ -80,6 +86,7 @@
         <i class="bi bi-gear-fill"></i>&nbsp;Settings
       </button>
     </footer>
+    </div>
 
     {{ template "uploadModal.html" }}
     {{ template "ytdlModal.html" }}
