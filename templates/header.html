@@ -32,6 +32,12 @@
         var stamp = "?v={{ assetStamp }}";
         var id = DEFAULT_ID;
         try { id = localStorage.getItem("cutepi.theme") || DEFAULT_ID; } catch (_) {}
+        // ?theme=<id> previews a theme for this page view only — never saved,
+        // so the picker's stored preference keeps controlling normal loads.
+        try {
+          var qs = new URLSearchParams(location.search).get("theme");
+          if (qs && (qs === "custom" || THEMES[qs])) id = qs;
+        } catch (_) {}
         // Preferences saved before themes were shared hold a bare name
         // ("lcars"); those have always meant this app's own file, so they
         // migrate to the app: namespace rather than silently switching the

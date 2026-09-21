@@ -43,13 +43,16 @@ body.upload-body {
   font-family: var(--ctp-font);
 }
 
+/* No !important: these must stay overridable by a shared theme's
+   .ftl-app-bar when one is linked (Bootstrap's bg-* utility, which these
+   !importants used to outrank, is no longer on the topbar markup). */
 .navbar {
-  background: var(--ctp-surface) !important;
+  background: var(--ctp-surface);
   border-bottom: 1px solid var(--ctp-border);
 }
 
 .navbar-brand {
-  color: var(--ctp-text) !important;
+  color: var(--ctp-text);
 }
 
 .cutepi-logo {

@@ -36,20 +36,21 @@
 /* Media-type icon column: content-fixed. */
 #cuesheet th.col-type,
 #cuesheet td.cue-type {
-  width: 1.6em;
-  min-width: 1.6em;
-  max-width: 1.6em;
+  width: 2rem;
+  min-width: 2rem;
+  max-width: 2rem;
   overflow: hidden;
   white-space: nowrap;
   text-align: center;
 }
 
 /* Cue-number column: content-fixed, centred; wide enough for the
-   "Number" header label. */
+   "Number" header label. rem, not em: a shared theme (e.g. LCARS)
+   swaps the table's font, and em widths would drift with it. */
 #cuesheet th.col-cue-num,
 #cuesheet td.cue-num {
-  width: 4.6em;
-  min-width: 4.6em;
+  width: 4.6rem;
+  min-width: 4.6rem;
   overflow: hidden;
   white-space: nowrap;
   text-align: center;

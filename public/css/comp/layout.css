@@ -47,6 +47,13 @@ body.upload-body {
   gap: 0.5rem;
 }
 
+/* bg-dark's Bootstrap rule is !important and would beat a shared theme's
+   .ftl-app-bar background, so the utility is gone from the topbar markup
+   and the identical colour lives here at zero specificity instead. */
+:where(.app-shell) > :where(nav.navbar) {
+  background-color: #212529;
+}
+
 .navbar #mediainfo {
   flex: 1 1 34rem;
   min-width: 0;
@@ -68,6 +75,16 @@ body.upload-body {
   width: max(9rem, calc(var(--mediapool-width, 320px) - 7rem));
   justify-content: center;
   flex: none;
+}
+
+/* A shared theme that paints the bar with the accent (LCARS) makes the
+   accent-outline GO button invisible. Under ftl:* themes only — the
+   data-theme-id hook never matches this app's own themes — fill the pill
+   and put the theme's on-accent colour on the text. */
+html[data-theme-id^="ftl:"] .ftl-app-bar .btn-go {
+  background: var(--ctp-accent, #2fd6ff);
+  border-color: var(--ftl-on-accent, #000);
+  color: var(--ftl-on-accent, #000);
 }
 /* What GO fires: bordered box so a cue colour can frame it (inline
    border-color when the selected cue/group has one). */
