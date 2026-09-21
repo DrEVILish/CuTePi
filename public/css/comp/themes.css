@@ -6,24 +6,34 @@
  * in header.html before paint and toggled live by settingsModal / ui.js. */
 
 /* === Future SciFi Blue (default) ======================================= *
- * Deep-space navy with cyan/blue neon accents and a soft glow.            */
+ * Deep-space navy with cyan/blue neon accents and a soft glow.
+ *
+ * ftl-themes bridge: each token reads the shared library's equivalent and
+ * falls back to the value it has always had. The app's own theme files
+ * (public/css/themes/*.css) set --ctp-* under html[data-theme=...], which
+ * outranks this :root block, so they keep exact control and render
+ * identically to before. A shared ftl-themes bundle sets only --ftl-*, so
+ * these fallbacks resolve to its palette instead and every rule below —
+ * plus cuesheet.css, layout.css and mediapool.css — re-colours with no
+ * markup change. The "custom" theme still wins over both: it writes
+ * --ctp-* under :root[data-theme=custom].                               */
 :root {
-  --ctp-bg: #020b16;
-  --ctp-surface: #07172a;
-  --ctp-surface-2: #0d2440;
-  --ctp-border: #176095;
-  --ctp-text: #dff4ff;
-  --ctp-muted: #7ca6c3;
-  --ctp-accent: #2fd6ff;
-  --ctp-accent-2: #4d7dff;
-  --ctp-danger: #ff5f87;
-  --ctp-success: #42ddb2;
-  --ctp-radius: 0.2rem;
-  --ctp-font: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --ctp-bg: var(--ftl-bg, #020b16);
+  --ctp-surface: var(--ftl-surface, #07172a);
+  --ctp-surface-2: var(--ftl-surface-2, #0d2440);
+  --ctp-border: var(--ftl-border, #176095);
+  --ctp-text: var(--ftl-text, #dff4ff);
+  --ctp-muted: var(--ftl-muted, #7ca6c3);
+  --ctp-accent: var(--ftl-accent, #2fd6ff);
+  --ctp-accent-2: var(--ftl-accent-2, #4d7dff);
+  --ctp-danger: var(--ftl-danger, #ff5f87);
+  --ctp-success: var(--ftl-success, #42ddb2);
+  --ctp-radius: var(--ftl-radius, 0.2rem);
+  --ctp-font: var(--ftl-font, "IBM Plex Mono", "SFMono-Regular", Consolas, monospace);
   /* Console hairlines recede; neon accents pop. Themes that don't define
      these fall back to --ctp-border / the flare default below. */
-  --ctp-hairline: color-mix(in srgb, var(--ctp-border) 40%, transparent);
-  --ctp-flare: #d85cff;
+  --ctp-hairline: var(--ftl-hairline, color-mix(in srgb, var(--ctp-border) 40%, transparent));
+  --ctp-flare: var(--ftl-flare, #d85cff);
 }
 
 body.app-body,

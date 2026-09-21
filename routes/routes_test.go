@@ -276,9 +276,12 @@ func TestThemeLogoAndMobileUploadMarkup(t *testing.T) {
 	for _, want := range []string{
 		`src="/img/cutepi-logo.svg"`,
 		`id="settingsTheme"`,
-		`value="lcars"`,
-		`value="qlab"`,
-		`value="blue-future"`,
+		// Option values are ids ("app:<name>"), not bare names: a shared
+		// ftl-themes bundle can carry the same data-theme name as an app
+		// theme, so the picker has to distinguish them.
+		`value="app:lcars"`,
+		`value="app:qlab"`,
+		`value="app:blue-future"`,
 		`hx-swap="outerHTML"`,
 	} {
 		if !strings.Contains(body, want) {

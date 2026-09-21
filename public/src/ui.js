@@ -169,15 +169,29 @@ function showToast(message) {
   }
 }
 
-// Theme allowlist: server-rendered boot script in header.html already knows
-// the discovered files; this copy refreshes from /api/themes (same source,
-// routes.Themes) so newly added theme files validate client-side too. The
-// hardcoded set is only the fallback when the endpoint is unreachable.
-const appThemes = new Set(["lcars", "qlab", "blue-future", "custom"]);
+// Theme registry: header.html's boot script already rendered the id ->
+// {name, href} map into the page, so start from that (it is what picked the
+// stylesheet before first paint) and refresh from /api/themes — same source,
+// routes.Themes — so a theme file added while the page is open validates too.
+const DEFAULT_THEME_ID = document.documentElement.dataset.themeId || "app:blue-future";
+const appThemeMap = {};
+try {
+  const boot = document.getElementById("cutepi-theme-css");
+  if (boot && boot.href) {
+    appThemeMap[DEFAULT_THEME_ID] = {
+      name: document.documentElement.dataset.theme,
+      href: boot.getAttribute("href"),
+    };
+  }
+} catch (e) {}
 fetch("/api/themes", { headers: { Accept: "application/json" } })
   .then((resp) => (resp.ok ? resp.json() : []))
   .then((list) => {
-    if (Array.isArray(list)) list.forEach((t) => { if (t && t.name) appThemes.add(t.name); });
+    if (Array.isArray(list)) {
+      list.forEach((t) => {
+        if (t && t.id && t.name && t.href) appThemeMap[t.id] = { name: t.name, href: t.href };
+      });
+    }
   })
   .catch(() => {});
 const CUSTOM_THEME_KEY = "cutepi.customTheme";
@@ -269,16 +283,30 @@ function pollScheduleFlash() {
 pollScheduleFlash();
 setInterval(pollScheduleFlash, 10000);
 
-function applyAppTheme(theme) {
-  if (!appThemes.has(theme)) theme = "blue-future";
+// Themes are identified by id ("app:lcars", "ftl:lcars", "custom") because an
+// app theme and a shared ftl-themes theme can carry the same data-theme name.
+// The id -> {name, href} map is rendered into the page by header.html and
+// refreshed from /api/themes below.
+function applyAppTheme(id) {
+  if (id !== "custom" && id.indexOf(":") === -1) id = "app:" + id; // legacy value
+  if (id !== "custom" && !appThemeMap[id]) id = DEFAULT_THEME_ID;
+  const theme = id === "custom" ? "custom" : appThemeMap[id].name;
+  const link = document.getElementById("cutepi-theme-css");
+  if (link) {
+    // No href at all for "custom": href="" would resolve to this page and the
+    // browser would fetch the HTML document and try to parse it as CSS.
+    if (id === "custom") link.removeAttribute("href");
+    else link.href = appThemeMap[id].href;
+  }
   document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.themeId = id;
   if (theme === "custom") {
     let tokens = null;
     try { tokens = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY)); } catch (e) {}
     applyCustomTheme(tokens);
   }
   try {
-    localStorage.setItem("cutepi.theme", theme);
+    localStorage.setItem("cutepi.theme", id);
   } catch (e) {}
 }
 

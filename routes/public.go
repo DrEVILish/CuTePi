@@ -40,6 +40,11 @@ func CachePolicy() gin.HandlerFunc {
 
 func Public(r *gin.Engine) {
 	r.StaticFS("/css", http.Dir("./public/css"))
+	// ftl-themes bundles and their fonts, served as siblings: a bundle at
+	// /ftl/themes/x.css resolves its ../assets/fonts/... to /ftl/assets/fonts/,
+	// which is the arrangement that library's CONTRACT.md requires.
+	r.StaticFS("/ftl/themes", http.Dir("./third_party/ftl-themes/dist"))
+	r.StaticFS("/ftl/assets", http.Dir("./third_party/ftl-themes/assets"))
 	r.StaticFS("/fonts", http.Dir("./public/fonts"))
 	r.StaticFS("/img", http.Dir("./public/img"))
 	r.StaticFS("/src", http.Dir("./public/src"))
