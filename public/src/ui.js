@@ -304,6 +304,8 @@ function applyAppTheme(id) {
     }
   }
   document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.bsTheme =
+    (id !== "custom" && appThemeMap[id] && appThemeMap[id].scheme) || "dark";
   document.documentElement.dataset.themeId = id;
   if (theme === "custom") {
     let tokens = null;

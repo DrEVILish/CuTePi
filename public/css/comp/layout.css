@@ -86,6 +86,12 @@ html[data-theme-id^="ftl:"] .ftl-app-bar .btn-go {
   border-color: var(--ftl-on-accent, #000);
   color: var(--ftl-on-accent, #000);
 }
+
+/* The bar is theme-painted; its furniture must read in the theme's bar
+   foreground, not the app's page-muted token (windows95: grey-on-navy). */
+html[data-theme-id^="ftl:"] .ftl-app-bar :is(.topbar-clock, .ws-status, .text-muted) {
+  color: inherit;
+}
 /* What GO fires: bordered box so a cue colour can frame it (inline
    border-color when the selected cue/group has one). */
 .go-now {

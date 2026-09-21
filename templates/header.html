@@ -1,6 +1,6 @@
 {{ define "header.html" }}
 <!DOCTYPE html>
-<html>
+<html data-bs-theme="dark">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -45,6 +45,11 @@
         if (id !== "custom" && id.indexOf(":") === -1) id = "app:" + id;
         if (id !== "custom" && !THEMES[id]) id = DEFAULT_ID;
         var theme = id === "custom" ? "custom" : THEMES[id].name;
+        // Bootstrap's dark/light variables must follow the theme: a light
+        // shared theme (aqua, windows95) renders light surfaces, and dark-mode
+        // text would sit invisible on them (empty selects, unreadable help).
+        document.documentElement.dataset.bsTheme =
+          (id !== "custom" && THEMES[id] && THEMES[id].scheme) || "dark";
         var link = document.getElementById("cutepi-theme-css");
         if (id !== "custom" && link) link.href = THEMES[id].href + stamp;
         document.documentElement.dataset.theme = theme;
