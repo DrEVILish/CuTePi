@@ -279,8 +279,6 @@ func TestThemeLogoAndMobileUploadMarkup(t *testing.T) {
 		// Option values are ids ("app:<name>"), not bare names: a shared
 		// ftl-themes bundle can carry the same data-theme name as an app
 		// theme, so the picker has to distinguish them.
-		`value="app:lcars"`,
-		`value="app:qlab"`,
 		`value="app:blue-future"`,
 		`hx-swap="outerHTML"`,
 	} {

@@ -15,8 +15,6 @@ func TestThemeDiscoveryAndEndpoint(t *testing.T) {
 	}
 	for name, label := range map[string]string{
 		"blue-future": "Future SciFi (Default)",
-		"lcars":       "LCARS",
-		"qlab":        "QLab",
 	} {
 		th, ok := byID["app:"+name]
 		if !ok {
@@ -36,10 +34,8 @@ func TestThemeDiscoveryAndEndpoint(t *testing.T) {
 		// Exactly one stylesheet is linked, and the id -> href map the
 		// pre-paint script picks from carries every discovered theme.
 		`id="cutepi-theme-css"`,
-		`/css/themes/lcars.css`,
-		`/css/themes/qlab.css`,
 		`/css/themes/blue-future.css`,
-		`<option value="app:lcars">LCARS</option>`,
+		`<option value="app:blue-future">Future SciFi (Default)</option>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("index missing %q", want)
@@ -67,8 +63,8 @@ func TestThemeDiscoveryAndEndpoint(t *testing.T) {
 			t.Fatalf("theme %+v is missing an id/name/href", th)
 		}
 	}
-	if apps != 3 {
-		t.Fatalf("/api/themes returned %d app themes, want 3", apps)
+	if apps != 1 {
+		t.Fatalf("/api/themes returned %d app themes, want 1 (blue-future)", apps)
 	}
 }
 
@@ -95,11 +91,16 @@ func TestSharedThemesAreOfferedAlongsideAppThemes(t *testing.T) {
 			t.Fatalf("shared theme %+v should be labelled as shared", th)
 		}
 	}
-	// The colliding names are exactly why ids exist: both must be offered.
-	for _, id := range []string{"ftl:lcars", "ftl:blue-future"} {
-		if _, ok := byID[id]; !ok {
-			t.Fatalf("expected %q to be offered alongside the app theme of the same name", id)
+	// Only blue-future stays app-owned (the app's default); the rest of the
+	// family now comes from the shared bundles.
+	appCount := 0
+	for _, th := range Themes() {
+		if th.Source == "app" {
+			appCount++
 		}
+	}
+	if appCount != 1 {
+		t.Fatalf("got %d app themes, want exactly blue-future", appCount)
 	}
 	if DefaultThemeID != "app:blue-future" {
 		t.Fatalf("DefaultThemeID = %q, want app:blue-future so the look is unchanged", DefaultThemeID)

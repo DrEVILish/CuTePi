@@ -27,7 +27,7 @@
             <!-- Discovered at render time: any name.css added to
               public/css/themes appears here with no code changes, as does any
               bundle from the pinned ftl-themes submodule. Values are ids
-              ("app:lcars" / "ftl:lcars") because the two sources can carry
+              ("app:blue-future" / "ftl:blue-future") because the two sources can carry
               the same data-theme name. -->
             {{ range themeFiles }}<option value="{{ .ID }}">{{ .Label }}</option>
             {{ end }}<option value="custom">Custom (paste below)</option>
@@ -125,7 +125,8 @@
           ? s.panicHold : "off (cut to black)";
         document.getElementById("settingsAutoNumber").checked = !!s.autoNumber;
         document.getElementById("settingsGoAdvance").checked = !!s.goAdvance;
-        document.getElementById("settingsTheme").value = document.documentElement.dataset.theme || "blue-future";
+        document.getElementById("settingsTheme").value =
+          document.documentElement.dataset.themeId || "app:blue-future";
         document.getElementById("settingsCustomTheme").value = localStorage.getItem("cutepi.customTheme") || "{}";
         document.getElementById("settingsStatus").textContent = "";
         document.getElementById("settingsStatus").className = "";

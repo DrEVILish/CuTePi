@@ -20,7 +20,7 @@
       the script below. Previously every theme file was linked at once and
       html[data-theme] picked the winner; that cannot work now that an app
       theme and a shared ftl-themes theme can have the same data-theme name
-      (both have "lcars"), and loading one file at a time is what the
+      (both have "blue-future"), and loading one file at a time is what the
       ftl-themes contract requires in any case. Dropping a name.css into
       public/css/themes still auto-discovers it (routes.Themes). -->
     <link id="cutepi-theme-css" rel="stylesheet">
@@ -39,7 +39,8 @@
           if (qs && (qs === "custom" || THEMES[qs])) id = qs;
         } catch (_) {}
         // Preferences saved before themes were shared hold a bare name
-        // ("lcars"); those have always meant this app's own file, so they
+        // ("lcars"); those have always meant an app-owned file with that name,
+        // so they
         // migrate to the app: namespace rather than silently switching the
         // user to the shared theme of the same name.
         if (id !== "custom" && id.indexOf(":") === -1) id = "app:" + id;
