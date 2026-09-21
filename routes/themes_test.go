@@ -9,35 +9,45 @@ import (
 // A dropped-in name.css must surface everywhere with no code changes:
 // discovery, the settings select (index body) and the JSON endpoint.
 func TestThemeDiscoveryAndEndpoint(t *testing.T) {
-	byName := map[string]Theme{}
+	byID := map[string]Theme{}
 	for _, th := range Themes() {
-		byName[th.Name] = th
+		byID[th.ID] = th
 	}
 	for name, label := range map[string]string{
 		"blue-future": "Future SciFi (Default)",
 		"lcars":       "LCARS",
 		"qlab":        "QLab",
 	} {
-		th, ok := byName[name]
+		th, ok := byID["app:"+name]
 		if !ok {
-			t.Fatalf("theme %q not discovered, got %+v", name, byName)
+			t.Fatalf("app theme %q not discovered, got %+v", name, byID)
 		}
 		if th.Label != label || th.File != name+".css" {
-			t.Fatalf("theme %q = %+v, want label %q", name, th, label)
+			t.Fatalf("app theme %q = %+v, want label %q", name, th, label)
+		}
+		if th.Href != "/css/themes/"+name+".css" || th.Source != "app" {
+			t.Fatalf("app theme %q = %+v, want app href", name, th)
 		}
 	}
 
 	r := setupTestServer(t)
 	body := get(t, r, "/").Body.String()
 	for _, want := range []string{
+		// Exactly one stylesheet is linked, and the id -> href map the
+		// pre-paint script picks from carries every discovered theme.
+		`id="cutepi-theme-css"`,
 		`/css/themes/lcars.css`,
 		`/css/themes/qlab.css`,
 		`/css/themes/blue-future.css`,
-		`<option value="lcars">LCARS</option>`,
+		`<option value="app:lcars">LCARS</option>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("index missing %q", want)
 		}
+	}
+	// href="" would resolve to the page itself and be fetched as CSS.
+	if strings.Contains(body, `id="cutepi-theme-css" rel="stylesheet" href=""`) {
+		t.Fatal(`the theme <link> must ship with no href, not href=""`)
 	}
 
 	resp := get(t, r, "/api/themes")
@@ -48,7 +58,50 @@ func TestThemeDiscoveryAndEndpoint(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &list); err != nil {
 		t.Fatalf("decoding /api/themes: %v", err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("/api/themes returned %d themes, want 3", len(list))
+	apps := 0
+	for _, th := range list {
+		if th.Source == "app" {
+			apps++
+		}
+		if th.ID == "" || th.Name == "" || th.Href == "" {
+			t.Fatalf("theme %+v is missing an id/name/href", th)
+		}
+	}
+	if apps != 3 {
+		t.Fatalf("/api/themes returned %d app themes, want 3", apps)
+	}
+}
+
+// The shared bundles are an addition, not a replacement: this app's own
+// themes keep their names, and the default stays this app's own file so its
+// appearance does not change just because themes became shared.
+func TestSharedThemesAreOfferedAlongsideAppThemes(t *testing.T) {
+	var shared []Theme
+	for _, th := range Themes() {
+		if th.Source == "ftl" {
+			shared = append(shared, th)
+		}
+	}
+	if len(shared) == 0 {
+		t.Skip("ftl-themes submodule not checked out")
+	}
+	byID := map[string]Theme{}
+	for _, th := range shared {
+		byID[th.ID] = th
+		if !strings.HasPrefix(th.Href, "/ftl/themes/") {
+			t.Fatalf("shared theme %+v should be served from /ftl/themes/", th)
+		}
+		if !strings.HasSuffix(th.Label, "(shared)") {
+			t.Fatalf("shared theme %+v should be labelled as shared", th)
+		}
+	}
+	// The colliding names are exactly why ids exist: both must be offered.
+	for _, id := range []string{"ftl:lcars", "ftl:blue-future"} {
+		if _, ok := byID[id]; !ok {
+			t.Fatalf("expected %q to be offered alongside the app theme of the same name", id)
+		}
+	}
+	if DefaultThemeID != "app:blue-future" {
+		t.Fatalf("DefaultThemeID = %q, want app:blue-future so the look is unchanged", DefaultThemeID)
 	}
 }

@@ -25,11 +25,14 @@
           <label class="form-label mt-3" for="settingsTheme">Theme</label>
           <select class="form-select" id="settingsTheme" aria-describedby="settingsThemeHelp">
             <!-- Discovered at render time: any name.css added to
-              public/css/themes appears here with no code changes. -->
-            {{ range themeFiles }}<option value="{{ .Name }}">{{ .Label }}</option>
+              public/css/themes appears here with no code changes, as does any
+              bundle from the pinned ftl-themes submodule. Values are ids
+              ("app:lcars" / "ftl:lcars") because the two sources can carry
+              the same data-theme name. -->
+            {{ range themeFiles }}<option value="{{ .ID }}">{{ .Label }}</option>
             {{ end }}<option value="custom">Custom (paste below)</option>
           </select>
-          <div id="settingsThemeHelp" class="form-text text-muted">Theme is saved in this browser.</div>
+          <div id="settingsThemeHelp" class="form-text text-muted">Theme is saved in this browser. Themes marked &ldquo;shared&rdquo; come from the ftl-themes library and change layout as well as colour.</div>
 
           <label class="form-label mt-3" for="settingsCustomTheme">Custom theme tokens</label>
           <textarea class="form-control font-monospace" id="settingsCustomTheme" rows="6"

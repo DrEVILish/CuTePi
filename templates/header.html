@@ -16,17 +16,33 @@
     <link rel="stylesheet" href="/css/comp/mediapool.css?v={{ assetStamp }}">
     <link rel="stylesheet" href="/css/comp/layout.css?v={{ assetStamp }}">
     <link rel="stylesheet" href="/css/comp/themes.css?v={{ assetStamp }}">
-    <!-- One portable file per theme: dropping name.css into public/css/themes
-      auto-links it here and offers it in Settings (routes.Themes). -->
-    {{ range themeFiles }}<link rel="stylesheet" href="/css/themes/{{ .File }}?v={{ assetStamp }}">
-    {{ end }}<link rel="stylesheet" href="/css/bootstrap-icons@1.11.3.css?v={{ assetStamp }}">
+    <!-- Exactly ONE theme stylesheet is linked, chosen before first paint by
+      the script below. Previously every theme file was linked at once and
+      html[data-theme] picked the winner; that cannot work now that an app
+      theme and a shared ftl-themes theme can have the same data-theme name
+      (both have "lcars"), and loading one file at a time is what the
+      ftl-themes contract requires in any case. Dropping a name.css into
+      public/css/themes still auto-discovers it (routes.Themes). -->
+    <link id="cutepi-theme-css" rel="stylesheet">
+    <link rel="stylesheet" href="/css/bootstrap-icons@1.11.3.css?v={{ assetStamp }}">
     <script>
       (function () {
-        var available = [{{ range $i, $t := themeFiles }}{{ if $i }}, {{ end }}"{{ $t.Name }}"{{ end }}, "custom"];
-        var theme = "blue-future";
-        try { theme = localStorage.getItem("cutepi.theme") || theme; } catch (_) {}
-        if (available.indexOf(theme) === -1) theme = "blue-future";
+        var THEMES = {{ themeMap }};
+        var DEFAULT_ID = "{{ defaultThemeID }}";
+        var stamp = "?v={{ assetStamp }}";
+        var id = DEFAULT_ID;
+        try { id = localStorage.getItem("cutepi.theme") || DEFAULT_ID; } catch (_) {}
+        // Preferences saved before themes were shared hold a bare name
+        // ("lcars"); those have always meant this app's own file, so they
+        // migrate to the app: namespace rather than silently switching the
+        // user to the shared theme of the same name.
+        if (id !== "custom" && id.indexOf(":") === -1) id = "app:" + id;
+        if (id !== "custom" && !THEMES[id]) id = DEFAULT_ID;
+        var theme = id === "custom" ? "custom" : THEMES[id].name;
+        var link = document.getElementById("cutepi-theme-css");
+        if (id !== "custom" && link) link.href = THEMES[id].href + stamp;
         document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.themeId = id;
         if (theme === "custom") {
           try {
             var tokens = JSON.parse(localStorage.getItem("cutepi.customTheme"));
