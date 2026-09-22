@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -125,8 +124,9 @@ func ftlThemes() []Theme {
 		return nil
 	}
 	var manifest []struct {
-		Slug  string `json:"slug"`
-		Label string `json:"label"`
+		Slug   string `json:"slug"`
+		Label  string `json:"label"`
+		Scheme string `json:"scheme"`
 	}
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil
@@ -136,97 +136,23 @@ func ftlThemes() []Theme {
 		if m.Slug == "" {
 			continue
 		}
+		// Scheme comes stamped from the manifest (build_manifest.py derives
+		// it from the theme's surface/background tokens). Older manifests
+		// without the field read as dark — the historical default.
+		scheme := m.Scheme
+		if scheme == "" {
+			scheme = "dark"
+		}
 		out = append(out, Theme{
 			ID:     "ftl:" + m.Slug,
 			Name:   m.Slug,
 			Label:  m.Label + " (shared)",
 			Href:   "/ftl/themes/" + m.Slug + ".css",
 			Source: "ftl",
-			Scheme: themeScheme(m.Slug),
+			Scheme: scheme,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
-}
-
-// themeScheme decides whether a shared theme's panels read as light or dark,
-// so the app can flip Bootstrap's data-bs-theme to match (Bootstrap's
-// dark-mode text stays invisible on a light theme otherwise — empty selects,
-// unreadable form help). The manifest carries no scheme field yet, so it is
-// derived: the app's panels sit on --ftl-surface; if that is translucent or
-// missing it is composited over the theme's shell/page background
-// (--ftl-app-bg / --ftl-app-main-bg / --ftl-bg, first that exists) and the
-// result's luminance decides. Themes the parser can't read stay "dark" (the
-// historical default).
-var (
-	themeVarRe   = regexp.MustCompile(`--ftl-[a-z0-9-]+:\s*([^;]+)`)
-	themeHexRe   = regexp.MustCompile(`^#([0-9a-fA-F]{6})$`)
-	themeRGBARe  = regexp.MustCompile(`^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)`)
-)
-
-func themeScheme(slug string) string {
-	raw, err := os.ReadFile(filepath.Join(ftlDistDir(), slug+".css"))
-	if err != nil {
-		return "dark"
-	}
-	get := func(name string) string {
-		val := ""
-		for _, m := range themeVarRe.FindAllStringSubmatch(string(raw), -1) {
-			if strings.HasPrefix(strings.TrimSpace(m[0]), name+":") {
-				val = strings.TrimSpace(m[1]) // last declaration wins, as in CSS
-			}
-		}
-		return val
-	}
-	surface := parseCSSColor(get("--ftl-surface"))
-	if surface == nil {
-		return "dark"
-	}
-	if surface[3] < 1 {
-		// translucent surface: composite it over the first solid background
-		// the theme paints (shell, main, then page).
-		for _, name := range []string{"--ftl-app-bg", "--ftl-app-main-bg", "--ftl-bg"} {
-			if base := parseCSSColor(get(name)); base != nil {
-				surface = mix(surface, base)
-				break
-			}
-		}
-	}
-	r, g, b := float64(surface[0])/255, float64(surface[1])/255, float64(surface[2])/255
-	lum := 0.2126*r + 0.7152*g + 0.0722*b
-	if lum > 0.55 {
-		return "light"
-	}
-	return "dark"
-}
-
-// parseCSSColor reads the subset of CSS colour syntaxes the theme files use
-// (6-digit hex and rgb/rgba). Nil means "not parsed, use the dark default".
-func parseCSSColor(v string) []float64 {
-	if m := themeHexRe.FindStringSubmatch(v); m != nil {
-		n, _ := strconv.ParseUint(m[1], 16, 32)
-		return []float64{float64((n >> 16) & 255), float64((n >> 8) & 255), float64(n & 255), 1}
-	}
-	if m := themeRGBARe.FindStringSubmatch(v); m != nil {
-		r, _ := strconv.ParseFloat(m[1], 64)
-		g, _ := strconv.ParseFloat(m[2], 64)
-		b, _ := strconv.ParseFloat(m[3], 64)
-		a := 1.0
-		if strings.HasPrefix(strings.TrimSpace(v), "rgba(") {
-			a, _ = strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(v[strings.LastIndex(v, ",")+1:]), ")"), 64)
-		}
-		return []float64{r, g, b, a}
-	}
-	return nil
-}
-
-func mix(top, base []float64) []float64 {
-	a := top[3]
-	out := make([]float64, 4)
-	for i := 0; i < 3; i++ {
-		out[i] = top[i]*a + base[i]*(1-a)
-	}
-	out[3] = 1
 	return out
 }
 
