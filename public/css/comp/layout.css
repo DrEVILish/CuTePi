@@ -737,6 +737,14 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
      shared theme's .ftl-app-status padding) */
   padding: 0.25rem 0.5rem;
 }
+
+/* Settings modal: the .ftl-field wrappers in the markup give a shared theme
+   control of field spacing; under this app's own themes (no ftl stylesheet
+   linked) they carry the same 1rem rhythm the old .mt-3 label margins did. */
+:where(.modal-body) :where(.ftl-field) {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
 /* The panel buttons were floating overlays; in the footer they are plain
    static buttons. Visibility still follows the body collapse classes. */
 #app-footer #mediapool-collapse-btn,
