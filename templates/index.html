@@ -8,7 +8,9 @@
       stylesheet is linked), so only shared ftl:* themes re-arrange. -->
     <div class="app-shell ftl-app">
       {{ template "topbar.html" }}
-      <aside class="ftl-app-rail" aria-hidden="true"></aside>
+      <!-- The rail must carry a whitespace text node: a bare empty aside
+        matches :empty, which some shared themes use to hide the rail. -->
+      <aside class="ftl-app-rail" aria-hidden="true"> </aside>
 
     <div class="container-fluid app-content ftl-app-main">
       <div class="app-main-row">
