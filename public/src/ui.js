@@ -1594,11 +1594,11 @@ document.addEventListener("input", (e) => {
   }
 });
 
-// Double-click on the playback-rate slider resets it to 1× (the old
-// dedicated button was redundant).
+// Double-click on the playback-rate or balance/pan slider resets it (1× /
+// 0 — the old dedicated buttons were redundant).
 document.addEventListener("dblclick", (e) => {
-  if (e.target.id !== "insp-rate") return;
-  e.target.value = 1;
+  if (e.target.id !== "insp-rate" && e.target.id !== "insp-balance") return;
+  e.target.value = e.target.id === "insp-rate" ? 1 : 0;
   e.target.dispatchEvent(new Event("input", {bubbles: true}));
   e.target.dispatchEvent(new Event("change", {bubbles: true}));
 });

@@ -87,8 +87,9 @@
                </div>
              </div>
             </div>
-           <div class="insp-time-right">
-            <div class="trim-timeline" id="trim-timeline"
+            <div class="insp-time-right">
+             <span class="small text-muted">For Cue Fades see the Video or Audio tab.</span>
+             <div class="trim-timeline" id="trim-timeline"
               data-filename="{{ .Cue.Filename }}"
               data-pos-start="{{ .Cue.PosStart }}"
               data-pos-end="{{ .Cue.PosEnd }}"
@@ -223,7 +224,9 @@
             <label class="insp-field-label" for="insp-balance">Balance / Pan <output id="insp-balance-value">{{ .Cue.Balance }}</output></label>
             <div class="d-flex align-items-center gap-2">
               <span class="small">L</span>
-              <input id="insp-balance" name="balance" type="range" min="-1" max="1" step="0.05" value="{{ .Cue.Balance }}" title="Left (−1) / Centre (0) / Right (+1)">
+              <input id="insp-balance" name="balance" type="range" min="-1" max="1" step="0.05" value="{{ .Cue.Balance }}"
+                class="ctp-slider ctp-slider-pan"
+                title="Left (−1) / Centre (0) / Right (+1); 0 is centred. Double-click to reset to centre">
               <span class="small">R</span>
             </div>
             <label class="form-check-label small" for="insp-mute">

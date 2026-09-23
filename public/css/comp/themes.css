@@ -271,6 +271,33 @@ html[data-theme] .btn.btn-youtube:hover {
   box-shadow: 0 0 0.35rem color-mix(in srgb, var(--ctp-accent) 70%, transparent);
 }
 
+/* Centre-origin pan: a hairline track with tick at 0 and the bare dot floating
+   on it — no directional fill, because 0 is the middle (−1 … +1), not an edge.
+   The tick paints on the input's own background; the track pseudos are the
+   hairline. Double-click resets to 0 (see ui.js, same pattern as the rate). */
+.ctp-slider-pan {
+  height: 1rem;
+  width: 8rem;
+  background: linear-gradient(var(--ctp-border), var(--ctp-border)) center/2px 0.6rem no-repeat;
+  border: none;
+}
+.ctp-slider-pan::-webkit-slider-runnable-track {
+  height: 2px;
+  background: color-mix(in srgb, var(--ctp-surface-2) 70%, var(--ctp-border));
+  border: none;
+}
+.ctp-slider-pan::-webkit-slider-thumb {
+  margin-top: calc((2px - 1rem) / 2);
+}
+.ctp-slider-pan::-moz-range-track {
+  height: 2px;
+  border: none;
+  background: color-mix(in srgb, var(--ctp-surface-2) 70%, var(--ctp-border));
+}
+.ctp-slider-pan::-moz-range-progress {
+  background: transparent;
+}
+
 .ctp-scrubber {
   width: 14rem;
   max-width: 30vw;
