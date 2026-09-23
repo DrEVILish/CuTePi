@@ -284,16 +284,12 @@ func Api(rg *gin.RouterGroup) {
 	})
 	rg.POST("/panic", func(c *gin.Context) {
 		logs.Printf(logs.RTEPanic, "!!PANIC!!")
-		// Holding image (§12.9): PANIC cuts to a configured full-frame image
-		// instead of dead black. Any failure falls back to a plain panic.
-		if hold := ctp.GetPanicHoldImage(); hold != "" {
-			if err := gsp.LoadWithOpts(hold, gsp.LoadOpts{Hold: true}); err == nil {
-				c.Status(http.StatusOK)
-				return
-			}
-			logs.Printf(logs.RTEPanic, "panic hold image %q unavailable - cutting to black", hold)
+		if err := remotePanic(); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"error": err.Error(),
+			})
+			return
 		}
-		gsp.Panic()
 		c.Status(http.StatusOK)
 	})
 	rg.POST("/clear", func(c *gin.Context) {
@@ -845,43 +841,13 @@ func Api(rg *gin.RouterGroup) {
 	})
 
 	// Play a specific cue by position
+	// "Fade & Stop Others Over Time" and the load itself live in FireCue
+	// (routes/remote.go) so the Web UI, HyperDeck and OSC transports share
+	// one code path.
 	rg.POST("/cue/:cuePos/play", func(c *gin.Context) {
 		cuePos := c.Param("cuePos")
 		logs.Printf(logs.RTECuePlay, "Play Cue%s", cuePos)
-		cue, err := ctp.GetCue(cuePos)
-		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
-			return
-		}
-		// "Fade & Stop Others Over Time": when the incoming cue carries a
-		// fadeOut duration and another clip is currently up, fade that
-		// outgoing clip (audio + fade-to-black) over the duration, then stop
-		// it, then start this cue. A single active pipeline means the fade
-		// must complete before the new clip can display, so the new cue is
-		// queued until the fade finishes.
-		// ponytail: peer/list/all scope is stored per cue but single-pipeline
-		// playback makes the current file the only meaningful "other"; the
-		// scope column is accepted for a future multi-layer output.
-		if wasPlaying := gsp.CurrentPlaying() != ""; wasPlaying && cue.FadeOut > 0 {
-			goSafe(func() {
-				gsp.FadeAndStop(cue.FadeOut)
-				// Identity guard (same shape as the slideshow runner): if the
-				// operator started something else while the fade ran, the
-				// queued load must not clobber their newer choice. FadeAndStop
-				// leaves cuePos 0, so the non-zero case is a fresh play.
-				if cur := gsp.CurrentCuePos(); cur != 0 && cur != cue.CuePos {
-					return
-				}
-				if err := loadAndPlayCue(cue); err != nil {
-					logs.Printf(logs.RTECuePlay, "queued play failed pos=%d error=%v", cue.CuePos, err)
-				}
-			})
-			c.Status(http.StatusOK)
-			return
-		}
-		if err := loadAndPlayCue(cue); err != nil {
+		if err := FireCue(cuePos); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
 				"error": err.Error(),
 			})
@@ -892,41 +858,15 @@ func Api(rg *gin.RouterGroup) {
 
 	// Play the currently selected cue (what spacebar acts on). If nothing is
 	// selected, fall back to resuming whatever is loaded - also the previous
-	// spacebar behaviour.
+	// spacebar behaviour. The fire-and-advance core (FireSelected,
+	// routes/remote.go) is shared with the HyperDeck and OSC remote
+	// transports; only the render is HTTP-specific.
 	rg.POST("/cue/selected/play", func(c *gin.Context) {
-		// GO fires the selected unit. A selected GROUP triggers its playlist
-		// action (§6.4) — the old fallback played bare transport state and
-		// silently ignored folder selections.
-		if gid, gerr := ctp.SelectedGroupPos(); gerr == nil && gid > 0 {
-			if g, err := ctp.GetGroup(gid); err == nil {
-				playGroup(g)
-				if ctp.GetGoAdvance() {
-					_ = ctp.SelectStep(1)
-				}
-				renderCuesheet(c)
-				return
-			}
-		}
-		pos, err := ctp.SelectedCuePos()
-		if err != nil || pos == 0 {
-			gsp.Play()
-			c.Status(http.StatusOK)
-			return
-		}
-		cue, err := ctp.GetCue(strconv.Itoa(pos))
-		if err != nil {
-			gsp.Play()
-			c.Status(http.StatusOK)
-			return
-		}
-		if err := loadAndPlayCue(cue); err != nil {
+		if err := FireSelected(); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
 				"error": err.Error(),
 			})
 			return
-		}
-		if ctp.GetGoAdvance() {
-			_ = ctp.SelectStep(1)
 		}
 		// The body is the cuesheet partial: the GO button swaps it (live
 		// selection advance), while Space's hx-swap="none" trigger ignores

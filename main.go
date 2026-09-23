@@ -54,6 +54,8 @@ func main() {
 
 	go worker.RunThumbnailWorker(2 * time.Second)
 	go routes.RunScheduler()
+	// Remote control: HyperDeck (TCP 9993) + QLab OSC (UDP 53000).
+	go routes.StartRemote()
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)

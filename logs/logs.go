@@ -233,6 +233,8 @@ const (
 	RTERemove     = "RTE-E224" // DELETE /api/cue/:cuePos
 	RTERestart    = "RTE-E225" // POST /api/restart
 	RTEShutdown   = "RTE-E226" // POST /api/shutdown
+	RTEDeck       = "RTE-E227" // remote control action (HyperDeck/QLab)
+	RTEDeckErr    = "RTE-E228" // remote control error
 )
 
 // NET - network startup info (network.go).

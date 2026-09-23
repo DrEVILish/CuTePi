@@ -429,6 +429,31 @@ func CurrentDuration() float64 {
 	return float64(dur) / float64(gst.ClockTime(1_000_000_000))
 }
 
+// Rate reports the active clip's playback rate (1 when nothing is loaded or
+// the clip hasn't counted a rate yet). Remote transports report speed as a
+// percentage of this.
+func Rate() float64 {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	if mgr.pipeline == nil || mgr.rate == 0 {
+		return 1
+	}
+	return mgr.rate
+}
+
+// IsPaused reports whether the active pipeline is PAUSED. False when nothing
+// is loaded (so callers don't special-case "stopped" separately).
+func IsPaused() bool {
+	mgr.mu.Lock()
+	p := mgr.pipeline
+	mgr.mu.Unlock()
+	if p == nil {
+		return false
+	}
+	_, state := p.GetState(gst.StateNull, 0)
+	return state == gst.StatePaused
+}
+
 // Loop reports whether the active pipeline loops at end-of-stream. With no
 // pipeline loaded it reports the configured default so the settings/handlers
 // reflect what the next load will do.
