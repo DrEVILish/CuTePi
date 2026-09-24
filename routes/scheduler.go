@@ -77,22 +77,24 @@ func RunScheduler() {
 				switch {
 				case d <= 0:
 					fireScheduled()
-				case d > 0 && prerollable(cue.Mimetype):
-					// Audio-only preroll: build+preroll is silent and paints
-					// nothing, so it can warm now and land on the exact
-					// second. Video keeps build-at-fire (a prerolled video
-					// pipeline would flash its first frame on the wall).
-					if warmErr := gsp.Warm(cue.Filename, cueOpts(cue.AsCue(), false)); warmErr == nil {
-						time.AfterFunc(d, safe(func() {
-							if !gsp.InstallWarm(cue.Filename, cueOpts(cue.AsCue(), false)) {
-								fireScheduled()
-							}
-						}))
-						break
-					}
-					time.AfterFunc(d, safe(fireScheduled))
 				default:
-					time.AfterFunc(d, safe(fireScheduled))
+					// Prewarm inside the look-ahead window (any media type:
+					// video warms on fakesink, silent and unpainted) and fire
+					// on the exact second via the warm slot. A warm preroll
+					// runs on a protected goroutine (must not stall the tick)
+					// and might not finish before S — then InstallWarm misses
+					// and the fire falls back to the plain build path.
+					opts := cueOpts(cue.AsCue(), false)
+					goSafe(func() {
+						if warmErr := gsp.Warm(cue.Filename, opts); warmErr != nil {
+							log.Printf("CuTePi: scheduled cue %d prewarm: %v", cue.CuePos, warmErr)
+						}
+					})
+					time.AfterFunc(d, safe(func() {
+						if !gsp.InstallWarm(cue.Filename, opts) {
+							fireScheduled()
+						}
+					}))
 				}
 			}
 		}

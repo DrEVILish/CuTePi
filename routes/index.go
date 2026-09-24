@@ -415,27 +415,18 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 	}
 }
 
-// One preroll policy check instead of two: audio-only files prime silently
-// with nothing painted; everything else forbids background preroll (§ realtime rule).
-func prerollable(mimetype string) bool {
-	return strings.HasPrefix(mimetype, "audio/")
-}
-
-// armNextCue prerolls the next cue into gsp's warm slot when the cue is
-// prerollable: audio preroll is silent and paints nothing (video/image
-// would show its first frame over the live wall — forbidden by the
-// realtime rule). Arming waits ~1.2s so the just-fired cue's own decode
-// settles and never competes for the CPU mid-fade; a stale arm (generation
-// moved) is dropped by gsp.Warm itself.
+// armNextCue prerolls the next cue into gsp's warm slot (deck-style double
+// buffer). Video/image cues preroll on fakesink — silent and unpainted, so
+// they no longer need an audio-only gate. Audio prerolls on the real audio
+// sink, silent until it plays. Arming waits ~1.2s so the just-fired cue's
+// own decode settles and never competes for CPU mid-fade; a stale arm
+// (generation moved) is dropped by gsp.Warm itself.
 func armNextCue(gen uint64, pos int) {
 	if pos <= 0 {
 		return
 	}
 	next, err := ctp.GetCue(strconv.Itoa(pos))
 	if err != nil {
-		return
-	}
-	if !prerollable(next.Mimetype) {
 		return
 	}
 	goSafe(func() {
@@ -475,6 +466,7 @@ func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 		Rotation:       cue.Rotation,
 		Flip:           cue.Flip,
 		KeepBackground: keepBackground,
+		WarmPreroll:    true,
 	}
 }
 

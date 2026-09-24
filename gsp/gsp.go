@@ -236,6 +236,11 @@ type LoadOpts struct {
 	Rotation       int    // 0|90|180|270 clockwise degrees
 	Flip           string // none|h|v mirror ("" = none)
 	KeepBackground bool   // keep the background playlist alive across this load (slideshow slides are images ON the soundtrack, not new decisions)
+	// WarmPreroll marks the load as prewarmable: a Warm() slot for it may
+	// preroll with the video branch on fakesink (nothing displayed, decoders
+	// primed) and swap the real wall sink in at activation. Set by the opts
+	// builder so Warm-arms and their later fire compare equal by construction.
+	WarmPreroll bool
 }
 
 func Play() {
@@ -386,10 +391,13 @@ func Load(filename string) error {
 // LoadWithOpts loads filename with an optional trim window and hold policy.
 // A warm slot matching file+opts (see Warm) activates instead of a fresh
 // build+preroll — the ~0-latency cue path; anything else falls back to the
-// normal build (and drops the stale slot).
+// normal build (and drops the stale slot). Both paths time their build+swap
+// so the log shows what a cue actually cost (GSP-E161), warm or cold.
 func LoadWithOpts(filename string, opts LoadOpts) error {
 	gstInit()
+	t0 := time.Now()
 	if InstallWarm(filename, opts) {
+		logs.Printf(logs.GSPFireTiming, "cue load %q: warm swap %.1fms", filename, time.Since(t0).Seconds()*1000)
 		return nil
 	}
 	mgr.mu.Lock()
@@ -399,8 +407,12 @@ func LoadWithOpts(filename string, opts LoadOpts) error {
 	if err != nil {
 		return err
 	}
+	buildMS := time.Since(t0).Seconds() * 1000
 	mgr.swap(newPipeline, filename, opts)
+	start := time.Now()
 	watchAndPlay(newPipeline)
+	logs.Printf(logs.GSPFireTiming, "cue load %q: build %.1fms + preroll %.1fms",
+		filename, buildMS, time.Since(start).Seconds()*1000)
 	return nil
 }
 
@@ -415,11 +427,11 @@ func (m *manager) dropWarm() {
 }
 
 // Warm prebuilds and prerolls the NEXT cue into a slot (deck-style double
-// buffer for audio cues), so a later LoadWithOpts with the same file+opts
-// activates it instead of rebuilding. Callers must only Warm audio-only
-// media: a prerolled video pipeline paints its first frame on the live
-// output, which is exactly what the realtime rule forbids. The build
-// validators: a stale arm (a newer playback decision landed meanwhile) is
+// buffer), so a later LoadWithOpts with the same file+opts activates it
+// instead of rebuilding. Audio cues preroll silently on the real audio
+// sink; video/image cues preroll on fakesink (spec.warmSink) and get the
+// wall sink relinked at activation — nothing is ever displayed by a warm
+// slot. A stale arm (a newer playback decision landed meanwhile) is
 // retired, never installed.
 func Warm(file string, opts LoadOpts) error {
 	gstInit()
@@ -430,7 +442,7 @@ func Warm(file string, opts LoadOpts) error {
 		mgr.warm, mgr.warmFile, mgr.warmOpts = nil, "", LoadOpts{}
 	}
 	mgr.mu.Unlock()
-	p, err := buildPipeline(pipelineSpec{isTest: false, filename: file})
+	p, err := buildPipeline(pipelineSpec{isTest: false, filename: file, warmSink: opts.WarmPreroll})
 	if err != nil {
 		return err
 	}
@@ -497,11 +509,54 @@ func InstallWarm(file string, opts LoadOpts) bool {
 	if !ok {
 		return false
 	}
+	// Video/image warm builds sit on fakesink; relink the real wall sink in
+	// before anything plays. A failed relink is a caller-handled rebuild.
+	if opts.WarmPreroll && !warmWireVideo(p) {
+		logs.Printf(logs.GSPWarm, "warm pipeline wall relink failed: cold load")
+		mgr.mu.Lock()
+		retirePipeline(p)
+		mgr.mu.Unlock()
+		return false
+	}
 	logs.Printf(logs.GSPWarm, "warm pipeline activated: %s", file)
-	// swap() owns the retire+install; give it the prerolled handle. Its
-	// clearPlayback/dropWarm have already been done above for the slot.
+	// swap() owns the retire+install; give it the prerolled handle.
 	mgr.swap(p, file, opts)
 	watchAndPlay(p)
+	return true
+}
+
+// warmWireVideo swaps the prerolled video branch's output edge from
+// fakesink to the live wall: unlink the fake sink, install autovideosink,
+// sync it, done — the pipeline is parked PAUSED, and startPlayback's
+// SetState(Playing) prerolls the new sink (~a frame) with decoder context
+// already warm. False = un-recoverable wiring state; caller cold-loads.
+func warmWireVideo(p *gst.Pipeline) bool {
+	tail, _ := p.GetElementByName("warm-vf-tail")
+	fake, _ := p.GetElementByName("warm-video-sink")
+	if tail == nil || fake == nil {
+		return true // not a video preroll (audio slot): nothing to relink
+	}
+	sink, err := gst.NewElement("autovideosink")
+	if err != nil {
+		return false
+	}
+	p.AddMany(sink)
+	if src := tail.GetStaticPad("src"); src != nil {
+		src.Unlink(fake.GetStaticPad("sink"))
+		if src.Link(sink.GetStaticPad("sink")) != gst.PadLinkOK {
+			sink.SetState(gst.StateNull)
+			p.Remove(sink)
+			return false
+		}
+	} else {
+		sink.SetState(gst.StateNull)
+		p.Remove(sink)
+		return false
+	}
+	sink.Set("sync", false)
+	sink.SyncStateWithParent()
+	p.Remove(fake)
+	fake.SetState(gst.StateNull)
 	return true
 }
 
@@ -1060,6 +1115,10 @@ type pipelineSpec struct {
 	isTest      bool
 	testPattern string
 	filename    string
+	// warmSink routes the video branch to fakesink instead of the wall: a
+	// warm-slot build may not display anything or its first frame would
+	// colour over the live cue (see Warm). Activation relinks the wall.
+	warmSink bool
 }
 
 // rotationMethod maps cue rotation degrees to a videoflip method.
@@ -1157,6 +1216,11 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			// combine e.g. 90° with a horizontal mirror; method=none
 			// passes frames through untouched.
 			elementNames = []string{"queue", "videoconvert", "videobalance", "videoscale", "videoflip", "videoflip", "autovideosink"}
+			if spec.warmSink {
+				// Warm-slot video preroll: decode into fakesink — silent, no
+				// wall takeover. warm-vf-tail is the relink anchor at activation.
+				elementNames = []string{"queue", "videoconvert", "videobalance", "videoscale", "videoflip", "videoflip", "fakesink"}
+			}
 		}
 		queueName += "-" + srcPad.GetStreamID()
 		// decodebin recreates its pads after Stop -> Play. Reuse the tail;
@@ -1173,6 +1237,13 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			return
 		}
 		elements[0].Set("name", queueName)
+		if spec.warmSink && elementNames[6] == "fakesink" {
+			// Relink anchors for install-time: last videoflip = output edge,
+			// the fake sink gets a findable name (startPlayback's pool).
+			elements[5].Set("name", "warm-vf-tail")
+			elements[6].Set("name", "warm-video-sink")
+			elements[6].Set("sync", false)
+		}
 		pipeline.AddMany(elements...)
 		gst.ElementLinkMany(elements...)
 
