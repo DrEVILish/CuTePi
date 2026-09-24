@@ -384,15 +384,12 @@ func Load(filename string) error {
 }
 
 // LoadWithOpts loads filename with an optional trim window and hold policy.
-// A prewarmed slot matching file+opts (see Warm) activates instead of a
-// fresh build+preroll — the ~0-latency cue path; a mismatched or missing
-// slot falls back to the normal build.
+// A warm slot matching file+opts (see Warm) activates instead of a fresh
+// build+preroll — the ~0-latency cue path; anything else falls back to the
+// normal build (and drops the stale slot).
 func LoadWithOpts(filename string, opts LoadOpts) error {
 	gstInit()
-	mgr.mu.Lock()
-	hit := mgr.warmHit(filename, opts)
-	mgr.mu.Unlock()
-	if hit && InstallWarm(filename, opts) {
+	if InstallWarm(filename, opts) {
 		return nil
 	}
 	mgr.mu.Lock()
@@ -405,16 +402,6 @@ func LoadWithOpts(filename string, opts LoadOpts) error {
 	mgr.swap(newPipeline, filename, opts)
 	watchAndPlay(newPipeline)
 	return nil
-}
-
-// warmHit reports whether a slot applies to this load: same file, same
-// opts (all fields comparable), and the arm was made under the current
-// generation. Callers hold no lock; entry resets the slot when claimed.
-func (m *manager) warmHit(file string, opts LoadOpts) bool {
-	if m.warm == nil || m.warmFile != file || m.warmOpts != opts {
-		return false
-	}
-	return true
 }
 
 func (m *manager) dropWarm() {

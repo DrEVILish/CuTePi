@@ -427,7 +427,6 @@ func prerollable(mimetype string) bool {
 // realtime rule). Arming waits ~1.2s so the just-fired cue's own decode
 // settles and never competes for the CPU mid-fade; a stale arm (generation
 // moved) is dropped by gsp.Warm itself.
-// NOTE: "armNextCue prerolls" wording == armPreloadCue above.
 func armNextCue(gen uint64, pos int) {
 	if pos <= 0 {
 		return

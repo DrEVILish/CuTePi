@@ -602,12 +602,14 @@ func transportInfo() string {
 
 // commandsXML answers the "commands" discovery probe with the supported
 // subset (real decks' XML differs per model; auto-configuring controllers
-// parse the shape, not the full inventory).
+// parse the shape, not the full inventory). Everything here maps to a case
+// in handleDeckLine — record answers 104, that's its support level.
 func commandsXML() string {
 	return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<commands>\r\n" +
 		strings.Join([]string{
-			"ping", "quit", "device info", "transport info", "clips get", "clips count",
-			"play", "goto", "stop", "pause", "playrange", "notify?", "record?", "prewarm??",
+			"ping", "quit", "help", "commands", "device info", "transport info",
+			"clips get", "clips count", "disk list", "play", "goto", "stop",
+			"pause", "notify", "remote", "play on startup", "preview", "record",
 		}, "\r\n") +
 		"\r\n</commands>\r\n\r\n"
 }
