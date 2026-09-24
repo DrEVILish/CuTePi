@@ -18,15 +18,17 @@
         hx-swap="none"
       >
         <div class="modal-body pt-0">
-          <ul class="nav nav-tabs settings-tabs" role="tablist">
+          <div class="row g-0">
+            <ul class="nav nav-tabs flex-column settings-tabs col-auto" role="tablist" aria-orientation="vertical">
             <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#settingsPaneAppearance" type="button" role="tab">Appearance</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabGeneral" type="button" role="tab">General</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabDisplay" type="button" role="tab">Display</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabAudio" type="button" role="tab">Audio</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabNetwork" type="button" role="tab">Network</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabKeys" type="button" role="tab">Keyboard</button></li>
-          </ul>
-          <div class="tab-content pt-2">
+            </ul>
+            <div class="col">
+              <div class="tab-content pt-2">
             <div class="tab-pane fade show active" id="settingsPaneAppearance" role="tabpanel">
               <div class="ftl-field">
                 <label class="ftl-label ftl-label" for="settingsTheme">Theme</label>
@@ -181,7 +183,9 @@
               </div>
             </div>
           </div>
-          <div id="settingsStatus" class="mt-3"></div>
+          <div id="settingsStatus" class="ftl-mt-m"></div>
+            </div>
+          </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn ftl-btn-secondary ftl-btn ftl-btn-secondary" data-bs-dismiss="modal">Cancel</button>

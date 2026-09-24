@@ -84,8 +84,8 @@ func TestSharedThemesAreOfferedAlongsideAppThemes(t *testing.T) {
 	byID := map[string]Theme{}
 	for _, th := range shared {
 		byID[th.ID] = th
-		if !strings.HasPrefix(th.Href, "/ftl/themes/") {
-			t.Fatalf("shared theme %+v should be served from /ftl/themes/", th)
+		if !strings.HasPrefix(th.Href, "/api/theme/") {
+			t.Fatalf("shared theme %+v should be served through the layered wrapper", th)
 		}
 		if !strings.HasSuffix(th.Label, "(shared)") {
 			t.Fatalf("shared theme %+v should be labelled as shared", th)

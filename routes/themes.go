@@ -143,10 +143,14 @@ func ftlThemes() []Theme {
 			scheme = "dark"
 		}
 		out = append(out, Theme{
-			ID:     "ftl:" + m.Slug,
-			Name:   m.Slug,
-			Label:  m.Label + " (shared)",
-			Href:   "/ftl/themes/" + m.Slug + ".css",
+			ID:    "ftl:" + m.Slug,
+			Name:  m.Slug,
+			Label: m.Label + " (shared)",
+			// Served through the layered wrapper: the bundle sits in one
+			// low-priority @layer so CuTePi's own (unlayered) CSS always
+			// beats the library regardless of load order — the upstream
+			// prebuilt .layered.css files were dropped in favour of this.
+			Href:   "/api/theme/" + m.Slug + ".css",
 			Source: "ftl",
 			Scheme: scheme,
 		})
@@ -223,5 +227,22 @@ func TemplateFuncs() map[string]any {
 func registerThemeRoutes(rg *gin.RouterGroup) {
 	rg.GET("/themes", func(c *gin.Context) {
 		c.JSON(http.StatusOK, Themes())
+	})
+	// The layered bundle: one @import turnstiles the whole dist bundle into
+	// a single cascade layer, so unlayered app CSS always wins the ties —
+	// the prebuilt dist/<slug>.layered.css files upstream removed did the
+	// same thing server-side. The @import resolves nested url() references
+	// relative to the bundle, so asset paths stay right.
+	rg.GET("/theme/*slugCSS", func(c *gin.Context) {
+		slug := strings.TrimSuffix(strings.Trim(c.Param("slugCSS"), "/"), ".css")
+		for _, t := range ftlThemes() {
+			if t.Name == slug {
+				c.Header("Content-Type", "text/css; charset=utf-8")
+				c.Data(http.StatusOK, "text/css; charset=utf-8",
+					[]byte("@layer ftl;\n@import url(\"/ftl/themes/"+slug+".css\") layer(ftl);\n"))
+				return
+			}
+		}
+		c.String(http.StatusNotFound, "unknown theme")
 	})
 }
