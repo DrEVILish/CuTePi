@@ -6,7 +6,7 @@
   {{ $dur := .MediaDuration }}
   {{ if .Cue.Missing }}
   <div class="alert alert-warning py-2 px-3 ftl-row is-items-center is-gap-xs is-wrap">
-    <svg class="ftl-icon -exclamation-triangle-fill"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
+    <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
     <span class="me-2">Source file missing from disk. Re-link to another media item or delete this cue.</span>
     <form class="d-inline-flex is-items-center is-gap-xs"
       hx-put="/api/cue/{{ .Cue.CuePos }}/replace" hx-target="#cueinspector-body" hx-swap="outerHTML">

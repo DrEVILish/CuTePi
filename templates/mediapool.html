@@ -6,16 +6,16 @@
     <div class="d-flex is-gap-xs">
       <div class="ftl-row is-gap-xs btn-group-sm" role="group" aria-label="Add media">
         <button type="button" class="btn ftl-btn-secondary" data-bs-toggle="modal" data-bs-target="#uploadModal" title="Upload" aria-label="Upload">
-          <svg class="ftl-icon -cloud-upload-fill"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
+          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
         </button>
         <a class="btn ftl-btn-secondary" href="/upload" title="Open the upload page" aria-label="Open the upload page">
-          <svg class="ftl-icon -box-arrow-up-right"><use href="/ftl/assets/icons/icons.svg#icon-external-link"/></svg>
+          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-external-link"/></svg>
         </a>
         <button type="button" class="btn ftl-btn-danger btn-youtube" data-bs-toggle="modal" data-bs-target="#ytdlModal" title="Download from URL" aria-label="Download from URL">
-          <i class="bi bi-youtube"></i>
+          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-download"/></svg>
         </button>
         <button type="button" class="btn ftl-btn-secondary" data-bs-toggle="modal" data-bs-target="#qrModal" title="Show QR for mobile upload" aria-label="Show QR for mobile upload">
-          <i class="bi bi-qr-code"></i>
+          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-share"/></svg>
         </button>
       </div>
       <div class="ftl-row is-gap-xs btn-group-sm" role="group" aria-label="Thumbnail columns"
@@ -64,7 +64,7 @@
         <div class="media-thumbnail" style="background-image:url('{{ $thumb }}')"
           draggable="true" data-media-filename="{{ .Filename }}" role="img" aria-label="Thumbnail for {{ .Filename }}">
           {{ if .Missing }}
-          <svg class="ftl-icon -exclamation-triangle-fill media-missing"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
+          <svg class="ftl-icon media-missing"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
           {{ end }}
           <!-- Detailed info panel: hover reveals type, size, date added. -->
           <div class="media-info">
@@ -75,7 +75,7 @@
           </div>
           <button class="media-menu-toggle" type="button" draggable="false"
             aria-label="Menu for {{ .Filename }}" data-media-menu="{{ .Filename }}">
-            <svg class="ftl-icon -three-dots"><use href="/ftl/assets/icons/icons.svg#icon-more-horizontal"/></svg>
+            <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-more-horizontal"/></svg>
           </button>
         </div>
       </figure>
@@ -87,7 +87,7 @@
     </p>
   {{ else }}
   <div class="mediapool-empty text-center p-4 border border-secondary rounded">
-    <svg class="ftl-icon -cloud-arrow-up fs-1 d-block ftl-mb-m"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
+    <svg class="ftl-icon fs-1 d-block ftl-mb-m"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
     <p class="h6 ftl-mb-m">No media yet</p>
     <button
       type="button"
@@ -95,7 +95,7 @@
       data-bs-toggle="modal"
       data-bs-target="#uploadModal"
     >
-      <svg class="ftl-icon -cloud-upload-fill"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>&nbsp;Upload
+      <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>&nbsp;Upload
     </button>
     <p class="small ftl-text-muted ftl-mt-m mb-0">or drop files here</p>
   </div>

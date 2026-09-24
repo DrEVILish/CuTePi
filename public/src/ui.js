@@ -263,10 +263,26 @@ setInterval(pollScheduleFlash, 10000);
 // app theme and a shared ftl-themes theme can carry the same data-theme name.
 // The id -> {name, href} map is rendered into the page by header.html and
 // refreshed from /api/themes below.
+// Mark every .ftl-icon's <use> with the theme's sprite: shared themes ship
+// dist/icons/<slug>.svg (generic set + that theme's redraws); app: themes get
+// the generic sprite (= the pack's own fallback path, the contract's default).
+function applyIconSprite(id) {
+  const srcs = id.indexOf("ftl:") === 0
+    ? "/ftl/themes/icons/" + id.slice(4) + ".svg"
+    : "/ftl/assets/icons/icons.svg";
+  document.querySelectorAll('.ftl-icon use[href]').forEach((u) => {
+    const h = u.getAttribute("href") || "";
+    const hash = h.indexOf("#");
+    if (hash < 0) return;
+    u.setAttribute("href", srcs + h.slice(hash));
+  });
+}
+
 function applyAppTheme(id) {
   if (id.indexOf(":") === -1) id = "app:" + id; // legacy bare-name value
   if (id === "app:blue-future") id = "ftl:xbmc"; // retired app theme
   if (!appThemeMap[id]) id = DEFAULT_THEME_ID;
+  applyIconSprite(id);
   const link = document.getElementById("cutepi-theme-css");
   if (link) {
     // Keep the ?v= stamp the boot script put on the link so the swapped-in
@@ -286,6 +302,13 @@ document.addEventListener("change", (e) => {
   if (e.target.id === "settingsTheme") {
     applyAppTheme(e.target.value);
   }
+});
+
+// Boot-time sprite + every swapped-in partial (the server renders the
+// generic sprite; under an ftl: theme the override shapes re-point after swap).
+applyIconSprite(document.documentElement.dataset.themeId || DEFAULT_THEME_ID);
+document.addEventListener("htmx:afterSwap", () => {
+  applyIconSprite(document.documentElement.dataset.themeId || DEFAULT_THEME_ID);
 });
 
 // Column resizing was removed; clear the old persisted widths.
@@ -1692,8 +1715,8 @@ document.addEventListener("click", (e) => {
     b.dataset.fullscreenState = fs ? "on" : "off";
     b.title = fs ? "Exit fullscreen" : "Enter fullscreen";
     b.setAttribute("aria-label", b.title);
-    const i = b.querySelector("i");
-    if (i) i.className = fs ? "bi bi-fullscreen-exit" : "bi bi-arrows-fullscreen";
+    const i = b.querySelector(".ftl-icon use");
+    if (i) i.setAttribute("href", "/ftl/assets/icons/icons.svg#icon-" + (fs ? "minimize" : "maximize"));
   }
   document.addEventListener("click", (e) => {
     if (!(e.target instanceof Element) || !e.target.closest("#fullscreen-btn")) return;
