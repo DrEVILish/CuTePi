@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -536,7 +538,13 @@ func warmWireVideo(p *gst.Pipeline) bool {
 	if tail == nil || fake == nil {
 		return true // not a video preroll (audio slot): nothing to relink
 	}
-	sink, err := gst.NewElement("autovideosink")
+	// ponytail: env override is a stage-side knob (force fakesink/xv) for
+	// video-out debugging and lets tests run naming/relink without a display.
+	kind := os.Getenv("CUTEPI_WALL_SINK")
+	if kind == "" {
+		kind = "autovideosink"
+	}
+	sink, err := gst.NewElement(kind)
 	if err != nil {
 		return false
 	}
@@ -557,6 +565,11 @@ func warmWireVideo(p *gst.Pipeline) bool {
 	sink.SyncStateWithParent()
 	p.Remove(fake)
 	fake.SetState(gst.StateNull)
+	// The old fake sink already consumed the preroll buffer, which blocks the
+	// re-preroll of the new sink forever (5s stall observed). A flush seek
+	// re-prerolls the swapped-in sink from the top; decoder context and all
+	// elements are warm, so it lands quick.
+	p.SeekSimple(0, gst.FormatTime, gst.SeekFlagFlush)
 	return true
 }
 
@@ -1210,12 +1223,25 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		queueName := "video-queue"
 		if isAudio {
 			queueName = "audio-queue"
-			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", "autoaudiosink"}
+			// Audio routing: settings (Display/Audio tab) can park every
+			// cue on a named alsasink device (e.g. the HDMI 2.0 @ 48k
+			// path). The warm slot stays on autoaudiosink — its PAUSED
+			// preroll must never grab a hw device the live cue owns.
+			sink := "autoaudiosink"
+			if audio := config.Audio(); !spec.isTest && !spec.warmSink && audio.Device != "" {
+				sink = "alsasink"
+			}
+			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", sink}
 		} else {
 			// Two videoflip stages (rotate, then mirror) so a cue can
 			// combine e.g. 90° with a horizontal mirror; method=none
 			// passes frames through untouched.
 			elementNames = []string{"queue", "videoconvert", "videobalance", "videoscale", "videoflip", "videoflip", "autovideosink"}
+			if d := config.Display(); d.Resolution != "" && !d.UseEDID && gstCapsWidthHeightOK(d.Resolution) {
+				// Manual wall resolution: retune the decoded stream to the
+				// destination size (videoscale picks it up from the caps).
+				elementNames = append(elementNames[:6:6], "capsfilter", "autovideosink")
+			}
 			if spec.warmSink {
 				// Warm-slot video preroll: decode into fakesink — silent, no
 				// wall takeover. warm-vf-tail is the relink anchor at activation.
@@ -1237,6 +1263,15 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			return
 		}
 		elements[0].Set("name", queueName)
+		// Settings-tab output tuning (only real pipelines; the warm slot
+		// prerolls with default plumbing so it can never grab a hw device).
+		if !spec.warmSink && !spec.isTest {
+			if isAudio {
+				applyAudioSink(elements[len(elements)-1])
+			} else if len(elementNames) == 8 && elementNames[6] == "capsfilter" {
+				setResolutionCaps(elements[6])
+			}
+		}
 		if spec.warmSink && elementNames[6] == "fakesink" {
 			// Relink anchors for install-time: last videoflip = output edge,
 			// the fake sink gets a findable name (startPlayback's pool).
@@ -1296,4 +1331,54 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	})
 
 	return pipeline, nil
+}
+
+// gstCapsWidthHeightOK validates a settings "WxH" resolution for caps use.
+func gstCapsWidthHeightOK(res string) bool {
+	parts := strings.SplitN(res, "x", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	w, e1 := strconv.Atoi(parts[0])
+	h, e2 := strconv.Atoi(parts[1])
+	return e1 == nil && e2 == nil && w > 0 && h > 0
+}
+
+// setResolutionCaps retunes a capsfilter element to the configured wall
+// resolution (Display tab). Silent on invalid config: a broken setting must
+// never stop the show, only fall back to the media's own size.
+func setResolutionCaps(capsEl *gst.Element) {
+	d := config.Display()
+	if !gstCapsWidthHeightOK(d.Resolution) {
+		return
+	}
+	w, _ := strconv.Atoi(strings.SplitN(d.Resolution, "x", 2)[0])
+	h, _ := strconv.Atoi(strings.SplitN(d.Resolution, "x", 2)[1])
+	capsEl.Set("caps", gst.NewCapsFromString(
+		fmt.Sprintf("video/x-raw,width=%d,height=%d", w, h)))
+}
+
+// applyAudioSink tags the chain's audio sink with the routing settings from
+// the Audio tab: device (alsasink) and, when set, rate/channels caps.
+func applyAudioSink(sink *gst.Element) {
+	a := config.Audio()
+	if a.Device != "" {
+		sink.Set("device", a.Device)
+	}
+	// Constraint format: "2.0" -> 2 channels; rate 0 = as-is.
+	rate, channels := a.Rate, 0
+	if strings.HasPrefix(a.Channels, "2.") {
+		channels = 2
+	}
+	if rate <= 0 && channels <= 0 {
+		return
+	}
+	if rate > 0 && channels > 0 {
+		sink.Set("caps", gst.NewCapsFromString(
+			fmt.Sprintf("audio/x-raw,rate=%d,channels=%d", rate, channels)))
+	} else if rate > 0 {
+		sink.Set("caps", gst.NewCapsFromString(fmt.Sprintf("audio/x-raw,rate=%d", rate)))
+	} else if channels > 0 {
+		sink.Set("caps", gst.NewCapsFromString(fmt.Sprintf("audio/x-raw,channels=%d", channels)))
+	}
 }

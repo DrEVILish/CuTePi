@@ -1,7 +1,7 @@
 {{ define "settingsModal.html" }}
 
 <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
-  <div class="modal-dialog">
+  <div class="modal-dialog modal-lg">
     <!-- ftl component co-classes (.ftl-modal, .ftl-field, .ftl-input, …) are
       inert under this app's own themes (no ftl stylesheet is linked) and let
       a shared ftl-themes theme restyle the dialog without markup changes.
@@ -17,102 +17,170 @@
         hx-post="/api/settings"
         hx-swap="none"
       >
-        <div class="modal-body">
-          <div class="ftl-field">
-            <label class="form-label ftl-label" for="settingsPort">Port</label>
-            <input class="form-control ftl-input" id="settingsPort" name="port" type="number" min="1" max="65535" required />
-            <div class="form-text text-muted ftl-field-hint">Port changes require a server restart to take effect.</div>
-          </div>
+        <div class="modal-body pt-0">
+          <ul class="nav nav-tabs settings-tabs" role="tablist">
+            <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#settingsPaneAppearance" type="button" role="tab">Appearance</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabGeneral" type="button" role="tab">General</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabDisplay" type="button" role="tab">Display</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabAudio" type="button" role="tab">Audio</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabNetwork" type="button" role="tab">Network</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabKeys" type="button" role="tab">Keyboard</button></li>
+          </ul>
+          <div class="tab-content pt-2">
+            <div class="tab-pane fade show active" id="settingsPaneAppearance" role="tabpanel">
+              <div class="ftl-field">
+                <label class="form-label ftl-label" for="settingsTheme">Theme</label>
+                <select class="form-select ftl-select" id="settingsTheme" aria-describedby="settingsThemeHelp">
+                  <!-- Discovered at render time: any name.css added to
+                    public/css/themes appears here with no code changes, as does any
+                    bundle from the pinned ftl-themes submodule. Values are ids
+                    ("app:blue-future" / "ftl:blue-future") because the two sources can carry
+                    the same data-theme name. -->
+                  {{ range themeFiles }}<option value="{{ .ID }}">{{ .Label }}</option>
+                  {{ end }}
+                </select>
+                <div id="settingsThemeHelp" class="form-text text-muted ftl-field-hint">Theme is saved in this browser. Themes marked &ldquo;shared&rdquo; come from the ftl-themes library and change layout as well as colour.</div>
+              </div>
+            </div>
 
-          <div class="ftl-field">
-            <label class="form-label ftl-label" for="settingsPollInterval">Poll interval (ms)</label>
-            <input class="form-control ftl-input" id="settingsPollInterval" name="pollInterval" type="number" min="10" required />
-            <div class="form-text text-muted ftl-field-hint">How often the Now Playing widget polls the server. Minimum 10ms.</div>
-          </div>
+            <div class="tab-pane fade" id="settingsTabGeneral" role="tabpanel">
+              <div class="ftl-field">
+                <label class="form-label ftl-label" for="settingsPort">Port</label>
+                <input class="form-control ftl-input" id="settingsPort" name="port" type="number" min="1" max="65535" required />
+                <div class="form-text text-muted ftl-field-hint">Port changes require a server restart to take effect.</div>
+              </div>
 
-          <div class="ftl-field">
-            <label class="form-label ftl-label" for="settingsTheme">Theme</label>
-            <select class="form-select ftl-select" id="settingsTheme" aria-describedby="settingsThemeHelp">
-              <!-- Discovered at render time: any name.css added to
-                public/css/themes appears here with no code changes, as does any
-                bundle from the pinned ftl-themes submodule. Values are ids
-                ("app:blue-future" / "ftl:blue-future") because the two sources can carry
-                the same data-theme name. -->
-              {{ range themeFiles }}<option value="{{ .ID }}">{{ .Label }}</option>
-              {{ end }}<option value="custom">Custom (paste below)</option>
-            </select>
-            <div id="settingsThemeHelp" class="form-text text-muted ftl-field-hint">Theme is saved in this browser. Themes marked &ldquo;shared&rdquo; come from the ftl-themes library and change layout as well as colour.</div>
-          </div>
+              <div class="form-check ftl-field">
+                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsLoop" name="loop" value="true" aria-describedby="settingsLoopHelp">
+                <label class="form-check-label" for="settingsLoop">Loop clips by default</label>
+                <div id="settingsLoopHelp" class="form-text text-muted ftl-field-hint">When enabled, newly loaded clips restart from their start instead of stopping at end-of-stream.</div>
+              </div>
 
-          <div class="ftl-field">
-            <label class="form-label ftl-label" for="settingsCustomTheme">Custom theme tokens</label>
-            <textarea class="form-control font-monospace ftl-textarea" id="settingsCustomTheme" rows="6"
-              placeholder='{ "--ctp-bg": "#0a0a12", "--ctp-accent": "#00ff88" }'
-              aria-describedby="settingsCustomThemeHelp"></textarea>
-            <div id="settingsCustomThemeHelp" class="form-text text-muted ftl-field-hint">
-              Paste a JSON object of <code>--ctp-*</code> design tokens. Saved as the "Custom" theme.
+              <div class="form-check ftl-field">
+                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsAutoNumber" name="autoNumber" value="true">
+                <label class="form-check-label" for="settingsAutoNumber">Auto-number new cues (5, 10, 15…)</label>
+                <div class="form-text text-muted ftl-field-hint">Mid-sheet inserts take the numeric midpoint of their neighbours (e.g. 12.5). The GO bar's renumber button rewrites the whole sheet.</div>
+              </div>
+
+              <div class="form-check ftl-field">
+                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsGoAdvance" name="advance" value="1"
+                  hx-post="/api/setting/goadvance" hx-trigger="change" hx-swap="none">
+                <label class="form-check-label" for="settingsGoAdvance">Advance selection after GO</label>
+                <div class="form-text text-muted ftl-field-hint">After firing GO, move the selection to the next cue, so repeated GOs walk down the show. When off, the selection stays on the fired cue.</div>
+              </div>
+
+              <div class="ftl-field">
+                <label class="form-label ftl-label">Panic holding image</label>
+                <div class="d-flex align-items-center gap-2">
+                  <span id="settingsPanicHold" class="form-text text-muted mb-0">off (cut to black)</span>
+                  <button type="button" class="btn btn-sm btn-outline-secondary ftl-btn ftl-btn-sm" id="settingsPanicHoldClear">Clear</button>
+                </div>
+                <div class="form-text text-muted ftl-field-hint">Set from a media item's menu ("Set as holding image"). PANIC then loads and holds it instead of cutting to black.</div>
+              </div>
+
+              <div class="ftl-field">
+                <label class="form-label ftl-label" for="settingsPassword">Operator password</label>
+                <input class="form-control ftl-input" id="settingsPassword" name="password" type="password" autocomplete="new-password" placeholder="unchanged" aria-describedby="settingsAuthHelp">
+                <div class="form-check mt-1">
+                  <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsClearPassword" name="clearPassword" value="true">
+                  <label class="form-check-label" for="settingsClearPassword">Remove password (open access)</label>
+                </div>
+                <div id="settingsAuthHelp" class="form-text text-muted ftl-field-hint">
+                  <span id="settingsAuthState">Checking&hellip;</span>
+                  Leave blank to keep the current password. When set, the browser asks
+                  for it once (any username) and all devices need it to reach CuTePi.
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="settingsTabDisplay" role="tabpanel">
+              <div class="form-check ftl-field">
+                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsDisplayEDID" name="displayUseEDID" value="true">
+                <label class="form-check-label" for="settingsDisplayEDID">Use destination EDID</label>
+                <div class="form-text text-muted ftl-field-hint">Follow the display/proscenium destination's reported mode (EDID) instead of the manual numbers below. The queue/sink then stay at the destination's mode.</div>
+              </div>
+              <div class="row">
+                <div class="col ftl-field">
+                  <label class="form-label ftl-label" for="settingsDisplayResolution">Resolution</label>
+                  <input class="form-control ftl-input" id="settingsDisplayResolution" name="displayResolution" type="text" placeholder="1920x1080" />
+                  <div class="form-text text-muted ftl-field-hint">Width x height in pixels; decoded video is retuned to this size (videoscale caps). Empty = the file's own size. Ignored when EDID mode is on.</div>
+                </div>
+                <div class="col ftl-field">
+                  <label class="form-label ftl-label" for="settingsDisplayRefresh">Refresh rate (Hz)</label>
+                  <input class="form-control ftl-input" id="settingsDisplayRefresh" name="displayRefresh" type="number" min="0" max="240" placeholder="60" />
+                  <div class="form-text text-muted ftl-field-hint">Saved with the mode; applies to the destination port setup outside the pipeline.</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="settingsTabAudio" role="tabpanel">
+              <div class="row">
+                <div class="col ftl-field">
+                  <label class="form-label ftl-label" for="settingsAudioDevice">Output device</label>
+                  <input class="form-control ftl-input" id="settingsAudioDevice" name="audioDevice" type="text" placeholder="auto (e.g. plughw:CARD=b1,DEV=0)" />
+                  <div class="form-text text-muted ftl-field-hint">Empty = automatic (PulseAudio). When set, playback pins to this ALSA device (e.g. the HDMI sink).</div>
+                </div>
+                <div class="col ftl-field">
+                  <label class="form-label ftl-label" for="settingsAudioChannels">Channel layout</label>
+                  <select class="form-select ftl-select" id="settingsAudioChannels" name="audioChannels">
+                    <option value="2.0">2.0 stereo</option>
+                    <option value="2.1">2.1</option>
+                    <option value="5.1">5.1</option>
+                    <option value="7.1">7.1</option>
+                  </select>
+                </div>
+                <div class="col ftl-field">
+                  <label class="form-label ftl-label" for="settingsAudioRate">Sample rate</label>
+                  <input class="form-control ftl-input" id="settingsAudioRate" name="audioRate" type="number" min="0" step="1" placeholder="48000" />
+                  <div class="form-text text-muted ftl-field-hint">Default 48kHz HDMI: 48000. 0 = pipe the media's own rate.</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="settingsTabNetwork" role="tabpanel">
+              <div class="form-check ftl-field">
+                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsAPEnabled" name="apEnabled" value="true">
+                <label class="form-check-label" for="settingsAPEnabled">Broadcast a Wi-Fi access point</label>
+                <div class="form-text text-muted ftl-field-hint">Runs a hotspot (NetworkManager) so phones can join CuTePi directly for the upload page. Requires a Wi-Fi NIC.</div>
+              </div>
+              <div class="row">
+                <div class="col ftl-field">
+                  <label class="form-label ftl-label" for="settingsAPSSID">SSID</label>
+                  <input class="form-control ftl-input" id="settingsAPSSID" name="apSSID" type="text" maxlength="32" placeholder="CuTePi-Upload" />
+                </div>
+                <div class="col ftl-field">
+                  <label class="form-label ftl-label" for="settingsAPPass">Password</label>
+                  <input class="form-control ftl-input" id="settingsAPPass" name="apPass" type="password" autocomplete="new-password" placeholder="unchanged" />
+                  <div class="form-text text-muted ftl-field-hint">8+ characters for WPA2; empty keeps the saved password (or an open network).</div>
+                </div>
+              </div>
+              <div class="ftl-field">
+                <label class="form-label ftl-label">Join code</label>
+                <div class="d-flex align-items-center gap-3" id="settingsAPQrWrap">
+                  <img id="settingsAPQr" src="/api/qr?type=wifi" alt="Wi-Fi join QR code" class="border rounded" width="128" height="128">
+                  <div class="form-text text-muted ftl-field-hint mb-0">Clients scan this to join the hotspot (uses the saved SSID/password, refreshed after Save).</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-pane fade" id="settingsTabKeys" role="tabpanel">
+              <div class="ftl-field">
+                <table class="table table-sm ftl-table">
+                  <tbody>
+                    <tr><td><kbd>Space</kbd> / <kbd>Enter</kbd></td><td>GO — fire the selected cue</td></tr>
+                    <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move the selection</td></tr>
+                    <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Collapse / expand the selected group</td></tr>
+                    <tr><td><kbd>Esc</kbd></td><td>Stop playback</td></tr>
+                    <tr><td><kbd>Shift</kbd>+click</td><td>Select a range of cues</td></tr>
+                    <tr><td><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click</td><td>Toggle one cue in the selection</td></tr>
+                    <tr><td><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>Select every cue</td></tr>
+                    <tr><td><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>⌫</kbd></td><td>Delete the highlighted cues</td></tr>
+                    <tr><td><kbd>F8</kbd></td><td>Jump to the next broken cue</td></tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-
-          <div class="form-check ftl-field">
-            <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsLoop" name="loop" value="true" aria-describedby="settingsLoopHelp">
-            <label class="form-check-label" for="settingsLoop">Loop clips by default</label>
-            <div id="settingsLoopHelp" class="form-text text-muted ftl-field-hint">When enabled, newly loaded clips restart from their start instead of stopping at end-of-stream.</div>
-          </div>
-
-          <div class="ftl-field">
-            <label class="form-label ftl-label" for="settingsPassword">Operator password</label>
-            <input class="form-control ftl-input" id="settingsPassword" name="password" type="password" autocomplete="new-password" placeholder="unchanged" aria-describedby="settingsAuthHelp">
-            <div class="form-check mt-1">
-              <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsClearPassword" name="clearPassword" value="true">
-              <label class="form-check-label" for="settingsClearPassword">Remove password (open access)</label>
-            </div>
-            <div id="settingsAuthHelp" class="form-text text-muted ftl-field-hint">
-              <span id="settingsAuthState">Checking&hellip;</span>
-              Leave blank to keep the current password. When set, the browser asks
-              for it once (any username) and all devices need it to reach CuTePi.
-            </div>
-          </div>
-
-          <div class="form-check ftl-field">
-            <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsAutoNumber" name="autoNumber" value="true">
-            <label class="form-check-label" for="settingsAutoNumber">Auto-number new cues (5, 10, 15…)</label>
-            <div class="form-text text-muted ftl-field-hint">Mid-sheet inserts take the numeric midpoint of their neighbours (e.g. 12.5). The GO bar's renumber button rewrites the whole sheet.</div>
-          </div>
-
-          <div class="form-check ftl-field">
-            <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsGoAdvance" name="advance" value="1"
-              hx-post="/api/setting/goadvance" hx-trigger="change" hx-swap="none">
-            <label class="form-check-label" for="settingsGoAdvance">Advance selection after GO</label>
-            <div class="form-text text-muted ftl-field-hint">After firing GO, move the selection to the next cue, so repeated GOs walk down the show. When off, the selection stays on the fired cue.</div>
-          </div>
-
-          <div class="ftl-field">
-            <label class="form-label ftl-label">Panic holding image</label>
-            <div class="d-flex align-items-center gap-2">
-              <span id="settingsPanicHold" class="form-text text-muted mb-0">off (cut to black)</span>
-              <button type="button" class="btn btn-sm btn-outline-secondary ftl-btn ftl-btn-sm" id="settingsPanicHoldClear">Clear</button>
-            </div>
-            <div class="form-text text-muted ftl-field-hint">Set from a media item's menu ("Set as holding image"). PANIC then loads and holds it instead of cutting to black.</div>
-          </div>
-
-          <div class="ftl-field">
-            <label class="form-label ftl-label">Keyboard shortcuts <span class="text-muted">(reference only)</span></label>
-            <table class="table table-sm ftl-table">
-              <tbody>
-                <tr><td><kbd>Space</kbd> / <kbd>Enter</kbd></td><td>GO — fire the selected cue</td></tr>
-                <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move the selection</td></tr>
-                <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Collapse / expand the selected group</td></tr>
-                <tr><td><kbd>Esc</kbd></td><td>Stop playback</td></tr>
-                <tr><td><kbd>Shift</kbd>+click</td><td>Select a range of cues</td></tr>
-                <tr><td><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click</td><td>Toggle one cue in the selection</td></tr>
-                <tr><td><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>Select every cue</td></tr>
-                <tr><td><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>⌫</kbd></td><td>Delete the highlighted cues</td></tr>
-                <tr><td><kbd>F8</kbd></td><td>Jump to the next broken cue</td></tr>
-              </tbody>
-            </table>
-          </div>
-
           <div id="settingsStatus" class="mt-3"></div>
         </div>
         <div class="modal-footer">
@@ -132,7 +200,6 @@
       .then(function (resp) { return resp.json(); })
       .then(function (s) {
         document.getElementById("settingsPort").value = s.port;
-        document.getElementById("settingsPollInterval").value = s.pollInterval;
         document.getElementById("settingsLoop").checked = !!s.loop;
         document.getElementById("settingsPassword").value = "";
         document.getElementById("settingsClearPassword").checked = false;
@@ -144,8 +211,20 @@
         document.getElementById("settingsAutoNumber").checked = !!s.autoNumber;
         document.getElementById("settingsGoAdvance").checked = !!s.goAdvance;
         document.getElementById("settingsTheme").value =
-          document.documentElement.dataset.themeId || "app:blue-future";
-        document.getElementById("settingsCustomTheme").value = localStorage.getItem("cutepi.customTheme") || "{}";
+          document.documentElement.dataset.themeId;
+        var d = s.display || {};
+        document.getElementById("settingsDisplayEDID").checked = !!d.useEDID;
+        document.getElementById("settingsDisplayResolution").value = d.resolution || "";
+        document.getElementById("settingsDisplayRefresh").value = d.refreshHz || "";
+        var a = s.audio || {};
+        document.getElementById("settingsAudioDevice").value = a.device || "";
+        document.getElementById("settingsAudioChannels").value = a.channels || "2.0";
+        document.getElementById("settingsAudioRate").value = a.rate || "48000";
+        var ap = s.ap || {};
+        document.getElementById("settingsAPEnabled").checked = !!ap.enabled;
+        document.getElementById("settingsAPSSID").value = ap.ssid || "";
+        // every modal open re-reads: the QR picks up saved changes
+        document.getElementById("settingsAPQr").src = "/api/qr?type=wifi&_ts=" + Date.now();
         document.getElementById("settingsStatus").textContent = "";
         document.getElementById("settingsStatus").className = "";
         document.getElementById("settingsPanicHoldClear").onclick = function () {

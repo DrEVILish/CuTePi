@@ -36,37 +36,25 @@
         // so the picker's stored preference keeps controlling normal loads.
         try {
           var qs = new URLSearchParams(location.search).get("theme");
-          if (qs && (qs === "custom" || THEMES[qs])) id = qs;
+          if (qs && THEMES[qs]) id = qs;
         } catch (_) {}
         // Preferences saved before themes were shared hold a bare name
         // ("lcars"); those have always meant an app-owned file with that name,
         // so they
         // migrate to the app: namespace rather than silently switching the
         // user to the shared theme of the same name.
-        if (id !== "custom" && id.indexOf(":") === -1) id = "app:" + id;
-        if (id !== "custom" && !THEMES[id]) id = DEFAULT_ID;
-        var theme = id === "custom" ? "custom" : THEMES[id].name;
+        if (id.indexOf(":") === -1) id = "app:" + id;
+        if (!THEMES[id]) id = DEFAULT_ID;
+        var theme = THEMES[id].name;
         // Bootstrap's dark/light variables must follow the theme: a light
         // shared theme (aqua, windows95) renders light surfaces, and dark-mode
         // text would sit invisible on them (empty selects, unreadable help).
         document.documentElement.dataset.bsTheme =
-          (id !== "custom" && THEMES[id] && THEMES[id].scheme) || "dark";
+          (THEMES[id] && THEMES[id].scheme) || "dark";
         var link = document.getElementById("cutepi-theme-css");
-        if (id !== "custom" && link) link.href = THEMES[id].href + stamp;
+        if (link) link.href = THEMES[id].href + stamp;
         document.documentElement.dataset.theme = theme;
         document.documentElement.dataset.themeId = id;
-        if (theme === "custom") {
-          try {
-            var tokens = JSON.parse(localStorage.getItem("cutepi.customTheme"));
-            if (tokens && typeof tokens === "object") {
-              var decls = Object.keys(tokens).map(function (k) { return "  " + k + ": " + tokens[k] + ";"; }).join("\n");
-              var css = document.createElement("style");
-              css.id = "cutepi-custom-theme";
-              css.textContent = ":root[data-theme=custom] {\n" + decls + "\n}";
-              document.head.appendChild(css);
-            }
-          } catch (e) {}
-        }
       }());
     </script>
   </head>

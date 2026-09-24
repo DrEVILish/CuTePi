@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ func useTestDir(dir string) {
 
 func TestMain(m *testing.M) {
 	// Redirect config persistence to a temp dir for the whole test binary,
-	// so SetPort/SetPollInterval below don't write to the real user config.
+	// so SetPort below don't write to the real user config.
 	dir, err := os.MkdirTemp("", "cutepi-config-test")
 	if err != nil {
 		panic(err)
@@ -47,7 +48,9 @@ func TestConfigConcurrentReadsWrites(t *testing.T) {
 		<-start
 		for i := 0; i < 500; i++ {
 			_ = Port()
-			_ = PollInterval()
+			_ = Display()
+			_ = Audio()
+			_ = AP()
 			_ = Loop()
 			_ = HasAuth()
 			_ = AuthPassword()
@@ -59,8 +62,14 @@ func TestConfigConcurrentReadsWrites(t *testing.T) {
 		if err := SetPort(3000 + i%50); err != nil {
 			t.Fatalf("SetPort: %v", err)
 		}
-		if err := SetPollInterval(100 + i%20); err != nil {
-			t.Fatalf("SetPollInterval: %v", err)
+		if err := SetDisplay("1920x1080", 30+i%60, i%2 == 0); err != nil {
+			t.Fatalf("SetDisplay: %v", err)
+		}
+		if err := SetAudio("plughw:0", "2.0", 48000); err != nil {
+			t.Fatalf("SetAudio: %v", err)
+		}
+		if err := SetAP(fmt.Sprintf("ap-%d", i%9), "", i%2 == 0); err != nil {
+			t.Fatalf("SetAP: %v", err)
 		}
 		SetLoop(i%2 == 0)
 		SetAuthPassword(strings.Repeat("x", i%13))
@@ -84,15 +93,37 @@ func TestExpandHome(t *testing.T) {
 	}
 }
 
-func TestSetPollIntervalValidation(t *testing.T) {
-	if err := SetPollInterval(5); err == nil {
-		t.Fatalf("expected error for poll interval below minimum")
+func TestSettingsValidation(t *testing.T) {
+	if err := SetDisplay("banana", 60, false); err == nil {
+		t.Fatalf("expected error for a non WxH resolution")
 	}
-	if err := SetPollInterval(50); err != nil {
-		t.Fatalf("SetPollInterval(50): %v", err)
+	if err := SetDisplay("9999x4321", 60, false); err == nil {
+		t.Fatalf("expected error for an out-of-range resolution")
 	}
-	if PollInterval() != 50 {
-		t.Fatalf("expected PollInterval()=50, got %d", PollInterval())
+	if err := SetDisplay("1920x1080", 60, false); err != nil {
+		t.Fatalf("SetDisplay: %v", err)
+	}
+	d := Display()
+	if d.Resolution != "1920x1080" || d.RefreshHz != 60 || !d.UseEDID == false {
+		t.Fatalf("Display() = %+v", d)
+	}
+	if err := SetAudio("", "mono", 48000); err == nil {
+		t.Fatalf("expected error for an unsupported channel layout")
+	}
+	if err := SetAudio("", "2.0", 48000); err != nil {
+		t.Fatalf("SetAudio: %v", err)
+	}
+	if a := Audio(); a.Channels != "2.0" || a.Rate != 48000 {
+		t.Fatalf("Audio() = %+v", a)
+	}
+	if err := SetAP("ok", "short", true); err == nil {
+		t.Fatalf("expected error for a 5-char hotspot password")
+	}
+	if err := SetAP("this-ssid-is-way-way-too-long-for-wlan", "", true); err == nil {
+		t.Fatalf("expected error for an over-long SSID")
+	}
+	if err := SetAP("ok", "", true); err != nil {
+		t.Fatalf("SetAP open network: %v", err)
 	}
 }
 
@@ -162,9 +193,6 @@ func TestResolveDefaultsWithNoEnvUsesHomeDir(t *testing.T) {
 	if c.Port != defaultPort {
 		t.Errorf("Port = %d, want default %d", c.Port, defaultPort)
 	}
-	if c.PollInterval != defaultPollInterval {
-		t.Errorf("PollInterval = %d, want default %d", c.PollInterval, defaultPollInterval)
-	}
 }
 
 func TestResolveDefaultsExplicitOverridesWinOverWorkingDir(t *testing.T) {
@@ -214,22 +242,6 @@ func TestLoadConfigCreatesFileOnFirstRun(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
 		t.Fatalf("expected LoadConfig to create the config file on first run: %v", err)
-	}
-}
-
-func TestLoadConfigClampsPollIntervalBelowMinimum(t *testing.T) {
-	dir := t.TempDir()
-	t.Cleanup(func() { useTestDir(testDir) })
-	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"poll_interval_ms": 1}`), 0o644); err != nil {
-		t.Fatalf("writing test config file: %v", err)
-	}
-	useTestDir(dir)
-
-	LoadConfig()
-
-	if PollInterval() < minPollInterval {
-		t.Fatalf("PollInterval() = %d, want clamped to >= %d", PollInterval(), minPollInterval)
 	}
 }
 

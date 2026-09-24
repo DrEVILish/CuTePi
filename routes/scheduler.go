@@ -32,71 +32,79 @@ func RunScheduler() {
 			if !ctp.GetShowMode() {
 				continue
 			}
-			now := time.Now()
-			rows, err := ctp.GetScheduledCues(now)
-			if err != nil {
-				log.Printf("CuTePi: scheduler query failed: %v", err)
-				continue
-			}
-			day := now.Format("2006-01-02")
-			if day != scheduleFiredDay {
-				scheduleFired = make(map[string]int64)
-				scheduleFiredDay = day
-			}
-			for _, cue := range rows {
-				key := strconv.Itoa(cue.CuePos) + "|" + day
-				if _, ok := scheduleFired[key]; ok {
-					continue
-				}
-				// Mark armed (not fired): the 200ms tick only ARMS — fires go
-				// to an exact timer at the cue's scheduled second (midnight +
-				// ms-of-day), so timed cues land on the clock instead of up
-				// to a tick late. A late wake-up (slot already passed) fires
-				// at once.
-				at := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).
-					Add(time.Duration(cue.ScheduleMs) * time.Millisecond)
-				fireScheduled := func() {
-					// Re-fetch at fire time (latest edits; the 250ms look-ahead
-					// and the warm slot snapshot must not play stale values),
-					// then build opts through the ONE shared builder.
-					fcue := cue.AsCue()
-					if fresh, cerr := ctp.GetCue(strconv.Itoa(cue.CuePos)); cerr == nil {
-						fcue = fresh
-					}
-					if err := gsp.LoadWithOpts(fcue.Filename, cueOpts(fcue, false)); err != nil {
-						ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
-						log.Printf("CuTePi: failed to fire scheduled cue %d: %v", cue.CuePos, err)
-						return
-					}
-					ctp.SetCueResult(cue.CuePos, ctp.CueResultOK)
-					gsp.SetCuePos(cue.CuePos)
-					gsp.Play()
-				}
-				scheduleFired[key] = now.UnixMilli()
-				d := time.Until(at)
-				switch {
-				case d <= 0:
-					fireScheduled()
-				default:
-					// Prewarm inside the look-ahead window (any media type:
-					// video warms on fakesink, silent and unpainted) and fire
-					// on the exact second via the warm slot. A warm preroll
-					// runs on a protected goroutine (must not stall the tick)
-					// and might not finish before S — then InstallWarm misses
-					// and the fire falls back to the plain build path.
-					opts := cueOpts(cue.AsCue(), false)
-					goSafe(func() {
-						if warmErr := gsp.Warm(cue.Filename, opts); warmErr != nil {
-							log.Printf("CuTePi: scheduled cue %d prewarm: %v", cue.CuePos, warmErr)
-						}
-					})
-					time.AfterFunc(d, safe(func() {
-						if !gsp.InstallWarm(cue.Filename, opts) {
-							fireScheduled()
-						}
-					}))
-				}
-			}
+			schedulerTick(time.Now())
 		}
 	}()
+}
+
+// schedulerTick runs one scheduler iteration at a point in time: query due
+// cues and arm/fire them. Split out of the loop so tests can drive ticks
+// deterministically instead of racing a real timer.
+func schedulerTick(now time.Time) {
+	rows, err := ctp.GetScheduledCues(now)
+	for i := 0; i < 1; i++ { // allows `continue` in the error path
+		if err != nil {
+			log.Printf("CuTePi: scheduler query failed: %v", err)
+			continue
+		}
+		day := now.Format("2006-01-02")
+		if day != scheduleFiredDay {
+			scheduleFired = make(map[string]int64)
+			scheduleFiredDay = day
+		}
+		for _, cue := range rows {
+			key := strconv.Itoa(cue.CuePos) + "|" + day
+			if _, ok := scheduleFired[key]; ok {
+				continue
+			}
+			// Mark armed (not fired): the 200ms tick only ARMS — fires go
+			// to an exact timer at the cue's scheduled second (midnight +
+			// ms-of-day), so timed cues land on the clock instead of up
+			// to a tick late. A late wake-up (slot already passed) fires
+			// at once.
+			at := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).
+				Add(time.Duration(cue.ScheduleMs) * time.Millisecond)
+			fireScheduled := func() {
+				// Re-fetch at fire time (latest edits; the 250ms look-ahead
+				// and the warm slot snapshot must not play stale values),
+				// then build opts through the ONE shared builder.
+				fcue := cue.AsCue()
+				if fresh, cerr := ctp.GetCue(strconv.Itoa(cue.CuePos)); cerr == nil {
+					fcue = fresh
+				}
+				if err := gsp.LoadWithOpts(fcue.Filename, cueOpts(fcue, false)); err != nil {
+					ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
+					log.Printf("CuTePi: failed to fire scheduled cue %d: %v", cue.CuePos, err)
+					return
+				}
+				ctp.SetCueResult(cue.CuePos, ctp.CueResultOK)
+				gsp.SetCuePos(cue.CuePos)
+				gsp.Play()
+			}
+			scheduleFired[key] = now.UnixMilli()
+			d := time.Until(at)
+			switch {
+			case d <= 0:
+				fireScheduled()
+			default:
+				// Prewarm inside the look-ahead window (any media type:
+				// video warms on fakesink, silent and unpainted) and fire
+				// on the exact second via the warm slot. A warm preroll
+				// runs on a protected goroutine (must not stall the tick)
+				// and might not finish before S — then InstallWarm misses
+				// and the fire falls back to the plain build path.
+				opts := cueOpts(cue.AsCue(), false)
+				goSafe(func() {
+					if warmErr := gsp.Warm(cue.Filename, opts); warmErr != nil {
+						log.Printf("CuTePi: scheduled cue %d prewarm: %v", cue.CuePos, warmErr)
+					}
+				})
+				time.AfterFunc(d, safe(func() {
+					if !gsp.InstallWarm(cue.Filename, opts) {
+						fireScheduled()
+					}
+				}))
+			}
+		}
+	}
 }

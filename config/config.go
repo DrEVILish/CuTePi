@@ -13,12 +13,11 @@ import (
 
 type Config struct {
 	Port           int    `json:"port"`
-	PollInterval   int    `json:"poll_interval_ms"`
 	Loop           bool   `json:"loop"`
 	AuthPassword   string `json:"auth_password,omitempty"` // empty = no auth (LAN default)
 	WorkingDir     string `json:"working_dir"`
 	ConfigFilePath string `json:"config_file_path"`
-	Db             struct {
+	Db         struct {
 		Location string `json:"location"`
 	} `json:"db"`
 	Media struct {
@@ -27,6 +26,23 @@ type Config struct {
 	Thumbnails struct {
 		Location string `json:"location"`
 	} `json:"thumbnails"`
+	// Display/Audio tune the pipeline (GStreamer caps + sink choice);
+	// UseEDID hands mode control to the connected destination instead.
+	Display struct {
+		Resolution string `json:"resolution"` // "1920x1080"; "" = no forced caps
+		Refresh    int    `json:"refresh_hz"` // wall refresh in Hz; 0 = unset
+		UseEDID    bool   `json:"use_edid"`   // trust the destination's EDID over manual numbers
+	} `json:"display"`
+	Audio struct {
+		Device   string `json:"device"`   // ALSA/Pulse sink name; "" = automatic
+		Channels string `json:"channels"` // "2.0" default
+		Rate     int    `json:"rate"`     // sink sample rate; 0 = pipe as-is
+	} `json:"audio"`
+	AP struct {
+		Enabled  bool   `json:"enabled"`
+		SSID     string `json:"ssid"`
+		Password string `json:"password"`
+	} `json:"hotspot"`
 }
 
 // conf is read by the auth middleware and every settings getter on their own
@@ -40,8 +56,6 @@ var (
 
 const (
 	defaultPort         = 3000
-	defaultPollInterval = 100
-	minPollInterval     = 10
 	defaultWorkingDir   = "cutepi"
 	defaultConfigDir    = "config"
 	defaultConfig       = "config.json"
@@ -97,10 +111,6 @@ func resolveDefaults(getenv func(string) string, homePath string) Config {
 	c.Port, _ = strconv.Atoi(getenv("PORT"))
 	if c.Port == 0 {
 		c.Port = defaultPort
-	}
-	c.PollInterval, _ = strconv.Atoi(getenv("POLL_INTERVAL_MS"))
-	if c.PollInterval == 0 {
-		c.PollInterval = defaultPollInterval
 	}
 	return c
 }
@@ -174,14 +184,13 @@ func LoadConfig() {
 			conf.Port = port
 		}
 	}
-	if raw := os.Getenv("POLL_INTERVAL_MS"); raw != "" {
-		if interval, parseErr := strconv.Atoi(raw); parseErr == nil && interval > 0 {
-			conf.PollInterval = interval
-		}
+	// HDMI-2.0@48k defaults: a fresh config (or an old file pre-dating the
+	// Audio tab) gets the projector default; explicit zeros stay valid.
+	if conf.Audio.Channels == "" {
+		conf.Audio.Channels = "2.0"
 	}
-
-	if conf.PollInterval < minPollInterval {
-		conf.PollInterval = minPollInterval
+	if conf.Audio.Rate == 0 {
+		conf.Audio.Rate = 48000
 	}
 	confMu.Unlock()
 
@@ -242,13 +251,6 @@ func Port() int {
 	return conf.Port
 }
 
-// PollInterval returns the client poll interval, in milliseconds.
-func PollInterval() int {
-	confMu.RLock()
-	defer confMu.RUnlock()
-	return conf.PollInterval
-}
-
 // Loop returns whether newly loaded clips loop back to the start on end-of-
 // stream by default.
 func Loop() bool {
@@ -263,18 +265,6 @@ func SetLoop(loop bool) {
 	conf.Loop = loop
 	confMu.Unlock()
 	SaveConfig()
-}
-
-// SetPollInterval validates and updates the poll interval, persisting it.
-func SetPollInterval(ms int) error {
-	if ms < minPollInterval {
-		return fmt.Errorf("poll interval must be >= %dms", minPollInterval)
-	}
-	confMu.Lock()
-	conf.PollInterval = ms
-	confMu.Unlock()
-	SaveConfig()
-	return nil
 }
 
 // SetPort validates and updates the configured port, persisting it.
@@ -312,6 +302,117 @@ func SetAuthPassword(pw string) {
 	conf.AuthPassword = strings.TrimSpace(pw)
 	confMu.Unlock()
 	SaveConfig()
+}
+
+// Display returns the wall/output display settings.
+func Display() struct {
+	Resolution string
+	RefreshHz  int
+	UseEDID    bool
+} {
+	confMu.RLock()
+	defer confMu.RUnlock()
+	return struct {
+		Resolution string
+		RefreshHz  int
+		UseEDID    bool
+	}{conf.Display.Resolution, conf.Display.Refresh, conf.Display.UseEDID}
+}
+
+// SetDisplay validates and persists the display settings (manual mode).
+func SetDisplay(resolution string, refreshHz int, useEDID bool) error {
+	if resolution != "" {
+		parts := strings.SplitN(resolution, "x", 2)
+		w, herr := strconv.Atoi(parts[0])
+		var h int
+		if len(parts) == 2 {
+			h, herr = strconv.Atoi(parts[1])
+		}
+		if herr != nil || w < 320 || h < 240 || w > 7680 || h > 4320 {
+			return fmt.Errorf("invalid resolution %q (want e.g. 1920x1080)", resolution)
+		}
+	}
+	if refreshHz < 0 || refreshHz > 240 {
+		return fmt.Errorf("invalid refresh rate %d", refreshHz)
+	}
+	confMu.Lock()
+	conf.Display = struct {
+		Resolution string `json:"resolution"`
+		Refresh    int    `json:"refresh_hz"`
+		UseEDID    bool   `json:"use_edid"`
+	}{resolution, refreshHz, useEDID}
+	confMu.Unlock()
+	SaveConfig()
+	return nil
+}
+
+// Audio returns the audio output settings.
+func Audio() struct {
+	Device   string
+	Channels string
+	Rate     int
+} {
+	confMu.RLock()
+	defer confMu.RUnlock()
+	return struct {
+		Device   string
+		Channels string
+		Rate     int
+	}{conf.Audio.Device, conf.Audio.Channels, conf.Audio.Rate}
+}
+
+// SetAudio validates and persists the audio output settings.
+func SetAudio(device, channels string, rate int) error {
+	if rate < 0 || rate > 192000 {
+		return fmt.Errorf("invalid sample rate %d", rate)
+	}
+	switch channels {
+	case "", "2.0", "2.1", "5.1", "7.1":
+	default:
+		return fmt.Errorf("invalid channel layout %q", channels)
+	}
+	confMu.Lock()
+	conf.Audio.Device, conf.Audio.Channels, conf.Audio.Rate = strings.TrimSpace(device), channels, rate
+	confMu.Unlock()
+	SaveConfig()
+	return nil
+}
+
+// AP returns the Wi-Fi access-point settings.
+func AP() struct {
+	Enabled bool
+	SSID    string
+	Pass    string
+} {
+	confMu.RLock()
+	defer confMu.RUnlock()
+	return struct {
+		Enabled bool
+		SSID    string
+		Pass    string
+	}{conf.AP.Enabled, conf.AP.SSID, conf.AP.Password}
+}
+
+// SetAP validates and persists the Wi-Fi access-point settings (persist ONLY;
+// enabling/disabling the actual hotspot is the network routes' system action).
+func SetAP(ssid, pass string, enabled bool) error {
+	if enabled {
+		if len(ssid) < 1 || len(ssid) > 32 {
+			return fmt.Errorf("SSID must be 1-32 characters")
+		}
+		if len(pass) != 0 && len(pass) < 8 {
+			return fmt.Errorf("WPA password must be at least 8 characters (or empty for open)")
+		}
+	}
+	confMu.Lock()
+	conf.AP = struct {
+		Enabled  bool   `json:"enabled"`
+		SSID     string `json:"ssid"`
+		Password string `json:"password"`
+	}{enabled, ssid, pass}
+	confMu.Unlock()
+	SaveConfig()
+	return nil
 }
 
 // WorkingDir returns the working directory from the configuration

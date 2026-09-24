@@ -1165,7 +1165,7 @@ func TestSettingsGet(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("expected a JSON response, got: %s", w.Body.String())
 	}
-	for _, key := range []string{"port", "pollInterval"} {
+	for _, key := range []string{"port", "display", "audio", "ap"} {
 		if _, ok := body[key]; !ok {
 			t.Fatalf("expected the settings response to contain %q, got: %s", key, w.Body.String())
 		}
@@ -1178,8 +1178,14 @@ func TestSettingsPost(t *testing.T) {
 	r := setupTestServer(t)
 
 	form := url.Values{
-		"port":         {"4010"},
-		"pollInterval": {"250"},
+		"port":             {"4010"},
+		"displayRefresh":   {"60"},
+		"audioChannels":    {"2.0"},
+		"audioRate":        {"48000"},
+		"apSSID":           {"CuTePi-Upload"},
+		"apPass":           {"upstage-pass"},
+		"apEnabled":        {"true"},
+		"displayUseEDID":   {"false"},
 	}
 	req := httptest.NewRequest("POST", "/api/settings", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1194,6 +1200,41 @@ func TestSettingsPost(t *testing.T) {
 	}
 	if msg, ok := body["message"].(string); !ok || !strings.Contains(msg, "restart") {
 		t.Fatalf("expected a restart-required message, got: %s", w.Body.String())
+	}
+	if msg, ok := body["display"]; ok {
+		t.Logf("display: %v", msg)
+	}
+	if got := config.Audio().Rate; got != 48000 {
+		t.Fatalf("Audio().Rate = %d, want 48000 (per-tab form post should persist)", got)
+	}
+	if got := config.Display().RefreshHz; got != 60 {
+		t.Fatalf("Display().RefreshHz = %d, want 60", got)
+	}
+	if got := config.AP(); !got.Enabled || got.SSID != "CuTePi-Upload" || got.Pass != "upstage-pass" {
+		t.Fatalf("AP() = %+v, want enabled CuTePi-Upload", got)
+	}
+}
+
+// A settings POST without the Network tab fields (older clients, the GO
+// bar, cue-page modals) must NOT erase a configured hotspot; and a blank
+// AP password must keep the stored one.
+func TestSettingsPostKeepsAP(t *testing.T) {
+	r := setupTestServer(t)
+	if err := config.SetAP("CuTePi-Upload", "upstage-pass", true); err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"port": {"4000"}}
+	req := httptest.NewRequest("POST", "/api/settings", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("post = %d: %s", w.Code, w.Body.String())
+	}
+	ap := config.AP()
+	if !ap.Enabled || ap.SSID != "CuTePi-Upload" || ap.Pass != "upstage-pass" {
+		t.Fatalf("partial settings post erased the hotspot: %+v", ap)
 	}
 }
 

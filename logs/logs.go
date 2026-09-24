@@ -241,7 +241,9 @@ const (
 
 // NET - network startup info (network.go).
 const (
-	NETListErr = "NET-E300" // error fetching network interfaces
+	NETListErr     = "NET-E300" // error fetching network interfaces
+	NETHotspot     = "NET-E310" // Wi-Fi hotspot applied (up/down/edited)
+	NETHotspotWarn = "NET-E311" // hotspot failed but the settings save went through
 )
 
 // AUD - structured playback audit records (also exposed to the Web UI).

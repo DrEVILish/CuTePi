@@ -220,6 +220,15 @@ func Api(rg *gin.RouterGroup) {
 		if override := c.Query("url"); override != "" {
 			target = override
 		}
+		if c.Query("type") == "wifi" {
+			// Wi-Fi join code (Android hostapd 2.x syntax): clients scan it
+			// straight into their network list - used by the Network tab.
+			ap := config.AP()
+			target = fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", ap.SSID, ap.Pass)
+			if ap.Pass == "" {
+				target = fmt.Sprintf("WIFI:T:nopass;S:%s;;", ap.SSID)
+			}
+		}
 		png, err := qrcode.Encode(target, qrcode.Medium, 256)
 		if err != nil {
 			c.String(http.StatusInternalServerError, err.Error())
@@ -544,10 +553,9 @@ func Api(rg *gin.RouterGroup) {
 	// Header connection tooltip (broadcast-pin hover): server + client facts.
 	rg.GET("/serverinfo", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"clients":     ws.ClientCount(),
-			"live":        ws.ClientCount() > 0,
-			"uptimeS":     int(time.Since(startTime).Seconds()),
-			"pollMs":      config.PollInterval(),
+			"clients": ws.ClientCount(),
+			"live":    ws.ClientCount() > 0,
+			"uptimeS": int(time.Since(startTime).Seconds()),
 		})
 	})
 
@@ -662,7 +670,7 @@ func Api(rg *gin.RouterGroup) {
 			BeforeKind string `json:"beforeKind"` // "cue" | "group" | "end"
 			BeforeID   int    `json:"beforeId"`
 			Join       bool   `json:"join"`
-			ForceTop   bool   `json:"forceTop"` // gap drop on a group boundary: stay top-level
+			ForceTop   bool   `json:"forceTop"`  // gap drop on a group boundary: stay top-level
 			JoinFirst  bool   `json:"joinFirst"` // expanded-header drop: first cue in group (§5.4)
 			Parent     *int   `json:"parent"`    // explicit band membership (§5.4)
 			After      int    `json:"after"`     // member-slot drop: insert after this cue
@@ -734,35 +742,54 @@ func Api(rg *gin.RouterGroup) {
 		c.Status(http.StatusNoContent)
 	})
 	rg.GET("/settings", func(c *gin.Context) {
+		display, audio := config.Display(), config.Audio()
+		ap := config.AP()
 		c.JSON(http.StatusOK, gin.H{
-			"port":         config.Port(),
-			"pollInterval": config.PollInterval(),
-			"loop":         gsp.Loop(),
-			"authEnabled":  config.HasAuth(), // never return the password itself
-			"panicHold":    ctp.GetPanicHoldImage(),
-			"autoNumber":   ctp.GetAutoNumber(),
-			"goAdvance":    ctp.GetGoAdvance(),
-			"showMode":     ctp.GetShowMode(),
+			"port":        config.Port(),
+			"loop":        gsp.Loop(),
+			"authEnabled": config.HasAuth(), // never return the password itself
+			"panicHold":   ctp.GetPanicHoldImage(),
+			"autoNumber":  ctp.GetAutoNumber(),
+			"goAdvance":   ctp.GetGoAdvance(),
+			"showMode":    ctp.GetShowMode(),
+			"display": gin.H{
+				"resolution": display.Resolution,
+				"refreshHz":  display.RefreshHz,
+				"useEDID":    display.UseEDID,
+			},
+			"audio": gin.H{
+				"device":   audio.Device,
+				"channels": audio.Channels,
+				"rate":     audio.Rate,
+			},
+			"ap": gin.H{
+				"enabled": ap.Enabled,
+				"ssid":    ap.SSID,
+				//PASSWORD NEVER RETURNED — only whether it is set
+				"passwordSet": ap.Pass != "",
+			},
 		})
 	})
 
 	rg.POST("/settings", func(c *gin.Context) {
 		var body struct {
-			Port          int    `json:"port" form:"port"`
-			PollInterval  int    `json:"pollInterval" form:"pollInterval"`
-			Loop          *bool  `json:"loop" form:"loop"`
-			Password      string `json:"password" form:"password"`
-			ClearPassword bool   `json:"clearPassword" form:"clearPassword"`
+			Port              int    `json:"port" form:"port"`
+			Loop              *bool  `json:"loop" form:"loop"`
+			Password          string `json:"password" form:"password"`
+			ClearPassword     bool   `json:"clearPassword" form:"clearPassword"`
+			DisplayResolution string `json:"displayResolution" form:"displayResolution"`
+			DisplayRefresh    int    `json:"displayRefresh" form:"displayRefresh"`
+			DisplayUseEDID    bool   `json:"displayUseEDID" form:"displayUseEDID"`
+			AudioDevice       string `json:"audioDevice" form:"audioDevice"`
+			AudioChannels     string `json:"audioChannels" form:"audioChannels"`
+			AudioRate         int    `json:"audioRate" form:"audioRate"`
+			APSSID            string `json:"apSSID" form:"apSSID"`
+			APPass            string `json:"apPass" form:"apPass"`
+			APEnabled         *bool  `json:"apEnabled" form:"apEnabled"`
 		}
 		if err := c.ShouldBind(&body); err != nil {
 			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
 			return
-		}
-		if body.PollInterval > 0 {
-			if err := config.SetPollInterval(body.PollInterval); err != nil {
-				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
-				return
-			}
 		}
 		if body.Port > 0 {
 			if err := config.SetPort(body.Port); err != nil {
@@ -780,12 +807,53 @@ func Api(rg *gin.RouterGroup) {
 		} else if pw := strings.TrimSpace(body.Password); pw != "" {
 			config.SetAuthPassword(pw)
 		}
+		// Validation-on-save but the form passes ALL fields together; an
+		// all-default triplet means "not touched by this form post" and
+		// must not wipe real settings (older clients, partial pages).
+		if body.DisplayResolution != "" || body.DisplayRefresh > 0 || body.DisplayUseEDID {
+			if err := config.SetDisplay(body.DisplayResolution, body.DisplayRefresh, body.DisplayUseEDID); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if body.AudioDevice != "" || body.AudioRate > 0 || body.AudioChannels != "" {
+			if err := config.SetAudio(body.AudioDevice, body.AudioChannels, body.AudioRate); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		}
+		// AP settings persist always; turning the hotspot on/off is a system
+		// action handled by /api/network/ap so a failed hostapd setup never
+		// blocks saving an SSID twice.
+		// AP fields are only applied when the Network tab actually posted
+		// them (an SSID value or the checkbox); blank w/o checkbox must not
+		// erase a configured hotspot. A blank pass keeps the stored one —
+		// the tab never re-renders existing passwords (like auth).
+		if body.APSSID != "" || body.APEnabled != nil {
+			apEnabled := false
+			if body.APEnabled != nil {
+				apEnabled = *body.APEnabled
+			}
+			pass := body.APPass
+			if pass == "" {
+				pass = config.AP().Pass
+			}
+			if err := config.SetAP(body.APSSID, pass, apEnabled); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+			if apErr := networkAPApply(); apErr != nil {
+				networkAPWarn(apErr) // hotspot failure must never kill the save
+			}
+		}
+		if apErr := networkAPApply(); apErr != nil {
+			networkAPWarn(apErr) // hotspot failure must never kill the save
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"port":         config.Port(),
-			"pollInterval": config.PollInterval(),
-			"loop":         gsp.Loop(),
-			"authEnabled":  config.HasAuth(),
-			"message":      "Port changes require a server restart to take effect.",
+			"port":        config.Port(),
+			"loop":        gsp.Loop(),
+			"authEnabled": config.HasAuth(),
+			"message":     "Port changes require a server restart to take effect.",
 		})
 	})
 
@@ -1176,9 +1244,9 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		var body struct {
-			Enabled   bool `json:"enabled"`
-			Day       int  `json:"day"`       // 1=Mon .. 7=Sun
-			TimeHhMm  string `json:"timeHhMm"` // "HH:MM" or "HH:MM:SS"
+			Enabled  bool   `json:"enabled"`
+			Day      int    `json:"day"`      // 1=Mon .. 7=Sun
+			TimeHhMm string `json:"timeHhMm"` // "HH:MM" or "HH:MM:SS"
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.String(http.StatusBadRequest, "invalid schedule payload: "+err.Error())

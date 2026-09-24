@@ -33,7 +33,7 @@ import (
 // a time — which is what the ftl-themes contract requires anyway.
 type Theme struct {
 	// ID is the stable, unambiguous identifier stored in localStorage and
-	// used by the settings picker: "app:<name>", "ftl:<slug>" or "custom".
+	// used by the settings picker: "app:<name>" or "ftl:<slug>".
 	ID string `json:"id"`
 	// Name is the html[data-theme] value the stylesheet is keyed on.
 	Name string `json:"name"`
@@ -156,10 +156,10 @@ func ftlThemes() []Theme {
 	return out
 }
 
-// ThemeNames reports the valid data-theme values (discovered themes plus the
-// token-driven "custom" theme, which has no file).
+// ThemeNames reports the valid data-theme values reaching the inspector
+// and cuesheet constraints ("app:<name>", "ftl:<slug>", or the bare app name).
 func ThemeNames() []string {
-	names := []string{"custom"}
+	names := []string{}
 	for _, t := range Themes() {
 		names = append(names, t.Name)
 	}

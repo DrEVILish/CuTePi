@@ -106,9 +106,7 @@ htmx.on("htmx:after:request", (e) => {
       try {
         const body = JSON.parse(e.detail.ctx.text || "{}");
         const sPort = document.getElementById("settingsPort");
-        const sPoll = document.getElementById("settingsPollInterval");
         if (sPort) sPort.value = body.port;
-        if (sPoll) sPoll.value = body.pollInterval;
         const authState = document.getElementById("settingsAuthState");
         if (authState && typeof body.authEnabled === "boolean") {
           authState.textContent = body.authEnabled
@@ -122,7 +120,7 @@ htmx.on("htmx:after:request", (e) => {
         status.className = "text-success";
       }
     } else {
-      status.textContent = "Save failed - check the values (port 1-65535, poll interval >= 10ms).";
+      status.textContent = "Save failed - check the values on each tab.";
       status.className = "text-danger";
     }
   }
@@ -194,28 +192,6 @@ fetch("/api/themes", { headers: { Accept: "application/json" } })
     }
   })
   .catch(() => {});
-const CUSTOM_THEME_KEY = "cutepi.customTheme";
-
-// Inject (or update) a <style> that applies the saved custom theme's design
-// tokens to :root[data-theme=custom]. The pasted JSON is a flat map of
-// --ctp-* CSS variable names to values.
-function applyCustomTheme(tokens) {
-  let style = document.getElementById("cutepi-custom-theme");
-  if (!style) {
-    style = document.createElement("style");
-    style.id = "cutepi-custom-theme";
-    document.head.appendChild(style);
-  }
-  if (!tokens || typeof tokens !== "object") {
-    style.textContent = "";
-    return;
-  }
-  const decls = Object.entries(tokens)
-    .map(([k, v]) => "  " + k + ": " + v + ";")
-    .join("\n");
-  style.textContent = ":root[data-theme=custom] {\n" + decls + "\n}";
-}
-
 // Edit/Show mode (footer toggle): Show mode arms scheduled triggers and
 // test-pattern output; Edit mode is for building. The server persists the
 // mode and renders the initial body class; this only flips it live.
@@ -283,35 +259,23 @@ function pollScheduleFlash() {
 pollScheduleFlash();
 setInterval(pollScheduleFlash, 10000);
 
-// Themes are identified by id ("app:lcars", "ftl:lcars", "custom") because an
+// Themes are identified by id ("app:lcars", "ftl:lcars") because an
 // app theme and a shared ftl-themes theme can carry the same data-theme name.
 // The id -> {name, href} map is rendered into the page by header.html and
 // refreshed from /api/themes below.
 function applyAppTheme(id) {
-  if (id !== "custom" && id.indexOf(":") === -1) id = "app:" + id; // legacy value
-  if (id !== "custom" && !appThemeMap[id]) id = DEFAULT_THEME_ID;
-  const theme = id === "custom" ? "custom" : appThemeMap[id].name;
+  if (id.indexOf(":") === -1) id = "app:" + id; // legacy bare-name value
+  if (!appThemeMap[id]) id = DEFAULT_THEME_ID;
   const link = document.getElementById("cutepi-theme-css");
   if (link) {
-    // No href at all for "custom": href="" would resolve to this page and the
-    // browser would fetch the HTML document and try to parse it as CSS.
-    if (id === "custom") link.removeAttribute("href");
-    else {
-      // Keep the ?v= stamp the boot script put on the link so the swapped-in
-      // stylesheet caches under the same deployment version.
-      const v = (link.getAttribute("href") || "").split("?")[1];
-      link.href = appThemeMap[id].href + (v ? "?" + v : "");
-    }
+    // Keep the ?v= stamp the boot script put on the link so the swapped-in
+    // stylesheet caches under the same deployment version.
+    const v = (link.getAttribute("href") || "").split("?")[1];
+    link.href = appThemeMap[id].href + (v ? "?" + v : "");
   }
-  document.documentElement.dataset.theme = theme;
-  document.documentElement.dataset.bsTheme =
-    (id !== "custom" && appThemeMap[id] && appThemeMap[id].scheme) || "dark";
+  document.documentElement.dataset.theme = appThemeMap[id].name;
+  document.documentElement.dataset.bsTheme = appThemeMap[id].scheme || "dark";
   document.documentElement.dataset.themeId = id;
-  if (theme === "custom") {
-    let tokens = null;
-    try { tokens = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY)); } catch (e) {}
-    applyCustomTheme(tokens);
-  }
   try {
     localStorage.setItem("cutepi.theme", id);
   } catch (e) {}
@@ -319,26 +283,7 @@ function applyAppTheme(id) {
 
 document.addEventListener("change", (e) => {
   if (e.target.id === "settingsTheme") {
-    const value = e.target.value;
-    if (value === "custom") {
-      const el = document.getElementById("settingsCustomTheme");
-      if (el) {
-        try {
-          const tokens = JSON.parse(el.value);
-          localStorage.setItem(CUSTOM_THEME_KEY, el.value);
-          applyCustomTheme(tokens);
-        } catch (err) {
-          const live = document.getElementById("settingsStatus");
-          if (live) {
-            live.textContent = "Custom theme JSON is invalid.";
-            live.className = "text-danger";
-          }
-          el.value = localStorage.getItem(CUSTOM_THEME_KEY) || "{}";
-          return; // don't switch theme on invalid paste
-        }
-      }
-    }
-    applyAppTheme(value);
+    applyAppTheme(e.target.value);
   }
 });
 
@@ -525,7 +470,6 @@ window.addEventListener("keydown", (e) => {
         '<div><strong>' + (info.live ? "Live" : "Offline") + "</strong> — " + info.clients +
         " client" + (info.clients === 1 ? "" : "s") + " connected</div>" +
         "<div>Server uptime: " + up + "</div>" +
-        "<div>Poll fallback: " + info.pollMs + " ms</div>" +
         '<div class="text-muted small">' + (info.live ? "Push updates over WebSocket" : "HTTP polling only — socket down") + "</div>";
       document.body.appendChild(pop);
       const r = pin.getBoundingClientRect();
@@ -1421,26 +1365,18 @@ function patternOptions() {
 (function () {
   if (!document.getElementById("mediainfo")) return;
 
-  let pollMs = 500;
   let lastSeen = 0;
   let fallback = null;
-
-  fetch("/api/settings")
-    .then((res) => res.json())
-    .then((settings) => {
-      if (Number.isFinite(settings.pollInterval) && settings.pollInterval >= 10) {
-        pollMs = settings.pollInterval;
-      }
-    })
-    .catch(() => {})
-    .finally(() => setFallback(true)); // poll until the socket proves itself
+  setFallback(true); // poll until the socket proves itself
 
   // HTTP polling is the WS-disconnected fallback ONLY: while the socket is
   // up, every server signal (cutepi-sync) pulls once, version-guarded. The
   // server pushes one sync per displayed second while playing (gsp ticker),
   // so the progress clock advances without any timer-driven requests.
   function setFallback(on) {
-    if (on && !fallback) fallback = setInterval(refresh, pollMs);
+    // Fixed 500ms: the settings poll interval is gone — WebSocket pushes
+    // are the primary path and this knob was boot-time noise.
+    if (on && !fallback) fallback = setInterval(refresh, 500);
     if (!on && fallback) { clearInterval(fallback); fallback = null; }
   }
   document.addEventListener("cutepi-ws", (e) => setFallback(!e.detail.connected));
