@@ -5,32 +5,32 @@
 <div id="cueinspector-body" class="groupinspector-body" data-group-id="{{ .Group.GroupID }}">
   {{ if .Group.Slideshow }}
   <div class="alert alert-info py-2 px-3 small">
-    <i class="bi bi-play-circle me-1"></i>
+    <i class="bi bi-play-circle"></i>
     Slideshow: its cues cycle automatically with the settings below. Press <em>Play</em> on the sheet to start it.
   </div>
   {{ end }}
 
   <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML"
     hx-trigger="change delay:200ms, submit"
-    class="gi-form vstack gap-2" style="max-width: 42rem;">
-    <div class="small text-muted" aria-label="Group runtime">
-      <i class="bi bi-hourglass-split me-1"></i>
+    class="gi-form vstack is-gap-xs" style="max-width: 42rem;">
+    <div class="small ftl-text-muted" aria-label="Group runtime">
+      <i class="bi bi-hourglass-split"></i>
       Runtime {{ .DurationTotal }}{{ if ne .Remaining "00:00" }} · remaining {{ .Remaining }}{{ end }}
     </div>
-    <div class="d-flex gap-2">
+    <div class="d-flex is-gap-xs">
       <div class="flex-grow-1">
-        <label class="form-label small mb-0" for="group-name">Name</label>
+        <label class="ftl-label small mb-0" for="group-name">Name</label>
         <input id="group-name" name="name" class="form-control form-control-sm" value="{{ .Group.Name }}">
       </div>
       <div>
-        <label class="form-label small mb-0" for="group-cuenum">Number</label>
-        <input id="group-cuenum" name="cueNum" class="form-control form-control-sm" style="width:6em" maxlength="24"
+        <label class="ftl-label small mb-0" for="group-cuenum">Number</label>
+        <input id="group-cuenum" name="cueNum" class="ftl-input ftl-input" style="width:6em" maxlength="24"
           value="{{ .Group.CueNum }}">
       </div>
     </div>
     <div class="row g-2">
       <div class="col">
-        <label class="form-label small mb-1" for="group-swatches">Colour</label>
+        <label class="ftl-label small mb-1" for="group-swatches">Colour</label>
         <div class="insp-swatches" id="group-swatches" role="radiogroup" aria-label="Group colour">
           <label class="insp-swatch insp-swatch-none" title="None">
             <input type="radio" name="color" value="" aria-label="No colour" {{ if not $.Group.Color }}checked{{ end }}>
@@ -45,29 +45,29 @@
         </div>
       </div>
     </div>
-    <div class="d-flex flex-wrap gap-2">
+    <div class="d-flex is-wrap is-gap-xs">
       <div class="form-check form-check-inline">
         <input class="form-check-input" type="checkbox" id="group-slideshow" name="slideshow" value="true" {{ if .Group.Slideshow }}checked{{ end }}>
-        <label class="form-check-label small" for="group-slideshow">Slideshow</label>
+        <label class="small" for="group-slideshow">Slideshow</label>
       </div>
       <div class="form-check form-check-inline" id="group-slideshow-opts">
         <input class="form-check-input" type="checkbox" id="group-shuffle" name="shuffle" value="true" {{ if .Group.Shuffle }}checked{{ end }} {{ if not .Group.Slideshow }}disabled{{ end }}>
-        <label class="form-check-label small" for="group-shuffle">Shuffle</label>
+        <label class="small" for="group-shuffle">Shuffle</label>
       </div>
       <div class="form-check form-check-inline">
         <input class="form-check-input" type="checkbox" id="group-loop" name="loop" value="true" {{ if .Group.Loop }}checked{{ end }} {{ if not .Group.Slideshow }}disabled{{ end }}>
-        <label class="form-check-label small" for="group-loop">Loop</label>
+        <label class="small" for="group-loop">Loop</label>
       </div>
     </div>
-    <div class="d-flex gap-2 {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
+    <div class="ftl-row is-gap-xs {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
       <div>
-        <label class="form-label small mb-0" for="group-duration">Hold each image (s)</label>
-        <input id="group-duration" name="durationSecs" type="number" min="0" step="1" class="form-control form-control-sm" style="width:8em"
+        <label class="ftl-label small mb-0" for="group-duration">Hold each image (s)</label>
+        <input id="group-duration" name="durationSecs" type="number" min="0" step="1" class="ftl-input ftl-input" style="width:8em"
           value="{{ if .Group.DurationMS }}{{ div .Group.DurationMS 1000 }}{{ end }}" placeholder="5">
       </div>
       <div>
-        <label class="form-label small mb-0" for="group-fade">Fade between (s)</label>
-        <input id="group-fade" name="fadeSecs" type="number" min="0" step="1" class="form-control form-control-sm" style="width:8em"
+        <label class="ftl-label small mb-0" for="group-fade">Fade between (s)</label>
+        <input id="group-fade" name="fadeSecs" type="number" min="0" step="1" class="ftl-input ftl-input" style="width:8em"
           value="{{ if .Group.FadeMS }}{{ div .Group.FadeMS 1000 }}{{ end }}" placeholder="0">
       </div>
     </div>

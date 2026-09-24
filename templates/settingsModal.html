@@ -7,7 +7,7 @@
       a shared ftl-themes theme restyle the dialog without markup changes.
       App classes stay authoritative under app themes. -->
     <div class="modal-content ftl-modal">
-      <div class="modal-header flex-column align-items-center pb-1">
+      <div class="modal-header flex-column is-items-center pb-1">
         <img src="/img/cutepi-logo.svg" alt="CuTePi" class="cutepi-logo mb-1">
         <h1 class="modal-title fs-5" id="settingsModalLabel">Settings</h1>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -29,8 +29,8 @@
           <div class="tab-content pt-2">
             <div class="tab-pane fade show active" id="settingsPaneAppearance" role="tabpanel">
               <div class="ftl-field">
-                <label class="form-label ftl-label" for="settingsTheme">Theme</label>
-                <select class="form-select ftl-select" id="settingsTheme" aria-describedby="settingsThemeHelp">
+                <label class="ftl-label ftl-label" for="settingsTheme">Theme</label>
+                <select class="ftl-select ftl-select" id="settingsTheme" aria-describedby="settingsThemeHelp">
                   <!-- Discovered at render time: any name.css added to
                     public/css/themes appears here with no code changes, as does any
                     bundle from the pinned ftl-themes submodule. Values are ids
@@ -39,53 +39,53 @@
                   {{ range themeFiles }}<option value="{{ .ID }}">{{ .Label }}</option>
                   {{ end }}
                 </select>
-                <div id="settingsThemeHelp" class="form-text text-muted ftl-field-hint">Theme is saved in this browser. Themes marked &ldquo;shared&rdquo; come from the ftl-themes library and change layout as well as colour.</div>
+                <div id="settingsThemeHelp" class="ftl-field-hint ftl-text-muted ftl-field-hint">Theme is saved in this browser. Themes marked &ldquo;shared&rdquo; come from the ftl-themes library and change layout as well as colour.</div>
               </div>
             </div>
 
             <div class="tab-pane fade" id="settingsTabGeneral" role="tabpanel">
               <div class="ftl-field">
-                <label class="form-label ftl-label" for="settingsPort">Port</label>
-                <input class="form-control ftl-input" id="settingsPort" name="port" type="number" min="1" max="65535" required />
-                <div class="form-text text-muted ftl-field-hint">Port changes require a server restart to take effect.</div>
+                <label class="ftl-label ftl-label" for="settingsPort">Port</label>
+                <input class="ftl-input ftl-input" id="settingsPort" name="port" type="number" min="1" max="65535" required />
+                <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Port changes require a server restart to take effect.</div>
               </div>
 
               <div class="form-check ftl-field">
-                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsLoop" name="loop" value="true" aria-describedby="settingsLoopHelp">
+                <input class="ftl-checkbox ftl-checkbox" type="checkbox" id="settingsLoop" name="loop" value="true" aria-describedby="settingsLoopHelp">
                 <label class="form-check-label" for="settingsLoop">Loop clips by default</label>
-                <div id="settingsLoopHelp" class="form-text text-muted ftl-field-hint">When enabled, newly loaded clips restart from their start instead of stopping at end-of-stream.</div>
+                <div id="settingsLoopHelp" class="ftl-field-hint ftl-text-muted ftl-field-hint">When enabled, newly loaded clips restart from their start instead of stopping at end-of-stream.</div>
               </div>
 
               <div class="form-check ftl-field">
-                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsAutoNumber" name="autoNumber" value="true">
+                <input class="ftl-checkbox ftl-checkbox" type="checkbox" id="settingsAutoNumber" name="autoNumber" value="true">
                 <label class="form-check-label" for="settingsAutoNumber">Auto-number new cues (5, 10, 15…)</label>
-                <div class="form-text text-muted ftl-field-hint">Mid-sheet inserts take the numeric midpoint of their neighbours (e.g. 12.5). The GO bar's renumber button rewrites the whole sheet.</div>
+                <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Mid-sheet inserts take the numeric midpoint of their neighbours (e.g. 12.5). The GO bar's renumber button rewrites the whole sheet.</div>
               </div>
 
               <div class="form-check ftl-field">
-                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsGoAdvance" name="advance" value="1"
+                <input class="ftl-checkbox ftl-checkbox" type="checkbox" id="settingsGoAdvance" name="advance" value="1"
                   hx-post="/api/setting/goadvance" hx-trigger="change" hx-swap="none">
                 <label class="form-check-label" for="settingsGoAdvance">Advance selection after GO</label>
-                <div class="form-text text-muted ftl-field-hint">After firing GO, move the selection to the next cue, so repeated GOs walk down the show. When off, the selection stays on the fired cue.</div>
+                <div class="ftl-field-hint ftl-text-muted ftl-field-hint">After firing GO, move the selection to the next cue, so repeated GOs walk down the show. When off, the selection stays on the fired cue.</div>
               </div>
 
               <div class="ftl-field">
-                <label class="form-label ftl-label">Panic holding image</label>
-                <div class="d-flex align-items-center gap-2">
-                  <span id="settingsPanicHold" class="form-text text-muted mb-0">off (cut to black)</span>
-                  <button type="button" class="btn btn-sm btn-outline-secondary ftl-btn ftl-btn-sm" id="settingsPanicHoldClear">Clear</button>
+                <label class="ftl-label ftl-label">Panic holding image</label>
+                <div class="ftl-row is-items-center is-gap-xs">
+                  <span id="settingsPanicHold" class="ftl-field-hint ftl-text-muted mb-0">off (cut to black)</span>
+                  <button type="button" class="btn ftl-btn-sm ftl-btn-secondary ftl-btn ftl-btn-sm" id="settingsPanicHoldClear">Clear</button>
                 </div>
-                <div class="form-text text-muted ftl-field-hint">Set from a media item's menu ("Set as holding image"). PANIC then loads and holds it instead of cutting to black.</div>
+                <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Set from a media item's menu ("Set as holding image"). PANIC then loads and holds it instead of cutting to black.</div>
               </div>
 
               <div class="ftl-field">
-                <label class="form-label ftl-label" for="settingsPassword">Operator password</label>
-                <input class="form-control ftl-input" id="settingsPassword" name="password" type="password" autocomplete="new-password" placeholder="unchanged" aria-describedby="settingsAuthHelp">
+                <label class="ftl-label ftl-label" for="settingsPassword">Operator password</label>
+                <input class="ftl-input ftl-input" id="settingsPassword" name="password" type="password" autocomplete="new-password" placeholder="unchanged" aria-describedby="settingsAuthHelp">
                 <div class="form-check mt-1">
-                  <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsClearPassword" name="clearPassword" value="true">
+                  <input class="ftl-checkbox ftl-checkbox" type="checkbox" id="settingsClearPassword" name="clearPassword" value="true">
                   <label class="form-check-label" for="settingsClearPassword">Remove password (open access)</label>
                 </div>
-                <div id="settingsAuthHelp" class="form-text text-muted ftl-field-hint">
+                <div id="settingsAuthHelp" class="ftl-field-hint ftl-text-muted ftl-field-hint">
                   <span id="settingsAuthState">Checking&hellip;</span>
                   Leave blank to keep the current password. When set, the browser asks
                   for it once (any username) and all devices need it to reach CuTePi.
@@ -95,20 +95,20 @@
 
             <div class="tab-pane fade" id="settingsTabDisplay" role="tabpanel">
               <div class="form-check ftl-field">
-                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsDisplayEDID" name="displayUseEDID" value="true">
+                <input class="ftl-checkbox ftl-checkbox" type="checkbox" id="settingsDisplayEDID" name="displayUseEDID" value="true">
                 <label class="form-check-label" for="settingsDisplayEDID">Use destination EDID</label>
-                <div class="form-text text-muted ftl-field-hint">Follow the display/proscenium destination's reported mode (EDID) instead of the manual numbers below. The queue/sink then stay at the destination's mode.</div>
+                <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Follow the display/proscenium destination's reported mode (EDID) instead of the manual numbers below. The queue/sink then stay at the destination's mode.</div>
               </div>
               <div class="row">
                 <div class="col ftl-field">
-                  <label class="form-label ftl-label" for="settingsDisplayResolution">Resolution</label>
-                  <input class="form-control ftl-input" id="settingsDisplayResolution" name="displayResolution" type="text" placeholder="1920x1080" />
-                  <div class="form-text text-muted ftl-field-hint">Width x height in pixels; decoded video is retuned to this size (videoscale caps). Empty = the file's own size. Ignored when EDID mode is on.</div>
+                  <label class="ftl-label ftl-label" for="settingsDisplayResolution">Resolution</label>
+                  <input class="ftl-input ftl-input" id="settingsDisplayResolution" name="displayResolution" type="text" placeholder="1920x1080" />
+                  <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Width x height in pixels; decoded video is retuned to this size (videoscale caps). Empty = the file's own size. Ignored when EDID mode is on.</div>
                 </div>
                 <div class="col ftl-field">
-                  <label class="form-label ftl-label" for="settingsDisplayRefresh">Refresh rate (Hz)</label>
-                  <input class="form-control ftl-input" id="settingsDisplayRefresh" name="displayRefresh" type="number" min="0" max="240" placeholder="60" />
-                  <div class="form-text text-muted ftl-field-hint">Saved with the mode; applies to the destination port setup outside the pipeline.</div>
+                  <label class="ftl-label ftl-label" for="settingsDisplayRefresh">Refresh rate (Hz)</label>
+                  <input class="ftl-input ftl-input" id="settingsDisplayRefresh" name="displayRefresh" type="number" min="0" max="240" placeholder="60" />
+                  <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Saved with the mode; applies to the destination port setup outside the pipeline.</div>
                 </div>
               </div>
             </div>
@@ -116,13 +116,13 @@
             <div class="tab-pane fade" id="settingsTabAudio" role="tabpanel">
               <div class="row">
                 <div class="col ftl-field">
-                  <label class="form-label ftl-label" for="settingsAudioDevice">Output device</label>
-                  <input class="form-control ftl-input" id="settingsAudioDevice" name="audioDevice" type="text" placeholder="auto (e.g. plughw:CARD=b1,DEV=0)" />
-                  <div class="form-text text-muted ftl-field-hint">Empty = automatic (PulseAudio). When set, playback pins to this ALSA device (e.g. the HDMI sink).</div>
+                  <label class="ftl-label ftl-label" for="settingsAudioDevice">Output device</label>
+                  <input class="ftl-input ftl-input" id="settingsAudioDevice" name="audioDevice" type="text" placeholder="auto (e.g. plughw:CARD=b1,DEV=0)" />
+                  <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Empty = automatic (PulseAudio). When set, playback pins to this ALSA device (e.g. the HDMI sink).</div>
                 </div>
                 <div class="col ftl-field">
-                  <label class="form-label ftl-label" for="settingsAudioChannels">Channel layout</label>
-                  <select class="form-select ftl-select" id="settingsAudioChannels" name="audioChannels">
+                  <label class="ftl-label ftl-label" for="settingsAudioChannels">Channel layout</label>
+                  <select class="ftl-select ftl-select" id="settingsAudioChannels" name="audioChannels">
                     <option value="2.0">2.0 stereo</option>
                     <option value="2.1">2.1</option>
                     <option value="5.1">5.1</option>
@@ -130,35 +130,35 @@
                   </select>
                 </div>
                 <div class="col ftl-field">
-                  <label class="form-label ftl-label" for="settingsAudioRate">Sample rate</label>
-                  <input class="form-control ftl-input" id="settingsAudioRate" name="audioRate" type="number" min="0" step="1" placeholder="48000" />
-                  <div class="form-text text-muted ftl-field-hint">Default 48kHz HDMI: 48000. 0 = pipe the media's own rate.</div>
+                  <label class="ftl-label ftl-label" for="settingsAudioRate">Sample rate</label>
+                  <input class="ftl-input ftl-input" id="settingsAudioRate" name="audioRate" type="number" min="0" step="1" placeholder="48000" />
+                  <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Default 48kHz HDMI: 48000. 0 = pipe the media's own rate.</div>
                 </div>
               </div>
             </div>
 
             <div class="tab-pane fade" id="settingsTabNetwork" role="tabpanel">
               <div class="form-check ftl-field">
-                <input class="form-check-input ftl-checkbox" type="checkbox" id="settingsAPEnabled" name="apEnabled" value="true">
+                <input class="ftl-checkbox ftl-checkbox" type="checkbox" id="settingsAPEnabled" name="apEnabled" value="true">
                 <label class="form-check-label" for="settingsAPEnabled">Broadcast a Wi-Fi access point</label>
-                <div class="form-text text-muted ftl-field-hint">Runs a hotspot (NetworkManager) so phones can join CuTePi directly for the upload page. Requires a Wi-Fi NIC.</div>
+                <div class="ftl-field-hint ftl-text-muted ftl-field-hint">Runs a hotspot (NetworkManager) so phones can join CuTePi directly for the upload page. Requires a Wi-Fi NIC.</div>
               </div>
               <div class="row">
                 <div class="col ftl-field">
-                  <label class="form-label ftl-label" for="settingsAPSSID">SSID</label>
-                  <input class="form-control ftl-input" id="settingsAPSSID" name="apSSID" type="text" maxlength="32" placeholder="CuTePi-Upload" />
+                  <label class="ftl-label ftl-label" for="settingsAPSSID">SSID</label>
+                  <input class="ftl-input ftl-input" id="settingsAPSSID" name="apSSID" type="text" maxlength="32" placeholder="CuTePi-Upload" />
                 </div>
                 <div class="col ftl-field">
-                  <label class="form-label ftl-label" for="settingsAPPass">Password</label>
-                  <input class="form-control ftl-input" id="settingsAPPass" name="apPass" type="password" autocomplete="new-password" placeholder="unchanged" />
-                  <div class="form-text text-muted ftl-field-hint">8+ characters for WPA2; empty keeps the saved password (or an open network).</div>
+                  <label class="ftl-label ftl-label" for="settingsAPPass">Password</label>
+                  <input class="ftl-input ftl-input" id="settingsAPPass" name="apPass" type="password" autocomplete="new-password" placeholder="unchanged" />
+                  <div class="ftl-field-hint ftl-text-muted ftl-field-hint">8+ characters for WPA2; empty keeps the saved password (or an open network).</div>
                 </div>
               </div>
               <div class="ftl-field">
-                <label class="form-label ftl-label">Join code</label>
-                <div class="d-flex align-items-center gap-3" id="settingsAPQrWrap">
+                <label class="ftl-label ftl-label">Join code</label>
+                <div class="ftl-row is-items-center" id="settingsAPQrWrap">
                   <img id="settingsAPQr" src="/api/qr?type=wifi" alt="Wi-Fi join QR code" class="border rounded" width="128" height="128">
-                  <div class="form-text text-muted ftl-field-hint mb-0">Clients scan this to join the hotspot (uses the saved SSID/password, refreshed after Save).</div>
+                  <div class="ftl-field-hint ftl-text-muted ftl-field-hint mb-0">Clients scan this to join the hotspot (uses the saved SSID/password, refreshed after Save).</div>
                 </div>
               </div>
             </div>
@@ -184,8 +184,8 @@
           <div id="settingsStatus" class="mt-3"></div>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary ftl-btn ftl-btn-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="submit" class="btn btn-primary ftl-btn ftl-btn-primary">Save</button>
+          <button type="button" class="btn ftl-btn-secondary ftl-btn ftl-btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn ftl-btn-primary ftl-btn ftl-btn-primary">Save</button>
         </div>
       </form>
     </div>

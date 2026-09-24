@@ -55,12 +55,11 @@ type Theme struct {
 // "Theme-Name: Human Readable". Files without it fall back to the filename.
 var themeNameRe = regexp.MustCompile(`(?m)^\s*\*?\s*Theme-Name:\s*(.+?)\s*$`)
 
-// DefaultThemeID is what an unset or unrecognised preference resolves to. It
-// is CuTePi's own blue-future file, not the shared ftl-themes theme of the
-// same name: the two have diverged (ftl's is tuned to match a different
-// device exactly), and this app's appearance must not change just because
-// themes became shared.
-const DefaultThemeID = "app:blue-future"
+// DefaultThemeID is what an unset or unrecognised preference resolves to.
+// The theme source is the ftl-themes submodule (app: files still exist as
+// options), and xbmc — near-black home-theatre shell, glowing blue underline
+// selection — is the closest living kin of the retired app:blue-future look.
+const DefaultThemeID = "ftl:xbmc"
 
 // themesDir locates the app themes folder whether the process runs from the
 // repo root (server, smoke tests) or from routes/ (go test).

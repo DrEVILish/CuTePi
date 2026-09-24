@@ -27,31 +27,31 @@
             placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
           />
 
-          <div id="ytdl-status" class="d-none mt-3">
-            <div class="small text-muted mb-1" id="ytdl-stage" role="status" aria-live="polite">Preparing&hellip;</div>
+          <div id="ytdl-status" class="d-none ftl-mt-m">
+            <div class="small ftl-text-muted mb-1" id="ytdl-stage" role="status" aria-live="polite">Preparing&hellip;</div>
             <div class="progress ytdl-progress" style="height: 0.6rem;">
               <div class="progress-bar" id="ytdl-progress" role="progressbar" style="width: 0%"></div>
             </div>
-            <div class="small text-muted mt-1 d-flex justify-content-between ytdl-stats">
+            <div class="small ftl-text-muted mt-1 d-flex is-justify-between ytdl-stats">
               <span id="ytdl-percent">0%</span>
               <span id="ytdl-speed"></span>
               <span id="ytdl-eta"></span>
             </div>
           </div>
 
-          <div id="ytdl-rename" class="d-none mt-3">
+          <div id="ytdl-rename" class="d-none ftl-mt-m">
             <label class="form-label" for="ytdl-rename-input">Seen and imported &mdash; rename the file if you like</label>
-            <div class="d-flex gap-2">
+            <div class="d-flex is-gap-xs">
               <input class="form-control" id="ytdl-rename-input" name="name" type="text"
                 autocomplete="off" spellcheck="false" aria-label="New file name">
-              <button class="btn btn-outline-primary flex-shrink-0" type="button" id="ytdl-rename-btn">Rename</button>
+              <button class="btn ftl-btn-secondary flex-shrink-0" type="button" id="ytdl-rename-btn">Rename</button>
             </div>
           </div>
 
-          <div id="ytdl-error" class="small text-danger mt-2 d-none" role="alert"></div>
+          <div id="ytdl-error" class="small text-danger ftl-mt-xs d-none" role="alert"></div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-danger" id="download" type="submit">Download</button>
+          <button class="btn ftl-btn-danger" id="download" type="submit">Download</button>
         </div>
       </form>
     </div>

@@ -1,9 +1,9 @@
 {{ define "mediacontrols.html" }}
 
 <div id="esc" hx-trigger="esc" hx-post="/api/stop" hx-swap="none" style="display: none;"></div>
-<div class="d-flex gap-2">
+<div class="d-flex is-gap-xs">
   <div class="btn-group">
-    <button class="btn btn-sm btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Menu" aria-label="Menu"></button>
+    <button class="btn ftl-btn-sm ftl-btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Menu" aria-label="Menu"></button>
      <ul class="dropdown-menu dropdown-menu-end">
       <li>
         <button class="dropdown-item" hx-post="/api/panic" hx-swap="none" hx-confirm="PANIC: cut playback now?" type="button">

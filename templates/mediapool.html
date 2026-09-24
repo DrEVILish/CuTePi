@@ -1,45 +1,45 @@
 {{ define "mediapool.html" }}
 
 <div id="mediapool" class="d-flex flex-column h-100 position-relative">
-  <div class="d-flex align-items-center justify-content-between mb-3">
+  <div class="ftl-row is-items-center is-justify-between ftl-mb-m">
     <h5 class="mb-0">Mediapool</h5>
-    <div class="d-flex gap-2">
-      <div class="btn-group btn-group-sm" role="group" aria-label="Add media">
-        <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#uploadModal" title="Upload" aria-label="Upload">
+    <div class="d-flex is-gap-xs">
+      <div class="ftl-row is-gap-xs btn-group-sm" role="group" aria-label="Add media">
+        <button type="button" class="btn ftl-btn-secondary" data-bs-toggle="modal" data-bs-target="#uploadModal" title="Upload" aria-label="Upload">
           <i class="bi bi-cloud-upload-fill"></i>
         </button>
-        <a class="btn btn-outline-primary" href="/upload" title="Open the upload page" aria-label="Open the upload page">
+        <a class="btn ftl-btn-secondary" href="/upload" title="Open the upload page" aria-label="Open the upload page">
           <i class="bi bi-box-arrow-up-right"></i>
         </a>
-        <button type="button" class="btn btn-danger btn-youtube" data-bs-toggle="modal" data-bs-target="#ytdlModal" title="Download from URL" aria-label="Download from URL">
+        <button type="button" class="btn ftl-btn-danger btn-youtube" data-bs-toggle="modal" data-bs-target="#ytdlModal" title="Download from URL" aria-label="Download from URL">
           <i class="bi bi-youtube"></i>
         </button>
-        <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#qrModal" title="Show QR for mobile upload" aria-label="Show QR for mobile upload">
+        <button type="button" class="btn ftl-btn-secondary" data-bs-toggle="modal" data-bs-target="#qrModal" title="Show QR for mobile upload" aria-label="Show QR for mobile upload">
           <i class="bi bi-qr-code"></i>
         </button>
       </div>
-      <div class="btn-group btn-group-sm" role="group" aria-label="Thumbnail columns"
+      <div class="ftl-row is-gap-xs btn-group-sm" role="group" aria-label="Thumbnail columns"
         title="Number of thumbnail columns">
-        <button type="button" class="btn btn-outline-secondary" id="media-cols-less"
+        <button type="button" class="btn ftl-btn-secondary" id="media-cols-less"
           title="Fewer columns" aria-label="Fewer columns">&minus;</button>
-        <button type="button" class="btn btn-outline-secondary" id="media-cols-more"
+        <button type="button" class="btn ftl-btn-secondary" id="media-cols-more"
           title="More columns" aria-label="More columns">+</button>
       </div>
     </div>
   </div>
 
   {{ if .Mediapool }}
-  <div class="d-flex gap-2 mb-3 flex-shrink-0">
+  <div class="d-flex is-gap-xs ftl-mb-m flex-shrink-0">
     <input
       type="text"
-      class="form-control form-control-sm"
+      class="ftl-input ftl-input"
       id="mediaFilterText"
       placeholder="Filter by filename..."
       aria-label="Filter by filename"
       oninput="filterMedia()"
     />
     <select
-      class="form-select form-select-sm w-auto"
+      class="ftl-select ftl-select w-auto"
       id="mediaFilterType"
       aria-label="Filter by type"
       onchange="filterMedia()"
@@ -83,22 +83,22 @@
 
     {{ end }}
     </div>
-    <p id="media-no-match" class="text-muted small text-center my-3" hidden>
+    <p id="media-no-match" class="ftl-text-muted small text-center my-3" hidden>
       No media matches the filter.
     </p>
   {{ else }}
   <div class="mediapool-empty text-center p-4 border border-secondary rounded">
-    <i class="bi bi-cloud-arrow-up fs-1 d-block mb-3"></i>
-    <p class="h6 mb-3">No media yet</p>
+    <i class="bi bi-cloud-arrow-up fs-1 d-block ftl-mb-m"></i>
+    <p class="h6 ftl-mb-m">No media yet</p>
     <button
       type="button"
-      class="btn btn-primary"
+      class="btn ftl-btn-primary"
       data-bs-toggle="modal"
       data-bs-target="#uploadModal"
     >
       <i class="bi bi-cloud-upload-fill"></i>&nbsp;Upload
     </button>
-    <p class="small text-muted mt-3 mb-0">or drop files here</p>
+    <p class="small ftl-text-muted ftl-mt-m mb-0">or drop files here</p>
   </div>
   {{ end }}
 </div>

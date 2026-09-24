@@ -22,9 +22,9 @@
           {{ template "cuesheet.html" . }}
         </div>
       </div>
-      <div class="inspector-panel mt-2" id="cueinspector-panel">
-        <div class="inspector-header d-flex align-items-center gap-2 px-2 py-1">
-          <h6 class="mb-0 me-2 flex-shrink-0">Cue Inspector</h6>
+      <div class="inspector-panel ftl-mt-xs" id="cueinspector-panel">
+        <div class="inspector-header ftl-row is-items-center is-gap-xs px-2 py-1">
+          <h6 class="mb-0  flex-shrink-0">Cue Inspector</h6>
           <ul class="nav nav-tabs nav-pills-small inspector-tabs mb-0 border-0 flex-shrink-0" role="tablist" id="inspector-tabs">
             <li class="nav-item" role="presentation">
               <button type="button" class="nav-link active" data-inspector-tab="time" role="tab" aria-selected="true">Time</button>
@@ -43,7 +43,7 @@
             </li>
           </ul>
           <span class="inspector-save-flash ms-auto" id="inspector-save-flash" title="Saved" aria-hidden="true"></span>
-          <span class="text-muted small d-none d-xl-inline flex-shrink-0">Changes save instantly</span>
+          <span class="ftl-text-muted small d-none d-xl-inline flex-shrink-0">Changes save instantly</span>
         </div>
         <div class="inspector-collapse show" id="cueinspector-collapse">
           {{ template "cueinspector.html" .Inspector }}
@@ -52,7 +52,7 @@
       <div id="cueinspector-resizer" title="Resize the cue inspector (drag)" aria-label="Resize the cue inspector"></div>
     </div>
 
-    <footer id="app-footer" class="ftl-app-status d-flex align-items-center gap-2">
+    <footer id="app-footer" class="ftl-app-status ftl-row is-items-center is-gap-xs">
       <button type="button" id="mode-toggle" class="mode-switch" role="switch"
         aria-checked="{{ if .ShowMode }}true{{ else }}false{{ end }}"
         aria-label="Edit or Show mode"
@@ -60,30 +60,30 @@
         <span class="mode-knob" aria-hidden="true"></span>
         <span class="mode-label">{{ if .ShowMode }}SHOW{{ else }}EDIT{{ end }}</span>
       </button>
-      <div class="btn-group btn-group-sm" role="group" aria-label="Panels">
-        <button type="button" class="btn btn-outline-secondary" id="mediapool-collapse-btn"
+      <div class="ftl-row is-gap-xs btn-group-sm" role="group" aria-label="Panels">
+        <button type="button" class="btn ftl-btn-secondary" id="mediapool-collapse-btn"
           title="Collapse the media pool" aria-label="Collapse the media pool">
           <i class="bi bi-images"></i>
         </button>
-        <button type="button" class="btn btn-outline-secondary" id="mediapool-expand-btn"
+        <button type="button" class="btn ftl-btn-secondary" id="mediapool-expand-btn"
           title="Expand the media pool" aria-label="Expand the media pool">
           <i class="bi bi-images"></i>
         </button>
-        <button type="button" class="btn btn-outline-secondary" id="cueinspector-collapse-btn"
+        <button type="button" class="btn ftl-btn-secondary" id="cueinspector-collapse-btn"
           title="Collapse the cue inspector" aria-label="Collapse the cue inspector">
           <i class="bi bi-sliders"></i>
         </button>
-        <button type="button" class="btn btn-outline-secondary" id="cueinspector-expand-btn"
+        <button type="button" class="btn ftl-btn-secondary" id="cueinspector-expand-btn"
           title="Expand the cue inspector" aria-label="Expand the cue inspector">
           <i class="bi bi-sliders"></i>
         </button>
       </div>
-      <button type="button" id="showTestBtn" class="btn btn-sm btn-danger"
+      <button type="button" id="showTestBtn" class="btn ftl-btn-sm ftl-btn-danger"
         hx-post="/api/test" hx-swap="none"
         title="Show a test pattern on the output" aria-label="Show a test pattern">
         <i class="bi bi-tv-fill"></i>&nbsp;Tests
       </button>
-      <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-settings-open
+      <button type="button" class="btn ftl-btn-sm ftl-btn-secondary ms-auto" data-settings-open
         title="Open settings" aria-label="Open settings">
         <i class="bi bi-gear-fill"></i>&nbsp;Settings
       </button>

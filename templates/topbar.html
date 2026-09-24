@@ -1,7 +1,7 @@
 {{ define "topbar.html" }}
 
 <nav class="navbar navbar-dark ftl-app-bar">
-  <div class="container-fluid d-flex justify-content-between align-items-center">
+  <div class="container-fluid d-flex is-justify-between is-items-center">
     <span id="ws-status" class="ws-status" role="status" aria-live="polite"
       aria-label="Live updates offline">
       <i class="bi bi-broadcast-pin"></i>
@@ -10,7 +10,7 @@
       aria-label="Current time">--:--:--</span>
     {{ template "mediainfo.html" }}
     <div class="btn-group">
-      <button class="btn btn-outline-secondary" id="fullscreen-btn" data-fullscreen-state="off" title="Enter fullscreen" aria-label="Enter fullscreen">
+      <button class="btn ftl-btn-secondary" id="fullscreen-btn" data-fullscreen-state="off" title="Enter fullscreen" aria-label="Enter fullscreen">
         <i class="bi bi-arrows-fullscreen"></i>
       </button>
     </div>

@@ -4,12 +4,12 @@
 
 <body class="app-body upload-body">
   <nav class="navbar navbar-dark bg-dark">
-    <div class="container-fluid d-flex justify-content-between align-items-center">
+    <div class="container-fluid d-flex is-justify-between is-items-center">
       <a class="navbar-brand mb-0" href="/" aria-label="CuTePi control centre">
         <img class="cutepi-logo" src="/img/cutepi-logo.svg" alt="CuTePi">
-        <span class="text-muted fs-6">Upload</span>
+        <span class="ftl-text-muted fs-6">Upload</span>
       </a>
-      <a class="btn btn-outline-light" href="/" title="Open the control centre" aria-label="Open the control centre">
+      <a class="btn ftl-btn-ghost" href="/" title="Open the control centre" aria-label="Open the control centre">
         <i class="bi bi-eye-fill"></i>&nbsp;Control centre
       </a>
     </div>
@@ -18,7 +18,7 @@
   <div class="container py-4 upload-container">
     <div class="card bg-dark border-secondary">
       <div class="card-body">
-        <h2 class="h5 mb-3">Add media</h2>
+        <h2 class="h5 ftl-mb-m">Add media</h2>
         <form
           id="dropform"
           action="/upload"
@@ -40,8 +40,8 @@
           </div>
           <ul id="filelist"></ul>
           <progress id="progress" value="0" max="100"></progress>
-          <div class="d-flex justify-content-end mt-3">
-            <button id="upload" type="submit" class="btn btn-primary btn-lg w-100">Upload</button>
+          <div class="d-flex is-justify-end ftl-mt-m">
+            <button id="upload" type="submit" class="btn ftl-btn-primary btn-lg w-100">Upload</button>
           </div>
         </form>
       </div>

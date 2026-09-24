@@ -171,7 +171,7 @@ function showToast(message) {
 // {name, href} map into the page, so start from that (it is what picked the
 // stylesheet before first paint) and refresh from /api/themes — same source,
 // routes.Themes — so a theme file added while the page is open validates too.
-const DEFAULT_THEME_ID = document.documentElement.dataset.themeId || "app:blue-future";
+const DEFAULT_THEME_ID = document.documentElement.dataset.themeId || "ftl:xbmc";
 const appThemeMap = {};
 try {
   const boot = document.getElementById("cutepi-theme-css");
@@ -265,6 +265,7 @@ setInterval(pollScheduleFlash, 10000);
 // refreshed from /api/themes below.
 function applyAppTheme(id) {
   if (id.indexOf(":") === -1) id = "app:" + id; // legacy bare-name value
+  if (id === "app:blue-future") id = "ftl:xbmc"; // retired app theme
   if (!appThemeMap[id]) id = DEFAULT_THEME_ID;
   const link = document.getElementById("cutepi-theme-css");
   if (link) {

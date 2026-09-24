@@ -8,15 +8,15 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <div id="test-pattern-grid" class="d-flex flex-wrap gap-2 mb-2" aria-label="Built-in test patterns"></div>
-        <div id="test-custom-grid" class="d-flex flex-wrap gap-2" aria-label="Custom test patterns"></div>
-        <p class="text-muted small mt-2 mb-0">Pin your own media from its tile menu ("Add to test patterns").</p>
+        <div id="test-pattern-grid" class="d-flex is-wrap is-gap-xs ftl-mb-xs" aria-label="Built-in test patterns"></div>
+        <div id="test-custom-grid" class="d-flex is-wrap is-gap-xs" aria-label="Custom test patterns"></div>
+        <p class="ftl-text-muted small ftl-mt-xs mb-0">Pin your own media from its tile menu ("Add to test patterns").</p>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Keep</button>
+        <button type="button" class="btn ftl-btn-secondary" data-bs-dismiss="modal">Keep</button>
         <button
           type="button"
-          class="btn btn-danger"
+          class="btn ftl-btn-danger"
           id="testHideBtn"
           hx-post="/api/stop"
           hx-swap="none"
@@ -43,7 +43,7 @@
       fetch("/api/testpatterns").then(function (r) { return r.json(); }).then(function (data) {
         data.builtin.forEach(function (p) {
           var b = document.createElement("button");
-          b.type = "button"; b.className = "btn btn-sm btn-outline-secondary";
+          b.type = "button"; b.className = "btn ftl-btn-sm ftl-btn-secondary";
           b.textContent = p.label;
           b.onclick = function () {
             htmx.ajax("POST", "/api/test/" + encodeURIComponent(p.name), {swap: "none"});
@@ -52,7 +52,7 @@
         });
         (data.custom || []).forEach(function (name) {
           var b = document.createElement("button");
-          b.type = "button"; b.className = "btn btn-sm btn-outline-primary";
+          b.type = "button"; b.className = "btn ftl-btn-sm ftl-btn-secondary";
           b.textContent = name;
           b.title = "Play this media as a test pattern";
           b.onclick = function () {

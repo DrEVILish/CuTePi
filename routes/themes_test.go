@@ -102,7 +102,7 @@ func TestSharedThemesAreOfferedAlongsideAppThemes(t *testing.T) {
 	if appCount != 1 {
 		t.Fatalf("got %d app themes, want exactly blue-future", appCount)
 	}
-	if DefaultThemeID != "app:blue-future" {
-		t.Fatalf("DefaultThemeID = %q, want app:blue-future so the look is unchanged", DefaultThemeID)
+	if DefaultThemeID != "ftl:xbmc" {
+		t.Fatalf("DefaultThemeID = %q, want ftl:xbmc (the theme source is the submodule)", DefaultThemeID)
 	}
 }

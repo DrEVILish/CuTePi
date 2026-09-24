@@ -3,7 +3,7 @@
 <!-- Merged header status (§5.2): GO cluster + Now Playing in one
      version-guarded partial — every render keeps both truthful. -->
 <div id="mediainfo" class="header-status">
-  <div class="go-cluster d-flex align-items-center gap-2">
+  <div class="go-cluster ftl-row is-items-center is-gap-xs">
     <button type="button" id="go-btn" class="btn btn-go"
       hx-post="/api/cue/selected/play" hx-target="#cuesheet" hx-swap="outerHTML"
       title="Fire the selected cue (Space / Enter)" aria-label="GO">
@@ -19,12 +19,12 @@
   <div class="now-cluster text-center mx-auto">
     {{ if .Filename }}
     <div class="now-title">
-      <span class="text-muted small">NOW&nbsp;</span>
+      <span class="ftl-text-muted small">NOW&nbsp;</span>
       {{ if .PlayingCueNum }}<span class="go-num">{{ .PlayingCueNum }}</span>{{ end }}
       <span title="{{ .PlayingCueTitle }}">{{ .PlayingCueTitle }}</span>
     </div>
-    <div class="d-flex align-items-center gap-2 mt-1">
-      <button type="button" class="btn btn-sm btn-outline-secondary" hx-post="/api/togglePause" hx-swap="none"
+    <div class="ftl-row is-items-center is-gap-xs mt-1">
+      <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" hx-post="/api/togglePause" hx-swap="none"
         title="Pause / resume" aria-label="Pause or resume">
         <i class="bi bi-pause-fill"></i>
       </button>
