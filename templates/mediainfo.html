@@ -7,7 +7,7 @@
     <button type="button" id="go-btn" class="btn btn-go"
       hx-post="/api/cue/selected/play" hx-target="#cuesheet" hx-swap="outerHTML"
       title="Fire the selected cue (Space / Enter)" aria-label="GO">
-      GO<i class="bi bi-play-fill"></i>
+      GO<svg class="ftl-icon -play-fill"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
     </button>
     <div class="go-now" {{ if not .GoHasSel }}hidden{{ end }}{{ if .GoColor }} style="border-color: {{ .GoColor }}"{{ end }}>
       <span class="go-num">{{ if .GoNum }}{{ .GoNum }}{{ else }}&mdash;{{ end }}</span>
@@ -26,7 +26,7 @@
     <div class="ftl-row is-items-center is-gap-xs mt-1">
       <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" hx-post="/api/togglePause" hx-swap="none"
         title="Pause / resume" aria-label="Pause or resume">
-        <i class="bi bi-pause-fill"></i>
+        <svg class="ftl-icon -pause-fill"><use href="/ftl/assets/icons/icons.svg#icon-pause"/></svg>
       </button>
       <input type="range" class="ctp-slider ctp-scrubber flex-grow-1"
         id="nowplaying-scrubber" value="{{ .PositionRaw }}" min="0" max="{{ .DurationRaw }}" step="0.05"

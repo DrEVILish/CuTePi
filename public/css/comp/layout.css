@@ -831,3 +831,14 @@ body.show-mode #app-footer #cueinspector-expand-btn {
 @media (prefers-reduced-motion: reduce) {
   .mode-switch .mode-knob::after { transition: none; }
 }
+
+/* ftl-themes icon pack fallback: the glyph styling lives in ftl-core.css
+   (linked only under shared themes). Without it — an app: theme — an
+   <svg class="ftl-icon"> would render as invisible bare paths, so own the
+   same defaults here; the bundle's later rules win under ftl: themes. */
+.ftl-icon {
+  width: 1.2em; height: 1.2em;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+  display: inline-block; vertical-align: -0.2em;
+}

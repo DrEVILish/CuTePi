@@ -6,10 +6,10 @@
     <div class="d-flex is-gap-xs">
       <div class="ftl-row is-gap-xs btn-group-sm" role="group" aria-label="Add media">
         <button type="button" class="btn ftl-btn-secondary" data-bs-toggle="modal" data-bs-target="#uploadModal" title="Upload" aria-label="Upload">
-          <i class="bi bi-cloud-upload-fill"></i>
+          <svg class="ftl-icon -cloud-upload-fill"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
         </button>
         <a class="btn ftl-btn-secondary" href="/upload" title="Open the upload page" aria-label="Open the upload page">
-          <i class="bi bi-box-arrow-up-right"></i>
+          <svg class="ftl-icon -box-arrow-up-right"><use href="/ftl/assets/icons/icons.svg#icon-external-link"/></svg>
         </a>
         <button type="button" class="btn ftl-btn-danger btn-youtube" data-bs-toggle="modal" data-bs-target="#ytdlModal" title="Download from URL" aria-label="Download from URL">
           <i class="bi bi-youtube"></i>
@@ -54,9 +54,9 @@
     {{ range .Mediapool }}
       {{ $type := "other" }}
       {{ $icon := "?" }}
-      {{ if hasPrefix .Mimetype "video" }}{{ $type = "video" }}{{ $icon = "bi-film" }}
-      {{ else if hasPrefix .Mimetype "audio" }}{{ $type = "audio" }}{{ $icon = "bi-music-note-beamed" }}
-      {{ else if hasPrefix .Mimetype "image" }}{{ $type = "image" }}{{ $icon = "bi-image" }}{{ end }}
+      {{ if hasPrefix .Mimetype "video" }}{{ $type = "video" }}{{ $icon = "video" }}
+      {{ else if hasPrefix .Mimetype "audio" }}{{ $type = "audio" }}{{ $icon = "music-note" }}
+      {{ else if hasPrefix .Mimetype "image" }}{{ $type = "image" }}{{ $icon = "image" }}{{ end }}
       {{ $thumb := .Thumbnail }}
       {{ if not $thumb }}{{ $thumb = printf "/img/placeholder-%s.svg" $type }}{{ end }}
       <figure class="media-tile" data-media-type="{{ $type }}" data-media-name="{{ .Filename }}"
@@ -64,19 +64,18 @@
         <div class="media-thumbnail" style="background-image:url('{{ $thumb }}')"
           draggable="true" data-media-filename="{{ .Filename }}" role="img" aria-label="Thumbnail for {{ .Filename }}">
           {{ if .Missing }}
-          <i class="bi bi-exclamation-triangle-fill media-missing"
-            title="Source file missing from disk" aria-label="Source file missing from disk"></i>
+          <svg class="ftl-icon -exclamation-triangle-fill media-missing"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
           {{ end }}
           <!-- Detailed info panel: hover reveals type, size, date added. -->
           <div class="media-info">
             <span class="media-info-name" title="{{ .Filename }}">{{ .Filename }}</span>
-            <span class="media-info-row"><i class="bi {{ $icon }}"></i> {{ .Mimetype }}</span>
+            <span class="media-info-row"><svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ $icon }}"/></svg> {{ .Mimetype }}</span>
             <span class="media-info-row">Size: {{ .Size }}</span>
             <span class="media-info-row">Added: {{ .DateAdded }}</span>
           </div>
           <button class="media-menu-toggle" type="button" draggable="false"
             aria-label="Menu for {{ .Filename }}" data-media-menu="{{ .Filename }}">
-            <i class="bi bi-three-dots"></i>
+            <svg class="ftl-icon -three-dots"><use href="/ftl/assets/icons/icons.svg#icon-more-horizontal"/></svg>
           </button>
         </div>
       </figure>
@@ -88,7 +87,7 @@
     </p>
   {{ else }}
   <div class="mediapool-empty text-center p-4 border border-secondary rounded">
-    <i class="bi bi-cloud-arrow-up fs-1 d-block ftl-mb-m"></i>
+    <svg class="ftl-icon -cloud-arrow-up fs-1 d-block ftl-mb-m"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
     <p class="h6 ftl-mb-m">No media yet</p>
     <button
       type="button"
@@ -96,7 +95,7 @@
       data-bs-toggle="modal"
       data-bs-target="#uploadModal"
     >
-      <i class="bi bi-cloud-upload-fill"></i>&nbsp;Upload
+      <svg class="ftl-icon -cloud-upload-fill"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>&nbsp;Upload
     </button>
     <p class="small ftl-text-muted ftl-mt-m mb-0">or drop files here</p>
   </div>

@@ -284,16 +284,20 @@ func AssetStamp() string {
 	return strconv.FormatInt(info.ModTime().Unix(), 36)
 }
 
+// TypeIcon maps a media kind to an ftl-themes icon-pack symbol id
+// (assets/icons/icons.svg#icon-<id>); the templates render it as
+// <svg class="ftl-icon"><use/></svg>. The pack ships per-theme overrides,
+// so the same markup reterms under every shared theme.
 func TypeIcon(kind string) string {
 	switch kind {
 	case "video":
-		return "bi-film"
+		return "video"
 	case "audio":
-		return "bi-music-note-beamed"
+		return "music-note"
 	case "image":
-		return "bi-image"
+		return "image"
 	default:
-		return "bi-file-earmark"
+		return "file"
 	}
 }
 

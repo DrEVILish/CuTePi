@@ -717,20 +717,20 @@ function patternOptions() {
     // Play deliberately lives on the transport and the cue row, not here.
     menuEl.innerHTML = `
       <div class="cue-context-item cue-context-color">
-        <i class="bi bi-palette"></i> Colour:
+        <svg class="ftl-icon -palette"><use href="/ftl/assets/icons/icons.svg#icon-palette"/></svg> Colour:
         <select title="Cue colour">${patternOptions()}</select>
       </div>
       <div class="cue-context-divider"></div>
       <div class="cue-context-item cue-context-fade">
-        <i class="bi bi-volume-off"></i> Fade-stop others
+        <svg class="ftl-icon -volume-off"><use href="/ftl/assets/icons/icons.svg#icon-volume-mute"/></svg> Fade-stop others
         <select title="Scope"><option value="peers">Peers</option><option value="list">List/Cart</option><option value="all">All</option></select>
         <input type="text" placeholder="0:00" title="Fade/stop time (mm:ss)" value="0:00">
       </div>
-      <div class="cue-context-item" data-cue-action="autofollow"><i class="bi bi-arrow-right-circle"></i> <span>Auto-continue: off</span></div>
+      <div class="cue-context-item" data-cue-action="autofollow"><svg class="ftl-icon -arrow-right-circle"><use href="/ftl/assets/icons/icons.svg#icon-arrow-right"/></svg> <span>Auto-continue: off</span></div>
       <div class="cue-context-divider"></div>
-      <div class="cue-context-item" data-cue-action="newgroup"><i class="bi bi-folder-plus"></i> <span>New group</span></div>
+      <div class="cue-context-item" data-cue-action="newgroup"><svg class="ftl-icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> <span>New group</span></div>
       <div class="cue-context-divider"></div>
-      <div class="cue-context-item cue-context-danger" data-cue-action="delete"><i class="bi bi-trash3"></i> Delete cue</div>`;
+      <div class="cue-context-item cue-context-danger" data-cue-action="delete"><svg class="ftl-icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete cue</div>`;
     document.body.appendChild(menuEl);
     return menuEl;
   }
@@ -1010,16 +1010,16 @@ function patternOptions() {
     menuEl.className = "cue-context-menu";
     menuEl.hidden = true;
     menuEl.innerHTML = `
-      <div class="cue-context-item" data-group-action="inspector"><i class="bi bi-sliders"></i> Inspector</div>
-      <div class="cue-context-item" data-group-action="collapse"><i class="bi bi-chevron-down"></i> <span>Collapse</span></div>
+      <div class="cue-context-item" data-group-action="inspector"><svg class="ftl-icon -sliders"><use href="/ftl/assets/icons/icons.svg#icon-settings"/></svg> Inspector</div>
+      <div class="cue-context-item" data-group-action="collapse"><svg class="ftl-icon -chevron-down"><use href="/ftl/assets/icons/icons.svg#icon-chevron-down"/></svg> <span>Collapse</span></div>
       <div class="cue-context-item cue-context-color">
-        <i class="bi bi-palette"></i> Colour:
+        <svg class="ftl-icon -palette"><use href="/ftl/assets/icons/icons.svg#icon-palette"/></svg> Colour:
         <select title="Group colour">${patternOptions()}</select>
       </div>
       <div class="cue-context-divider"></div>
-      <div class="cue-context-item" data-group-action="newgroup"><i class="bi bi-folder-plus"></i> New group</div>
+      <div class="cue-context-item" data-group-action="newgroup"><svg class="ftl-icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> New group</div>
       <div class="cue-context-divider"></div>
-      <div class="cue-context-item cue-context-danger" data-group-action="delete"><i class="bi bi-trash3"></i> Delete group</div>`;
+      <div class="cue-context-item cue-context-danger" data-group-action="delete"><svg class="ftl-icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete group</div>`;
     document.body.appendChild(menuEl);
     return menuEl;
   }
@@ -1126,7 +1126,7 @@ function patternOptions() {
     menuEl.className = "cue-context-menu";
     menuEl.hidden = true;
     menuEl.innerHTML = `
-      <div class="cue-context-item" data-sheet-action="newgroup"><i class="bi bi-folder-plus"></i> New group</div>`;
+      <div class="cue-context-item" data-sheet-action="newgroup"><svg class="ftl-icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> New group</div>`;
     document.body.appendChild(menuEl);
     // Clicks anywhere else dismiss the menu (same contract as the other menus).
     document.addEventListener("pointerdown", (e) => {
@@ -1175,16 +1175,16 @@ function patternOptions() {
     menuEl.className = "cue-context-menu";
     menuEl.hidden = true;
     menuEl.innerHTML = `
-      <button type="button" class="cue-context-item" data-media-action="play"><i class="bi bi-play-fill"></i> Play</button>
-      <button type="button" class="cue-context-item" data-media-action="load"><i class="bi bi-download"></i> Load</button>
-      <button type="button" class="cue-context-item" data-media-action="add"><i class="bi bi-plus-circle"></i> Add</button>
+      <button type="button" class="cue-context-item" data-media-action="play"><svg class="ftl-icon -play-fill"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg> Play</button>
+      <button type="button" class="cue-context-item" data-media-action="load"><svg class="ftl-icon -download"><use href="/ftl/assets/icons/icons.svg#icon-download"/></svg> Load</button>
+      <button type="button" class="cue-context-item" data-media-action="add"><svg class="ftl-icon -plus-circle"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> Add</button>
       <div class="cue-context-divider"></div>
-      <button type="button" class="cue-context-item" data-media-action="refresh"><i class="bi bi-camera"></i> Refresh thumbnail</button>
-      <button type="button" class="cue-context-item" data-media-action="analyse"><i class="bi bi-music-note-beamed"></i> Analyse</button>
-      <button type="button" class="cue-context-item" data-media-action="panichold"><i class="bi bi-life-preserver"></i> Set as holding image</button>
-      <button type="button" class="cue-context-item" data-media-action="testpattern"><i class="bi bi-tv"></i> <span>Add to test patterns</span></button>
+      <button type="button" class="cue-context-item" data-media-action="refresh"><svg class="ftl-icon -camera"><use href="/ftl/assets/icons/icons.svg#icon-camera"/></svg> Refresh thumbnail</button>
+      <button type="button" class="cue-context-item" data-media-action="analyse"><svg class="ftl-icon -music-note-beamed"><use href="/ftl/assets/icons/icons.svg#icon-music-note"/></svg> Analyse</button>
+      <button type="button" class="cue-context-item" data-media-action="panichold"><svg class="ftl-icon -life-preserver"><use href="/ftl/assets/icons/icons.svg#icon-help-circle"/></svg> Set as holding image</button>
+      <button type="button" class="cue-context-item" data-media-action="testpattern"><svg class="ftl-icon -tv"><use href="/ftl/assets/icons/icons.svg#icon-video"/></svg> <span>Add to test patterns</span></button>
       <div class="cue-context-divider"></div>
-      <button type="button" class="cue-context-item cue-context-danger" data-media-action="delete"><i class="bi bi-trash3"></i> Delete</button>`;
+      <button type="button" class="cue-context-item cue-context-danger" data-media-action="delete"><svg class="ftl-icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete</button>`;
     document.body.appendChild(menuEl);
     return menuEl;
   }
