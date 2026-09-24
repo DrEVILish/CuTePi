@@ -69,16 +69,16 @@ func computeGoBar(sheet *ctp.Cuesheet) GoBar {
 // both the renderer and the keyboard walk share. Depth (0 = top level) drives
 // the row indentation via the --depth custom property.
 type SheetRow struct {
-	Group        *ctp.Group
-	Cue          *ctp.Cue
-	Depth        int
-	Selected     bool
-	MemberCount  int    // direct members of this row's group (header rows)
-	GroupColor   string // innermost containing group's colour (member rows)
-	LastInGroup  bool   // folder outline flags (§5.4)
-	SpanDepth    int    // innermost open folder span (folder-box verticals)
-	SpanBase     string // outermost vertical's colour (its own group's)
-	SpanShadows  string // one stacked vertical per deeper open span
+	Group       *ctp.Group
+	Cue         *ctp.Cue
+	Depth       int
+	Selected    bool
+	MemberCount int    // direct members of this row's group (header rows)
+	GroupColor  string // innermost containing group's colour (member rows)
+	LastInGroup bool   // folder outline flags (§5.4)
+	SpanDepth   int    // innermost open folder span (folder-box verticals)
+	SpanBase    string // outermost vertical's colour (its own group's)
+	SpanShadows string // one stacked vertical per deeper open span
 }
 
 // sheetRowsWithSelection folds the sheet and flags the row that the persisted
@@ -92,7 +92,7 @@ func sheetRowsWithSelection(sheet *ctp.Cuesheet) []SheetRow {
 	}
 	for _, r := range flat {
 		row := SheetRow{Group: r.Group, Cue: r.Cue, Depth: r.Depth,
-			GroupColor: r.GroupColor,
+			GroupColor:  r.GroupColor,
 			LastInGroup: r.LastInGroup,
 			SpanDepth:   r.SpanDepth,
 			SpanBase:    r.SpanBase, SpanShadows: r.SpanShadows}
@@ -506,23 +506,7 @@ func groupTiming(groupID int) (totalMS int, remainMS int) {
 	if err != nil {
 		return 0, 0
 	}
-	inScope := map[int]bool{groupID: true}
-	for _, gr := range sheet.Groups {
-		for at := gr.ParentGroupID; at != 0; {
-			if at == groupID {
-				inScope[gr.GroupID] = true
-				break
-			}
-			parent := 0
-			for _, h := range sheet.Groups {
-				if h.GroupID == at {
-					parent = h.ParentGroupID
-					break
-				}
-			}
-			at = parent
-		}
-	}
+	inScope := groupScope(groupID, &sheet)
 	active := gsp.CurrentCuePos()
 	playing := gsp.CurrentPlaying() != ""
 	started := false // walk: counts begin at the active member when running
@@ -752,6 +736,29 @@ func slideshowRunner(g ctp.Group) {
 	}
 }
 
+// groupScope returns every group id in groupID's subtree (the group itself
+// plus all descendants) — the scope GO order and runtime timing both use.
+func groupScope(groupID int, sheet *ctp.Cuesheet) map[int]bool {
+	inScope := map[int]bool{groupID: true}
+	for _, gr := range sheet.Groups {
+		for at := gr.ParentGroupID; at != 0; {
+			if at == groupID {
+				inScope[gr.GroupID] = true
+				break
+			}
+			parent := 0
+			for _, h := range sheet.Groups {
+				if h.GroupID == at {
+					parent = h.ParentGroupID
+					break
+				}
+			}
+			at = parent
+		}
+	}
+	return inScope
+}
+
 func playFirstGroupMember(groupID int) {
 	sheet, err := ctp.GetCuesheet()
 	if err != nil {
@@ -759,23 +766,7 @@ func playFirstGroupMember(groupID int) {
 	}
 	// sheet.Cues is already visual order. Include nested subgroups: the
 	// first cue a GO should play is the visually-first descendant member.
-	inScope := map[int]bool{groupID: true}
-	for _, g := range sheet.Groups {
-		for a := g.ParentGroupID; a != 0; {
-			if a == groupID {
-				inScope[g.GroupID] = true
-				break
-			}
-			parent := 0
-			for _, h := range sheet.Groups {
-				if h.GroupID == a {
-					parent = h.ParentGroupID
-					break
-				}
-			}
-			a = parent
-		}
-	}
+	inScope := groupScope(groupID, &sheet)
 	for _, cue := range sheet.Cues {
 		if inScope[cue.Parent] {
 			_ = loadAndPlayCue(cue)

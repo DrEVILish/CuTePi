@@ -39,6 +39,12 @@ func goSafe(fn func()) {
 	}()
 }
 
+// safe adapts fn as a time.AfterFunc callback that runs on the goSafe
+// goroutine protection chain (exact deadline fires replace tick loops).
+func safe(fn func()) func() {
+	return func() { goSafe(fn) }
+}
+
 type MediapoolItem struct {
 	Filename  string
 	Size      string
@@ -409,12 +415,19 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 	}
 }
 
-// armPreloadCue prerolls the next cue into gsp's warm slot when it's AUDIO
-// only: audio preroll is silent and paints nothing (video/image preroll
-// would show its first frame over the live wall — forbidden by the realtime
-// rule). Arming waits ~1.2s so the just-fired cue's own decode settles and
-// never competes for the CPU mid-fade; a stale arm (generation moved) is
-// dropped by gsp.Warm itself.
+// One preroll policy check instead of two: audio-only files prime silently
+// with nothing painted; everything else forbids background preroll (§ realtime rule).
+func prerollable(mimetype string) bool {
+	return strings.HasPrefix(mimetype, "audio/")
+}
+
+// armNextCue prerolls the next cue into gsp's warm slot when the cue is
+// prerollable: audio preroll is silent and paints nothing (video/image
+// would show its first frame over the live wall — forbidden by the
+// realtime rule). Arming waits ~1.2s so the just-fired cue's own decode
+// settles and never competes for the CPU mid-fade; a stale arm (generation
+// moved) is dropped by gsp.Warm itself.
+// NOTE: "armNextCue prerolls" wording == armPreloadCue above.
 func armNextCue(gen uint64, pos int) {
 	if pos <= 0 {
 		return
@@ -423,7 +436,7 @@ func armNextCue(gen uint64, pos int) {
 	if err != nil {
 		return
 	}
-	if !strings.HasPrefix(next.Mimetype, "audio/") {
+	if !prerollable(next.Mimetype) {
 		return
 	}
 	goSafe(func() {
@@ -601,7 +614,7 @@ func autoContinueFrom(endingPos int) {
 	fireAt := time.Now().Add(post + pre)
 	goSafe(func() {
 		// Exact fire: a timer armed to the absolute deadline.
-		time.AfterFunc(post+pre, fire)
+		time.AfterFunc(post+pre, safe(fire))
 		// Countdown display only: a live WHAT-is-waiting state (§12.2) for
 		// the pills, stepping post→pre at the phase boundary. Never fires.
 		setWait(waitState{CuePos: endingPos, Kind: "post", EndsAt: fireAt.UnixMilli()})

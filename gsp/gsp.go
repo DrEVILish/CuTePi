@@ -461,7 +461,6 @@ func Warm(file string, opts LoadOpts) error {
 		mgr.warm = p
 		mgr.warmFile = file
 		mgr.warmOpts = opts
-		mgr.warmBuildGen = buildGen
 	}
 	mgr.mu.Unlock()
 	if !current {

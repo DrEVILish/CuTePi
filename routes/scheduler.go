@@ -3,7 +3,6 @@ package routes
 import (
 	"log"
 	"strconv"
-	"strings"
 	"time"
 
 	"CuTePi/ctp"
@@ -78,22 +77,22 @@ func RunScheduler() {
 				switch {
 				case d <= 0:
 					fireScheduled()
-				case d > 0 && strings.HasPrefix(cue.Mimetype, "audio/"):
+				case d > 0 && prerollable(cue.Mimetype):
 					// Audio-only preroll: build+preroll is silent and paints
 					// nothing, so it can warm now and land on the exact
 					// second. Video keeps build-at-fire (a prerolled video
 					// pipeline would flash its first frame on the wall).
 					if warmErr := gsp.Warm(cue.Filename, cueOpts(cue.AsCue(), false)); warmErr == nil {
-						time.AfterFunc(d, func() {
+						time.AfterFunc(d, safe(func() {
 							if !gsp.InstallWarm(cue.Filename, cueOpts(cue.AsCue(), false)) {
 								fireScheduled()
 							}
-						})
+						}))
 						break
 					}
-					time.AfterFunc(d, fireScheduled)
+					time.AfterFunc(d, safe(fireScheduled))
 				default:
-					time.AfterFunc(d, fireScheduled)
+					time.AfterFunc(d, safe(fireScheduled))
 				}
 			}
 		}
