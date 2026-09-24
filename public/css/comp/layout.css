@@ -842,3 +842,11 @@ body.show-mode #app-footer #cueinspector-expand-btn {
   stroke-linecap: round; stroke-linejoin: round;
   display: inline-block; vertical-align: -0.2em;
 }
+
+/* Icons inside buttons sit on the text baseline like the font glyphs they
+   replaced — otherwise an svg-only button renders with a stray tall line
+   box and the glyph drifts out of the padding box. */
+.btn .ftl-icon, .ftl-btn .ftl-icon {
+  width: 1em; height: 1em;
+  vertical-align: -0.125em;
+}

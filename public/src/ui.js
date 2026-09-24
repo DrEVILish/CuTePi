@@ -2110,3 +2110,11 @@ document.addEventListener("click", (e) => {
   }
 }, true);
 window.justEdited = () => Date.now() - inlineEditAt < 350;
+
+// QA harness: ?settings=1 opens the Settings modal directly (headless
+// screenshot testing of the tabbed layout); harmless in normal use.
+const qaSettings = new URLSearchParams(location.search).get("settings");
+if (qaSettings) {
+  const btn = document.querySelector("[data-settings-open]");
+  if (btn) btn.click();
+}
