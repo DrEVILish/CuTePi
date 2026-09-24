@@ -19,16 +19,16 @@
       >
         <div class="modal-body pt-0">
           <div class="row g-0">
-            <ul class="nav nav-tabs flex-column settings-tabs col-auto" role="tablist" aria-orientation="vertical">
-            <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#settingsPaneAppearance" type="button" role="tab">Appearance</button></li>
-            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabGeneral" type="button" role="tab">General</button></li>
-            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabDisplay" type="button" role="tab">Display</button></li>
-            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabAudio" type="button" role="tab">Audio</button></li>
-            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabNetwork" type="button" role="tab">Network</button></li>
-            <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#settingsTabKeys" type="button" role="tab">Keyboard</button></li>
+            <ul class="ftl-tabs nav flex-column settings-tabs col-auto" role="tablist" aria-orientation="vertical" style="--ftl-tab-radius: var(--ftl-radius);">
+            <button class="ftl-tab is-active" data-bs-toggle="tab" data-bs-target="#settingsPaneAppearance" type="button" role="tab">Appearance</button>
+            <button class="ftl-tab" data-bs-toggle="tab" data-bs-target="#settingsTabGeneral" type="button" role="tab">General</button>
+            <button class="ftl-tab" data-bs-toggle="tab" data-bs-target="#settingsTabDisplay" type="button" role="tab">Display</button>
+            <button class="ftl-tab" data-bs-toggle="tab" data-bs-target="#settingsTabAudio" type="button" role="tab">Audio</button>
+            <button class="ftl-tab" data-bs-toggle="tab" data-bs-target="#settingsTabNetwork" type="button" role="tab">Network</button>
+            <button class="ftl-tab" data-bs-toggle="tab" data-bs-target="#settingsTabKeys" type="button" role="tab">Keyboard</button>
             </ul>
             <div class="col">
-              <div class="tab-content pt-2">
+              <div class="tab-content pt-2 settings-panes">
             <div class="tab-pane fade show active" id="settingsPaneAppearance" role="tabpanel">
               <div class="ftl-field">
                 <label class="ftl-label" for="settingsTheme">Theme</label>
@@ -104,8 +104,13 @@
               <div class="row">
                 <div class="col ftl-field">
                   <label class="ftl-label" for="settingsDisplayResolution">Resolution</label>
-                  <input class="ftl-input" id="settingsDisplayResolution" name="displayResolution" type="text" placeholder="1920x1080" />
-                  <div class="ftl-field-hint ftl-text-muted">Width x height in pixels; decoded video is retuned to this size (videoscale caps). Empty = the file's own size. Ignored when EDID mode is on.</div>
+                  <div class="ftl-row is-gap-xs">
+                    <select class="ftl-select" id="settingsDisplayResolution" name="displayResolution"></select>
+                    <button type="button" class="btn ftl-btn-secondary" id="settingsDisplayRescan" title="Re-read the attached destination's mode list" aria-label="Rescan resolutions">
+                      <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-refresh"/></svg>
+                    </button>
+                  </div>
+                  <div class="ftl-field-hint ftl-text-muted">Modes come from the connected destination (xrandr first, then the kernel DRM list; a preset list when neither is reachable). (file's own) = no forced caps. Ignored when EDID mode is on.</div>
                 </div>
                 <div class="col ftl-field">
                   <label class="ftl-label" for="settingsDisplayRefresh">Refresh rate (Hz)</label>
@@ -197,6 +202,26 @@
 </div>
 
 <script>
+  // Bootstrap's tab JS never touches .ftl-tab's is-active class; sync it so
+  // the vertical rail's inline-edge marker keeps track of the pressed tab.
+  document.getElementById("settingsModal").addEventListener("show.bs.tab", function (e) {
+    document.querySelectorAll(".settings-tabs .ftl-tab").forEach(function (t) { t.classList.remove("is-active"); });
+    e.target.classList.add("is-active");
+  });
+  function loadDisplayModes(current) {
+    fetch("/api/display/modes", { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        var sel = document.getElementById("settingsDisplayResolution");
+        var options = body.modes || [];
+        if (current && options.indexOf(current) === -1) options.push(current);
+        sel.innerHTML = '<option value="">(file's own)</option>'
+          + options.map(function (mode) {
+              return '<option value="' + mode + '">' + mode + '</option>';
+            }).join("");
+        sel.value = current;
+      });
+  }
   document.addEventListener("click", function (e) {
     var btn = e.target.closest("[data-settings-open]");
     if (!btn) return;
@@ -218,7 +243,7 @@
           document.documentElement.dataset.themeId;
         var d = s.display || {};
         document.getElementById("settingsDisplayEDID").checked = !!d.useEDID;
-        document.getElementById("settingsDisplayResolution").value = d.resolution || "";
+        loadDisplayModes(d.resolution || "");
         document.getElementById("settingsDisplayRefresh").value = d.refreshHz || "";
         var a = s.audio || {};
         document.getElementById("settingsAudioDevice").value = a.device || "";
@@ -231,6 +256,9 @@
         document.getElementById("settingsAPQr").src = "/api/qr?type=wifi&_ts=" + Date.now();
         document.getElementById("settingsStatus").textContent = "";
         document.getElementById("settingsStatus").className = "";
+        document.getElementById("settingsDisplayRescan").onclick = function () {
+          loadDisplayModes(document.getElementById("settingsDisplayResolution").value);
+        };
         document.getElementById("settingsPanicHoldClear").onclick = function () {
           fetch("/api/setting/panichold", {
             method: "POST",

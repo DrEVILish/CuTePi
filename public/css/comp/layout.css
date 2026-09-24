@@ -850,3 +850,13 @@ body.show-mode #app-footer #cueinspector-expand-btn {
   width: 1em; height: 1em;
   vertical-align: -0.125em;
 }
+
+/* Settings sheet: the plate the six panes share gets one min-height equal
+   to the tallest pane, so switching tabs never resizes the modal. */
+.settings-panes {
+  min-height: 21rem;
+}
+.settings-tabs {
+  font-size: 0.95rem;
+  min-width: 7.5rem;
+}

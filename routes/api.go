@@ -160,6 +160,7 @@ func systemdUnit() string {
 
 func Api(rg *gin.RouterGroup) {
 	registerThemeRoutes(rg)
+	registerDisplayRoute(rg)
 	rg.GET("/ws", func(c *gin.Context) {
 		ws.Handle(c.Writer, c.Request)
 	})

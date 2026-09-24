@@ -2113,8 +2113,25 @@ window.justEdited = () => Date.now() - inlineEditAt < 350;
 
 // QA harness: ?settings=1 opens the Settings modal directly (headless
 // screenshot testing of the tabbed layout); harmless in normal use.
+// QA harness (?settings=1 | ?settings=display|audio|...): renders the modal
+// and the named pane with the state classes applied directly, no fade —
+// deterministic headless screenshots of the tabbed sheet (the virtual-time
+// screenshot harness races the browser's transition).
 const qaSettings = new URLSearchParams(location.search).get("settings");
 if (qaSettings) {
-  const btn = document.querySelector("[data-settings-open]");
-  if (btn) btn.click();
+  const modal = document.getElementById("settingsModal");
+  const pane = document.querySelector(qaSettings === "1"
+    ? ".settings-panes .tab-pane:first-child"
+    : '.settings-panes .tab-pane[id="' + (qaSettings === "appearance" ? "settingsPane" : "settingsTab") + qaSettings.charAt(0).toUpperCase() + qaSettings.slice(1) + '"]');
+  if (modal && pane) {
+    document.querySelectorAll(".settings-panes .tab-pane").forEach(p => p.classList.remove("show", "active"));
+    modal.classList.add("show");
+    modal.style.display = "block";
+    modal.removeAttribute("aria-hidden");
+    pane.classList.add("show", "active");
+    document.body.insertAdjacentHTML("beforeend", '<div class="modal-backdrop fade show"></div>');
+    pane.scrollIntoView({block: "start"});
+    const rail = modal.querySelector('.settings-tabs .ftl-tab[data-bs-target="#' + pane.id + '"]');
+    if (rail) rail.classList.add("is-active");
+  }
 }
