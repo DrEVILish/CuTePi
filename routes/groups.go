@@ -497,6 +497,61 @@ type groupOption struct {
 	IsDescendantOf bool
 }
 
+// groupTiming sums the group's runtime from existing trim data (trimmed
+// length when set, else media duration, rate-corrected) and, when one of
+// the members is the active cue, the remaining runtime to the group's end.
+// Scoped like playFirstGroupMember: the subtree, not just direct members.
+func groupTiming(groupID int) (totalMS int, remainMS int) {
+	sheet, err := ctp.GetCuesheet()
+	if err != nil {
+		return 0, 0
+	}
+	inScope := map[int]bool{groupID: true}
+	for _, gr := range sheet.Groups {
+		for at := gr.ParentGroupID; at != 0; {
+			if at == groupID {
+				inScope[gr.GroupID] = true
+				break
+			}
+			parent := 0
+			for _, h := range sheet.Groups {
+				if h.GroupID == at {
+					parent = h.ParentGroupID
+					break
+				}
+			}
+			at = parent
+		}
+	}
+	active := gsp.CurrentCuePos()
+	playing := gsp.CurrentPlaying() != ""
+	started := false // walk: counts begin at the active member when running
+	for _, cue := range sheet.Cues {
+		if !inScope[cue.Parent] {
+			continue
+		}
+		dur := ctp.EffectiveCueDuration(cue)
+		totalMS += dur
+		if !playing || active == 0 {
+			continue
+		}
+		if !started && cue.CuePos == active {
+			started = true
+			// Active member: whatever the playhead has left of its window.
+			rem := float64(dur) - gsp.CurrentPosition()*1000
+			if rem < 0 {
+				rem = 0
+			}
+			remainMS += int(rem)
+			continue
+		}
+		if started {
+			remainMS += dur
+		}
+	}
+	return totalMS, remainMS
+}
+
 // renderGroupInspector renders the groupinspector partial for one group.
 // cue.H → groupinspector.html expects .Group and .MemberCount plus the cue
 // palette for the colour dropdown.
@@ -559,11 +614,14 @@ func renderGroupInspector(c *gin.Context, groupID int) {
 			IsDescendantOf: descendants[og.GroupID],
 		})
 	}
+	total, remaining := groupTiming(groupID)
 	c.HTML(http.StatusOK, "groupinspector.html", gin.H{
-		"Group":       g,
-		"MemberCount": len(members),
-		"Palette":     cuePalette,
-		"OtherGroups": opts,
+		"Group":         g,
+		"MemberCount":   len(members),
+		"Palette":       cuePalette,
+		"OtherGroups":   opts,
+		"DurationTotal": formatClock(float64(total) / 1000),
+		"Remaining":     formatClock(float64(remaining) / 1000),
 	})
 }
 

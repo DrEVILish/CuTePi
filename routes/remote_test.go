@@ -46,7 +46,7 @@ func TestDeckLines(t *testing.T) {
 		{"", "100"},
 	}
 	for _, c := range cases {
-		got, quit := handleDeckLine(c.line)
+		got, quit := handleDeckLine(nil, c.line)
 		if quit {
 			t.Fatalf("%q did not expect quit", c.line)
 		}
@@ -54,7 +54,7 @@ func TestDeckLines(t *testing.T) {
 			t.Errorf("deck %q -> %q, want prefix %q", c.line, got, c.want)
 		}
 	}
-	if got, quit := handleDeckLine("quit"); !quit || !strings.HasPrefix(got, "200 ok") {
+	if got, quit := handleDeckLine(nil, "quit"); !quit || !strings.HasPrefix(got, "200 ok") {
 		t.Errorf("quit -> %q quit=%v", got, quit)
 	}
 }
@@ -69,7 +69,7 @@ func TestDeckPlayAndGoto(t *testing.T) {
 		t.Fatalf("AddCue: %v", err)
 	}
 	// "goto" is playhead-positioning: it must select, never start.
-	if _, quit := handleDeckLine("goto: clip id: 1"); quit {
+	if _, quit := handleDeckLine(nil, "goto: clip id: 1"); quit {
 		t.Fatal("goto closed the session")
 	}
 	if pos, err := ctp.SelectedCuePos(); err != nil || pos != 1 {
@@ -79,15 +79,15 @@ func TestDeckPlayAndGoto(t *testing.T) {
 		t.Errorf("goto must not start playback (clip id=%q)", currentClipID())
 	}
 	// Clip id outside the sheet is a protocol-legal load failure.
-	if got, _ := handleDeckLine("play: clip id: 7"); !strings.HasPrefix(got, "105 load failure") {
+	if got, _ := handleDeckLine(nil, "play: clip id: 7"); !strings.HasPrefix(got, "105 load failure") {
 		t.Errorf("play clip 7 -> %q", got)
 	}
 	// Negative speed (rewind) is refused before it can mangle the rate.
-	if got, _ := handleDeckLine("play: speed: -100"); !strings.HasPrefix(got, "115 speed failure") {
+	if got, _ := handleDeckLine(nil, "play: speed: -100"); !strings.HasPrefix(got, "115 speed failure") {
 		t.Errorf("play speed -100 -> %q", got)
 	}
 	// Cue list: clip id = row position.
-	if got, _ := handleDeckLine("clips get"); !strings.Contains(got, "clip count: 1\r\n") ||
+	if got, _ := handleDeckLine(nil, "clips get"); !strings.Contains(got, "clip count: 1\r\n") ||
 		!strings.Contains(got, "1: deck-test.mp4") {
 		t.Errorf("clips get -> %q", got)
 	}
@@ -193,6 +193,39 @@ func TestOSCDecodeAndRoute(t *testing.T) {
 
 // The remote-control factory: TestDeckGreeting dials the real listener to
 // verify the greet frame arrives before any command (controllers wait for it).
+func TestDeckClipOffsets(t *testing.T) {
+	setupTestDB(t)
+	for _, name := range []string{"off-a.mp4", "off-b.mp4", "off-c.mp4"} {
+		if err := ctp.RegisterMedia(name, 100, media.Metadata{Mimetype: "video/mp4", Duration: 10}, name); err != nil {
+			t.Fatalf("RegisterMedia: %v", err)
+		}
+		if err := ctp.AddCue(name, ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	// Nothing selected: a +N offset walks from the first row.
+	if pos := cueNextSheetPos(0, 2); pos != 2 {
+		t.Fatalf("from start +2 = %d", pos)
+	}
+	if err := ctp.SetCue("2"); err != nil {
+		t.Fatalf("SetCue: %v", err)
+	}
+	if id, err := clipOffset("+1"); err != nil || id != 3 {
+		t.Fatalf("clipOffset +1 = %v err=%v", id, err)
+	}
+	if id, err := clipOffset("-1"); err != nil || id != 1 {
+		t.Fatalf("clipOffset -1 = %v err=%v", id, err)
+	}
+	if id, _ := clipOffset("+9"); id != 0 {
+		t.Errorf("overshoot must yield 0, got %d", id)
+	}
+	// Deck windowing: one clip from clip id 2.
+	win, err := clipListResponse("2", "1")
+	if err != nil || !strings.Contains(win, "clip count: 1\r\n") || !strings.Contains(win, "2: off-b.mp4") {
+		t.Errorf("clip window = %q err=%v", win, err)
+	}
+}
+
 func TestDeckGreeting(t *testing.T) {
 	addr := freeListenAddr(t)
 	go ListenHyperdeck(addr)
@@ -220,4 +253,38 @@ func freeListenAddr(t *testing.T) string {
 	}
 	defer ln.Close()
 	return "127.0.0.1:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+}
+
+func TestGroupTimingStats(t *testing.T) {
+	setupTestDB(t)
+	g := setupTrackedGroup(t)
+	total, remaining := groupTiming(g.GroupID)
+	if total == 0 {
+		t.Fatal("group total duration must be non-zero from member trims")
+	}
+	// Not playing: no remaining-time claim.
+	if remaining != 0 {
+		t.Errorf("idle group must report 0 remaining, got %v", remaining)
+	}
+}
+
+// setupTrackedGroup makes group + two media-backed members and returns the group.
+func setupTrackedGroup(t *testing.T) ctp.Group {
+	t.Helper()
+	gid, err := ctp.CreateGroup("Timing", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	for _, name := range []string{"timing-a.mp4", "timing-b.mp4"} {
+		if err := ctp.RegisterMedia(name, 100, media.Metadata{Mimetype: "video/mp4", Duration: 10}, name); err != nil {
+			t.Fatalf("RegisterMedia: %v", err)
+		}
+	}
+	for _, name := range []string{"timing-a.mp4", "timing-b.mp4"} {
+		if err := ctp.AddCueToGroup(name, gid, false); err != nil {
+			t.Fatalf("AddCueToGroup: %v", err)
+		}
+	}
+	g, _ := ctp.GetGroup(gid)
+	return g
 }

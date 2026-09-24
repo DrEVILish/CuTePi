@@ -409,17 +409,44 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 	}
 }
 
+// armPreloadCue prerolls the next cue into gsp's warm slot when it's AUDIO
+// only: audio preroll is silent and paints nothing (video/image preroll
+// would show its first frame over the live wall — forbidden by the realtime
+// rule). Arming waits ~1.2s so the just-fired cue's own decode settles and
+// never competes for the CPU mid-fade; a stale arm (generation moved) is
+// dropped by gsp.Warm itself.
+func armNextCue(gen uint64, pos int) {
+	if pos <= 0 {
+		return
+	}
+	next, err := ctp.GetCue(strconv.Itoa(pos))
+	if err != nil {
+		return
+	}
+	if !strings.HasPrefix(next.Mimetype, "audio/") {
+		return
+	}
+	goSafe(func() {
+		time.Sleep(1200 * time.Millisecond)
+		if gsp.Generation() != gen {
+			return
+		}
+		if err := gsp.Warm(next.Filename, cueOpts(next, false)); err != nil {
+			logs.Printf(logs.GSPWarm, "prewarm %q: %v", next.Filename, err)
+		}
+	})
+}
+
 // loadAndPlayCue builds LoadOpts for a cue and plays it. Shared by the cue
 // transport and automation (auto-continue, queue-after-fade). keepBackground
 // is only true for slideshow image slides: they ride ON the soundtrack
 // instead of restarting it.
 // play route and the fade-then-play path.
-func loadAndPlayCue(cue ctp.Cue) error {
-	return loadAndPlayCueKeep(cue, false)
-}
-
-func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
-	opts := gsp.LoadOpts{
+// cueOpts maps a cue row onto the playback options the pipeline honours.
+// Single source of truth for every transport that fires a cue (HTTP, remote
+// protocols, auto-continue chains, the scheduler, preload arming).
+func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
+	return gsp.LoadOpts{
 		InPoint:        float64(cue.PosStart) / 1000,
 		OutPoint:       float64(cue.PosEnd) / 1000,
 		Hold:           cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")),
@@ -437,7 +464,14 @@ func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
 		Flip:           cue.Flip,
 		KeepBackground: keepBackground,
 	}
-	if err := gsp.LoadWithOpts(cue.Filename, opts); err != nil {
+}
+
+func loadAndPlayCue(cue ctp.Cue) error {
+	return loadAndPlayCueKeep(cue, false)
+}
+
+func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
+	if err := gsp.LoadWithOpts(cue.Filename, cueOpts(cue, keepBackground)); err != nil {
 		ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
 		return err
 	}
@@ -505,37 +539,6 @@ func CurrentWait() waitState {
 	return waitNow
 }
 
-// waitTicks sleeps for d in 250ms steps while keeping waitNow live, bumping
-// the cuesheet version ~1/s so clients' countdown pills advance. Aborts
-// early (returns false) when gen moves — the operator did something else.
-func waitTicks(d time.Duration, cuePos int, kind string, gen uint64) bool {
-	if d <= 0 {
-		return true
-	}
-	setWait(waitState{CuePos: cuePos, Kind: kind, EndsAt: time.Now().Add(d).UnixMilli()})
-	defer clearWait()
-	tick := time.NewTicker(250 * time.Millisecond)
-	defer tick.Stop()
-	var waited time.Duration
-	lastBump := time.Now()
-	for {
-		select {
-		case <-tick.C:
-			waited += 250 * time.Millisecond
-			if gsp.Generation() != gen {
-				return false
-			}
-			if time.Since(lastBump) >= time.Second {
-				lastBump = time.Now()
-				ctp.NotifyCuesheetChanged()
-			}
-			if waited >= d {
-				return true
-			}
-		}
-	}
-}
-
 // autoContinueFrom implements per-cue auto-continue: a cue flagged
 // autoContinue plays the next cue in sheet order after it ends. The ending
 // cue's postWait and the next cue's preWait pause the chain (waits are only
@@ -555,16 +558,17 @@ func autoContinueFrom(endingPos int) {
 	if err != nil {
 		return
 	}
-	// Post-wait only here: the next cue's pre-wait is waited separately
-	// below. Adding it here too waited preWait twice.
-	delay := time.Duration(cue.PostWait) * time.Millisecond
+	// Single absolute deadline: the cue's postWait plus (when the next cue
+	// itself auto-continues) the next cue's preWait. The old shape waited
+	// them as two 250ms tick loops, so a 5s wait could land 250ms late per
+	// leg; now the tick loop is display-only and one exact timer fires.
+	post := time.Duration(cue.PostWait) * time.Millisecond
+	var pre time.Duration
+	if nextCue.AutoContinue {
+		pre = time.Duration(nextCue.PreWait) * time.Millisecond
+	}
 	gen := gsp.Generation()
-	goSafe(func() {
-		// Ticked wait: keeps the countdown state live so clients can show
-		// WHAT is waiting and for how long (§12.2), not just silence.
-		if !waitTicks(delay, endingPos, "post", gen) {
-			return
-		}
+	fire := func() {
 		// Generation guard: fires only if the playback decision state is
 		// unchanged since arming. Any operator action during the wait (load,
 		// stop, panic — including re-triggering the SAME cue, which leaves
@@ -573,25 +577,53 @@ func autoContinueFrom(endingPos int) {
 		if gsp.Generation() != gen {
 			return
 		}
-		if nextCue.PreWait > 0 && nextCue.AutoContinue {
-			if !waitTicks(time.Duration(nextCue.PreWait)*time.Millisecond, next, "pre", gen) {
-				return
-			}
-			if gsp.Generation() != gen {
-				return
-			}
-		}
 		// Re-fetch: the operator may have edited the next cue during the
-		// waits; the pre-wait snapshot would play stale values.
-		if fresh, err := ctp.GetCue(strconv.Itoa(next)); err == nil {
+		// waits; the wait-time snapshot would play stale values.
+		if fresh, ferr := ctp.GetCue(strconv.Itoa(next)); ferr == nil {
 			nextCue = fresh
 		}
-		if err := loadAndPlayCue(nextCue); err != nil {
-			log.Printf("auto-continue: loading next cue %d failed: %v", next, err)
+		if lerr := loadAndPlayCue(nextCue); lerr != nil {
+			log.Printf("auto-continue: loading next cue %d failed: %v", next, lerr)
 			ctp.SetCueResult(next, ctp.CueResultError)
 			return
 		}
 		_ = ctp.SetCue(strconv.Itoa(next))
+		// Preload whatever follows the chained cue (audio-only; see
+		// armNextCue) with the same GO-instantly contract the operator has.
+		if nn, nerr := ctp.NextCuePos(next); nerr == nil && nn != 0 {
+			armNextCue(gsp.Generation(), nn)
+		}
+	}
+	if post+pre <= 0 {
+		fire()
+		return
+	}
+	fireAt := time.Now().Add(post + pre)
+	goSafe(func() {
+		// Exact fire: a timer armed to the absolute deadline.
+		time.AfterFunc(post+pre, fire)
+		// Countdown display only: a live WHAT-is-waiting state (§12.2) for
+		// the pills, stepping post→pre at the phase boundary. Never fires.
+		setWait(waitState{CuePos: endingPos, Kind: "post", EndsAt: fireAt.UnixMilli()})
+		defer clearWait()
+		lastBump := time.Time{}
+		for {
+			time.Sleep(250 * time.Millisecond)
+			if gsp.Generation() != gen {
+				return
+			}
+			remaining := time.Until(fireAt)
+			if remaining <= 0 {
+				return
+			}
+			if remaining < pre {
+				setWait(waitState{CuePos: next, Kind: "pre", EndsAt: fireAt.UnixMilli()})
+			}
+			if time.Since(lastBump) >= time.Second {
+				lastBump = time.Now()
+				ctp.NotifyCuesheetChanged()
+			}
+		}
 	})
 }
 

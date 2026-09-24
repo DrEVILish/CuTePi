@@ -13,6 +13,10 @@
   <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML"
     hx-trigger="change delay:200ms, submit"
     class="gi-form vstack gap-2" style="max-width: 42rem;">
+    <div class="small text-muted" aria-label="Group runtime">
+      <i class="bi bi-hourglass-split me-1"></i>
+      Runtime {{ .DurationTotal }}{{ if ne .Remaining "00:00" }} · remaining {{ .Remaining }}{{ end }}
+    </div>
     <div class="d-flex gap-2">
       <div class="flex-grow-1">
         <label class="form-label small mb-0" for="group-name">Name</label>

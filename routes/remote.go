@@ -23,11 +23,14 @@ package routes
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"CuTePi/ctp"
 	"CuTePi/gsp"
@@ -66,8 +69,14 @@ func FireSelected() error {
 	if err := loadAndPlayCue(cue); err != nil {
 		return err
 	}
+	// Deck-style preload: after the advance, the newly-selected cue (audio-
+	// only) sits prerolled, so the NEXT GO lands instantly instead of paying
+	// a build+preroll.
 	if ctp.GetGoAdvance() {
 		_ = ctp.SelectStep(1)
+	}
+	if pos, perr := ctp.SelectedCuePos(); perr == nil && pos != 0 {
+		armNextCue(gsp.Generation(), pos)
 	}
 	return nil
 }
@@ -148,6 +157,7 @@ func ListenHyperdeck(addr string) {
 		logs.Printf(logs.RTEDeckErr, "hyperdeck listener: %v", err)
 		return
 	}
+	go deckNotifyLoop()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -159,8 +169,55 @@ func ListenHyperdeck(addr string) {
 
 // serveHyperdeckConn handles one client: greeting, then a line loop until
 // the client quits or hangs up.
+// deckClient is one HyperDeck control connection; notify= one subscribed to
+// async transport pushes.
+type deckClient struct {
+	conn   net.Conn
+	wmu    sync.Mutex
+	notify bool
+}
+
+func (d *deckClient) write(s string) bool {
+	d.wmu.Lock()
+	defer d.wmu.Unlock()
+	_, err := io.WriteString(d.conn, s)
+	return err == nil
+}
+
+// deckRegistry: connected (and optionally subscribed) clients. Deck sessions
+// are rare — a handful of controllers — so an RW-mutexed map beats channels.
+var (
+	deckRegMu   sync.RWMutex
+	deckClients = map[*deckClient]bool{}
+)
+
+func deckDrop(d *deckClient) {
+	deckRegMu.Lock()
+	delete(deckClients, d)
+	deckRegMu.Unlock()
+}
+
+func deckNotifyAll(body string) {
+	deckRegMu.RLock()
+	subs := make([]*deckClient, 0, len(deckClients))
+	for c := range deckClients {
+		if c.notify {
+			subs = append(subs, c)
+		}
+	}
+	deckRegMu.RUnlock()
+	for _, s := range subs {
+		go s.write(body) // per-write goroutine: a dead control client can't block the loop
+	}
+}
+
 func serveHyperdeckConn(conn net.Conn) {
 	defer conn.Close()
+	d := &deckClient{conn: conn}
+	deckRegMu.Lock()
+	deckClients[d] = true
+	deckRegMu.Unlock()
+	defer deckDrop(d)
 	if _, err := io.WriteString(conn, "500 connection info:\r\nprotocol version: 1.9\r\nmodel: CuTePi\r\n\r\n"); err != nil {
 		return
 	}
@@ -170,9 +227,24 @@ func serveHyperdeckConn(conn net.Conn) {
 		if err != nil {
 			return
 		}
-		reply, quit := handleDeckLine(strings.TrimSuffix(line, "\n"))
-		if _, werr := io.WriteString(conn, reply); werr != nil || quit {
+		reply, quit := handleDeckLine(d, strings.TrimSuffix(line, "\n"))
+		if !d.write(reply) || quit {
 			return
+		}
+	}
+}
+
+// deckNotifyLoop drives async transport pushes: whenever the playback state
+// version moves, subscribers get a "500 transport info" frame. Polls the
+// version counter (0.25s) rather than cross-wiring gsp internals.
+func deckNotifyLoop() {
+	last := uint64(0)
+	for {
+		time.Sleep(250 * time.Millisecond)
+		v := gsp.StateVersion()
+		if v != last {
+			last = v
+			deckNotifyAll("500 transport info:\r\n" + transportInfoBody() + "\r\n")
 		}
 	}
 }
@@ -227,18 +299,32 @@ func parseDeckLine(line string) (string, map[string]string) {
 }
 
 // handleDeckLine executes one HyperDeck line; quit returns close=true.
-func handleDeckLine(line string) (reply string, close bool) {
+func handleDeckLine(client *deckClient, line string) (reply string, close bool) {
 	cmd, params := parseDeckLine(line)
 	switch cmd {
 	case "quit":
 		return "200 ok\r\n\r\n", true
 	case "ping":
 		return "200 ok\r\n\r\n", false
-	case "remote", "play on startup", "preview":
+	case "remote", "remote: override", "play on startup", "preview":
 		// Accept and ignore: remote enable/override is meaningless on a
 		// device whose web UI is always the same authority, but answering
 		// keeps controllers from treating the session as wedged.
 		return "200 ok\r\n\r\n", false
+	case "notify":
+		// notify: transport: {true|false} — subscribe to async "500
+		// transport info" frames, the protocol's feedback channel; Companion
+		// and CM button state lights receive these.
+		if client != nil {
+			sub := params["transport"] == "true"
+			client.notify = sub
+			logs.Printf(logs.RTEDeck, "hyperdeck notify transport: %v", sub)
+		}
+		return "200 ok\r\n\r\n", false
+	case "commands":
+		// Machine-readable discovery, minimal but the same XML shape, so
+		// auto-configuring controllers don't treat the device as alien.
+		return commandsXML(), false
 	case "help", "?":
 		return "200 ok:\r\n" + strings.Join([]string{
 			"quit", "ping", "device info", "transport info", "clips get", "clips count",
@@ -254,7 +340,7 @@ func handleDeckLine(line string) (reply string, close bool) {
 	case "transport info":
 		return transportInfo() + "\r\n", false
 	case "clips get", "disk list":
-		s, err := clipListResponse()
+		s, err := clipListResponse(params["clip id"], params["count"])
 		if err != nil {
 			return "103 database failure:\r\n\r\n", false
 		}
@@ -267,10 +353,22 @@ func handleDeckLine(line string) (reply string, close bool) {
 		return fmt.Sprintf("210 clips count: %d\r\n\r\n", n), false
 	case "play":
 		if v, ok := params["clip id"]; ok {
-			if err := playClip(v, params["timecode"]); err != nil {
-				logs.Printf(logs.RTEDeckErr, "hyperdeck play clip %q: %v", v, err)
+			id, err := clipOffset(v)
+			if err != nil {
+				return "100 syntax error: clip id " + v + "\r\n\r\n", false
+			}
+			if perr := fireClip(id, params["timecode"]); perr != nil {
+				logs.Printf(logs.RTEDeckErr, "hyperdeck play clip %s: %v", v, perr)
 				return "105 load failure: no such clip id: " + v + "\r\n\r\n", false
 			}
+		} else if v, ok := params["timecode"]; ok {
+			// play: timecode: X — position the transport, then start it.
+			seconds, perr := parseTimecode(v)
+			if perr != nil {
+				return "100 syntax error: " + perr.Error() + "\r\n\r\n", false
+			}
+			gsp.Seek(seconds)
+			gsp.Play()
 		} else {
 			gsp.Play()
 		}
@@ -301,53 +399,34 @@ func handleDeckLine(line string) (reply string, close bool) {
 		return "200 ok\r\n\r\n", false
 	case "goto":
 		if v, ok := params["clip id"]; ok {
-			if err := gotoCue(v); err != nil {
+			id, err := clipOffset(v)
+			if err != nil {
+				return "100 syntax error: clip id " + v + "\r\n\r\n", false
+			}
+			// goto: clip id: {n|±n}: select (±n = step from the current clip,
+			// the deck way of saying next/previous) — playhead only, no start.
+			cue, cerr := cueAtSheetPos(id)
+			if cerr != nil {
+				return "105 load failure: no such clip id: " + v + "\r\n\r\n", false
+			}
+			if serr := ctp.SetCue(strconv.Itoa(cue.CuePos)); serr != nil {
 				return "105 load failure: no such clip id: " + v + "\r\n\r\n", false
 			}
 			return "200 ok\r\n\r\n", false
 		}
 		if v, ok := params["timecode"]; ok {
-			seconds, err := parseTimecode(v)
-			if err != nil {
-				return "100 syntax error: " + err.Error() + "\r\n\r\n", false
+			seconds, perr := parseTimecode(v)
+			if perr != nil {
+				return "100 syntax error: " + perr.Error() + "\r\n\r\n", false
 			}
 			gsp.Seek(seconds)
 			return "200 ok\r\n\r\n", false
 		}
 		return "200 ok\r\n\r\n", false
-	case "remote: override": // some senders keep the whole thing in one token
-		return "200 ok\r\n\r\n", false
 	default:
 		logs.Printf(logs.RTEDeckErr, "hyperdeck unknown command: %q", line)
 		return "100 unknown command: " + strings.TrimSpace(line) + "\r\n\r\n", false
 	}
-}
-
-// playClip starts cue id (the sheet's Nth position) and optionally offsets
-// into it — "play: clip id: 5" targets the sheet's 5th row like a deck's
-// timeline clip 5.
-func playClip(clipID string, timecode string) error {
-	if _, err := ctp.GetCue(strings.TrimSpace(clipID)); err != nil {
-		return err
-	}
-	logs.Printf(logs.RTEDeck, "hyperdeck play clip id %s", clipID)
-	if err := FireCue(strings.TrimSpace(clipID)); err != nil {
-		return err
-	}
-	if timecode != "" {
-		if seconds, err := parseTimecode(timecode); err == nil {
-			gsp.Seek(seconds)
-		}
-	}
-	return nil
-}
-
-// gotoCue positions the playhead on a cue without starting it.
-func gotoCue(clipID string) error {
-	if _, err := ctp.GetCue(strings.TrimSpace(clipID)); err != nil {
-		return err
-	}
-	return ctp.SetCue(strings.TrimSpace(clipID))
 }
 
 // parseTimecode accepts "HH:MM:SS(:FF|)" (25fps frame rate) and plain
@@ -392,8 +471,80 @@ func applySpeed(pct int) error {
 	return nil
 }
 
-// playClipOffsetless: FireCue already plays; timecode offset is applied via
-// gsp.Seek.
+// clipOffset parses a deck clip id: a plain integer row position, or ±N
+// relative to the currently selected clip (the protocol's formal way to say
+// next/previous).
+func clipOffset(v string) (int, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, errors.New("empty clip id")
+	}
+	if v[0] == '+' || v[0] == '-' {
+		off, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, err
+		}
+		// Anchor = the playing clip, else the selected playhead.
+		pos := gsp.CurrentCuePos()
+		if pos == 0 {
+			pos, _ = ctp.SelectedCuePos()
+		}
+		return cueNextSheetPos(pos, off), nil
+	}
+	return strconv.Atoi(v)
+}
+
+// cueNextSheetPos walks ±off sheet rows from pos through the existing cues
+// (like deck clip lists, positions collapse around deletions) — 0 when the
+// walk exits the sheet.
+func cueNextSheetPos(pos, off int) int {
+	if off == 0 {
+		return pos
+	}
+	cues, err := ctp.GetCuesheet()
+	if err != nil {
+		return 0
+	}
+	idx := -1
+	for i, c := range cues.Cues {
+		if c.CuePos == pos {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		// Nothing selected: the walk starts before the first row (+N from there).
+		idx = -1
+	}
+	i := idx + off
+	if i < 0 || i >= len(cues.Cues) {
+		return 0
+	}
+	return cues.Cues[i].CuePos
+}
+
+func cueAtSheetPos(pos int) (ctp.Cue, error) {
+	return ctp.GetCue(strconv.Itoa(pos))
+}
+
+// fireClip plays the clip at sheet position id (offset applied), optionally
+// offsetting into it by a timecode.
+func fireClip(id int, timecode string) error {
+	cue, err := cueAtSheetPos(id)
+	if err != nil {
+		return err
+	}
+	logs.Printf(logs.RTEDeck, "hyperdeck play clip id %d", id)
+	if err := FireCue(strconv.Itoa(cue.CuePos)); err != nil {
+		return err
+	}
+	if timecode != "" {
+		if seconds, perr := parseTimecode(timecode); perr == nil {
+			gsp.Seek(seconds)
+		}
+	}
+	return nil
+}
 
 // --- transport state (shared by both protocols) ------------------------------
 
@@ -431,29 +582,61 @@ func timecode(seconds float64) string {
 		frames%(MediaFPS*60)/MediaFPS, frames%MediaFPS)
 }
 
-// transportInfo renders a full "transport info" response body.
-func transportInfo() string {
+// transportInfoBody renders the parameter lines of a transport info frame
+// (shared by the 208 response and the async 500 push).
+func transportInfoBody() string {
 	status, speed := deckTransportState()
 	loop := "false"
 	if gsp.Loop() {
 		loop = "true"
 	}
-	return fmt.Sprintf("208 transport info:\r\nstatus: %s\r\nspeed: %d\r\nslot id: none\r\nslot name: CuTePi\r\nclip id: %s\r\nsingle clip: true\r\ndisplay timecode: %s\r\ntimecode: %s\r\nvideo format: 1080p25\r\nloop: %s\r\ntimeline: 1\r\n",
-		status, speed, currentClipID(),
-		timecode(gsp.CurrentPosition()), timecode(gsp.CurrentPosition()), loop)
+	pos := timecode(gsp.CurrentPosition())
+	return fmt.Sprintf("status: %s\r\nspeed: %d\r\nslot id: none\r\nslot name: CuTePi\r\nclip id: %s\r\nsingle clip: true\r\ndisplay timecode: %s\r\ntimecode: %s\r\nvideo format: 1080p25\r\nloop: %s\r\ntimeline: 1\r\n",
+		status, speed, currentClipID(), pos, pos, loop)
+}
+
+// transportInfo renders the full "transport info" response.
+func transportInfo() string {
+	return "208 transport info:\r\n" + transportInfoBody()
+}
+
+// commandsXML answers the "commands" discovery probe with the supported
+// subset (real decks' XML differs per model; auto-configuring controllers
+// parse the shape, not the full inventory).
+func commandsXML() string {
+	return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<commands>\r\n" +
+		strings.Join([]string{
+			"ping", "quit", "device info", "transport info", "clips get", "clips count",
+			"play", "goto", "stop", "pause", "playrange", "notify?", "record?", "prewarm??",
+		}, "\r\n") +
+		"\r\n</commands>\r\n\r\n"
 }
 
 // clipListResponse renders the cue sheet as the deck's clip list: clip id is
 // the cue position, so "goto/play: clip id: N" targets the Nth sheet row
 // exactly like a deck targets timeline clips.
-func clipListResponse() (string, error) {
+func clipListResponse(clipID, count string) (string, error) {
 	cu, err := ctp.GetCuesheet()
 	if err != nil {
 		return "", err
 	}
+	// Optional window: "clips get: clip id: {n}[ count: {m}]", with ±N
+	// offsets resolving sheet rows like goto/play.
+	start, window := 0, len(cu.Cues)
+	if id, err := clipOffset(clipID); err == nil && id > 0 {
+		for i, c := range cu.Cues {
+			if c.CuePos == id {
+				start = i
+				break
+			}
+		}
+		if c, cerr := strconv.Atoi(strings.TrimSpace(count)); cerr == nil && c > 0 && start+c < len(cu.Cues) {
+			window = start + c
+		}
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "205 clips info:\r\nclip count: %d\r\n", len(cu.Cues))
-	for _, cue := range cu.Cues {
+	fmt.Fprintf(&b, "205 clips info:\r\nclip count: %d\r\n", window-start)
+	for _, cue := range cu.Cues[start:window] {
 		dur := float64(cue.PosEnd-cue.PosStart) / 1000
 		if dur < 0 || cue.PosEnd <= 0 {
 			dur = 0

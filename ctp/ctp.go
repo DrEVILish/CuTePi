@@ -2124,6 +2124,7 @@ type ScheduleInfo struct {
 	CuePos       int     `db:"cuePos"`
 	Title        string  `db:"title"`
 	Filename     string  `db:"filename"`
+	ScheduleMs   int     `db:"schedule_time_ms"`
 	PosStart     int     `db:"posStart"`
 	PosEnd       int     `db:"posEnd"`
 	Hold         bool    `db:"hold"`
@@ -2140,6 +2141,33 @@ type ScheduleInfo struct {
 	Rotation     int     `db:"rotation"`
 	Flip         string  `db:"flip"`
 	Mimetype     string  `db:"mimetype"`
+}
+
+// AsCue rebuilds the cue-level view of a scheduled row (the subset the
+// transport honours: filename, trim, playback settings) so one opts builder
+// serves both a fetched cue and a fetched schedule. Not a DB round trip:
+// the fire path re-fetches a fresh ctp.Cue when it fires, which is what
+// keeps late edits honest.
+func (s ScheduleInfo) AsCue() Cue {
+	return Cue{
+		Media:     Media{Filename: s.Filename, Mimetype: s.Mimetype, LoudnessGain: s.LoudnessGain},
+		CuePos:    s.CuePos,
+		Title:     s.Title,
+		PosStart:  s.PosStart,
+		PosEnd:    s.PosEnd,
+		Hold:      s.Hold,
+		Loop:      s.Loop,
+		LoopCount: s.LoopCount,
+		Volume:    s.Volume,
+		Rate:      s.Rate,
+		Balance:   s.Balance,
+		Mute:      s.Mute,
+		FadeIn:    s.FadeIn,
+		FadeCurve: s.FadeCurve,
+		FitMode:   s.FitMode,
+		Rotation:  s.Rotation,
+		Flip:      s.Flip,
+	}
 }
 
 // NextSchedule reports the next upcoming enabled schedule strictly after
@@ -2178,11 +2206,14 @@ func NextSchedule(now time.Time) (dueIn time.Duration, num, title string, ok boo
 }
 
 // GetScheduledCues returns every enabled schedule whose day-of-week bit is
-// set and whose time-of-day fell due within the last second. The 1s window
-// covers one missed scheduler tick plus jitter — anything older is stale,
-// never "due" (enabling Show mode late in the day must not fire the whole
-// day's past cues). Second precision throughout: minute-rounded times can
-// never hit an exact-second sync-fire. The caller owns the result.
+// set and whose time-of-day fell due within the last second — plus cues due
+// within the next 250ms, so the scheduler can preroll audio cues and land
+// them on their exact second instead of the next tick boundary. The 1s
+// trailing window covers one missed scheduler tick plus jitter — anything
+// older is stale, never "due" (enabling Show mode late in the day must not
+// fire the whole day's past cues). Second precision throughout: minute-
+// rounded times can never hit an exact-second sync-fire. The caller owns
+// the result.
 func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
 	day := int(now.Weekday())
 	if day == 0 {
@@ -2191,7 +2222,7 @@ func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
 	timeMs := now.Hour()*3600*1000 + now.Minute()*60*1000 + now.Second()*1000
 	var rows []ScheduleInfo
 	err := db.Select(&rows, `
-		SELECT c.cuePos, c.title, m.filename, c.posStart, c.posEnd,
+		SELECT c.cuePos, c.title, m.filename, c.schedule_time_ms, c.posStart, c.posEnd,
 			c.hold, c.loop, c.loop_count, c.volume, m.loudness_gain,
 			c.rate, c.balance, c.mute, c.fadeIn, c.fade_curve,
 			c.fit_mode, c.rotation, c.flip,
@@ -2200,7 +2231,7 @@ func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
 		JOIN mediapool m ON c.media_id = m.media_id
 		WHERE c.schedule_enabled = 1
 		AND ((c.schedule_days & ?) = ?)
-		AND c.schedule_time_ms <= ?
+		AND c.schedule_time_ms <= ? + 250
 		AND c.schedule_time_ms > ? - 1000
 		AND (c.last_played_at = 0 OR c.last_played_at < ?)
 		ORDER BY c.schedule_time_ms ASC, c.sheet_index ASC`,

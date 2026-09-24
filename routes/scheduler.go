@@ -49,33 +49,52 @@ func RunScheduler() {
 				if _, ok := scheduleFired[key]; ok {
 					continue
 				}
+				// Mark armed (not fired): the 200ms tick only ARMS — fires go
+				// to an exact timer at the cue's scheduled second (midnight +
+				// ms-of-day), so timed cues land on the clock instead of up
+				// to a tick late. A late wake-up (slot already passed) fires
+				// at once.
+				at := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).
+					Add(time.Duration(cue.ScheduleMs) * time.Millisecond)
+				fireScheduled := func() {
+					// Re-fetch at fire time (latest edits; the 250ms look-ahead
+					// and the warm slot snapshot must not play stale values),
+					// then build opts through the ONE shared builder.
+					fcue := cue.AsCue()
+					if fresh, cerr := ctp.GetCue(strconv.Itoa(cue.CuePos)); cerr == nil {
+						fcue = fresh
+					}
+					if err := gsp.LoadWithOpts(fcue.Filename, cueOpts(fcue, false)); err != nil {
+						ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
+						log.Printf("CuTePi: failed to fire scheduled cue %d: %v", cue.CuePos, err)
+						return
+					}
+					ctp.SetCueResult(cue.CuePos, ctp.CueResultOK)
+					gsp.SetCuePos(cue.CuePos)
+					gsp.Play()
+				}
 				scheduleFired[key] = now.UnixMilli()
-				gsp.Stop()
-				opts := gsp.LoadOpts{
-					InPoint:      float64(cue.PosStart) / 1000,
-					OutPoint:     float64(cue.PosEnd) / 1000,
-					Hold:         cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")),
-					Loop:         cue.Loop,
-					LoopCount:    cue.LoopCount,
-					Volume:       cue.Volume,
-					LoudnessGain: cue.LoudnessGain,
-					Rate:         cue.Rate,
-					Balance:      cue.Balance,
-					Mute:         cue.Mute,
-					FadeIn:       cue.FadeIn,
-					FadeCurve:    cue.FadeCurve,
-					FitMode:      cue.FitMode,
-					Rotation:     cue.Rotation,
-					Flip:         cue.Flip,
+				d := time.Until(at)
+				switch {
+				case d <= 0:
+					fireScheduled()
+				case d > 0 && strings.HasPrefix(cue.Mimetype, "audio/"):
+					// Audio-only preroll: build+preroll is silent and paints
+					// nothing, so it can warm now and land on the exact
+					// second. Video keeps build-at-fire (a prerolled video
+					// pipeline would flash its first frame on the wall).
+					if warmErr := gsp.Warm(cue.Filename, cueOpts(cue.AsCue(), false)); warmErr == nil {
+						time.AfterFunc(d, func() {
+							if !gsp.InstallWarm(cue.Filename, cueOpts(cue.AsCue(), false)) {
+								fireScheduled()
+							}
+						})
+						break
+					}
+					time.AfterFunc(d, fireScheduled)
+				default:
+					time.AfterFunc(d, fireScheduled)
 				}
-				if err := gsp.LoadWithOpts(cue.Filename, opts); err != nil {
-					ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
-					log.Printf("CuTePi: failed to fire scheduled cue %d: %v", cue.CuePos, err)
-					continue
-				}
-				ctp.SetCueResult(cue.CuePos, ctp.CueResultOK)
-				gsp.SetCuePos(cue.CuePos)
-				gsp.Play()
 			}
 		}
 	}()

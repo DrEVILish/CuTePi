@@ -192,6 +192,7 @@ const (
 	GSPPipeDebug   = "GSP-E130" // GStreamer pipeline error debug string
 	GSPPipeStopped = "GSP-E140" // pipeline stopped (end-of-stream or error)
 	GSPPadAdded    = "GSP-E150" // stream pad-added detection detail
+	GSPWarm        = "GSP-E160" // prewarmed pipeline activated (deck-style cue load)
 )
 
 // YDL - YouTube/yt-dlp import stages.

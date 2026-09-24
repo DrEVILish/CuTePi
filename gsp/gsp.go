@@ -2,6 +2,7 @@ package gsp
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -48,6 +49,10 @@ type manager struct {
 	cuePos       int           // cue position associated with the active clip (0 = not a cue)
 	onCueEnd     func(pos int) // invoked (in a goroutine) when an active cue reaches its end
 	gen          uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
+	warm         *gst.Pipeline // prebuilt+prerolled next cue; see Warm. Audio-only callers
+	warmFile     string        // only, since a prerolled video pipeline paints its
+	warmOpts     LoadOpts      // first frame onto the live wall (realtime-first rule)
+	warmBuildGen uint64        // generation the arm was made under (stale-arm check)
 }
 
 var (
@@ -69,7 +74,7 @@ func gstInit() {
 				before := StateVersion()
 				CurrentPosition()
 				if StateVersion() != before {
-					go ws.Broadcast()
+					broadcastSoon()
 				}
 			}
 		}()
@@ -79,11 +84,40 @@ func gstInit() {
 // bump increments the change counter the Now Playing poller relies on. It is
 // called only when something the widget displays (filename, play state,
 // position) actually changes.
+// bump coalescer: playback state changes arrive in bursts (a 500ms fade
+// steps ~50 times, a cue swap bumps several times). Every bump is one WS
+// broadcast, and every broadcast makes connected clients re-fetch their
+// partials — so bursts starve the realtime paths of the same CPU the
+// pipeline needs. Trailing-edge debounce: at most one broadcast per 100ms
+// window, and the LAST state always reaches clients.
+var (
+	bumpTimerMu sync.Mutex
+	bumpTimer   *time.Timer
+)
+
+// broadcastAsap sends at most one "sync" broadcast per 100ms window;
+// trailing edge, so the newest version always lands.
+func broadcastSoon() {
+	bumpTimerMu.Lock()
+	defer bumpTimerMu.Unlock()
+	if bumpTimer != nil {
+		return
+	}
+	bumpTimer = time.AfterFunc(100*time.Millisecond, func() {
+		bumpTimerMu.Lock()
+		bumpTimer = nil
+		bumpTimerMu.Unlock()
+		ws.Broadcast()
+	})
+}
+
+// Realtime rule: nothing but playback is prioritized — the deck can't spend CPU on bursts that don't change pixels.
+
 func (m *manager) bump() {
 	m.mu.Lock()
 	m.version++
 	m.mu.Unlock()
-	go ws.Broadcast()
+	broadcastSoon()
 }
 
 // StateVersion returns the change counter: clients re-render the Now Playing
@@ -113,7 +147,8 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 		stopBackground() // a new playback decision always kills the soundtrack
 	}
 	m.mu.Lock()
-	if m.pipeline != nil {
+	m.dropWarm() // a warm slot from a previous decision is somebody else's memory
+	if m.pipeline != nil && m.pipeline != newPipeline {
 		retirePipeline(m.pipeline)
 	}
 	m.clearPlayback()
@@ -141,7 +176,7 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	m.starting = true
 	m.gen++
 	m.mu.Unlock()
-	go ws.Broadcast()
+	broadcastSoon()
 }
 
 // clearPlayback resets every mutable playback field except the pipeline
@@ -174,7 +209,7 @@ func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 		m.clearPlayback()
 		m.gen++
 		m.mu.Unlock()
-		go ws.Broadcast()
+		broadcastSoon()
 		return
 	}
 	m.mu.Unlock()
@@ -290,8 +325,9 @@ func Panic() {
 		mgr.clearPlayback()
 		mgr.gen++
 	}
+	mgr.dropWarm() // PANIC tears everything down, including the warm slot
 	mgr.mu.Unlock()
-	go ws.Broadcast()
+	broadcastSoon()
 }
 
 func Stop() {
@@ -321,10 +357,11 @@ func Stop() {
 	mgr.cuePos = 0
 	mgr.lastPos = 0
 	mgr.starting = false
+	mgr.dropWarm()
 	mgr.gen++
 	mgr.version++
 	mgr.mu.Unlock()
-	go ws.Broadcast()
+	broadcastSoon()
 }
 
 // ShowTest loads and plays a GStreamer video-test-pattern.
@@ -347,8 +384,20 @@ func Load(filename string) error {
 }
 
 // LoadWithOpts loads filename with an optional trim window and hold policy.
+// A prewarmed slot matching file+opts (see Warm) activates instead of a
+// fresh build+preroll — the ~0-latency cue path; a mismatched or missing
+// slot falls back to the normal build.
 func LoadWithOpts(filename string, opts LoadOpts) error {
 	gstInit()
+	mgr.mu.Lock()
+	hit := mgr.warmHit(filename, opts)
+	mgr.mu.Unlock()
+	if hit && InstallWarm(filename, opts) {
+		return nil
+	}
+	mgr.mu.Lock()
+	mgr.dropWarm()
+	mgr.mu.Unlock()
 	newPipeline, err := buildPipeline(pipelineSpec{isTest: false, filename: filename})
 	if err != nil {
 		return err
@@ -356,6 +405,118 @@ func LoadWithOpts(filename string, opts LoadOpts) error {
 	mgr.swap(newPipeline, filename, opts)
 	watchAndPlay(newPipeline)
 	return nil
+}
+
+// warmHit reports whether a slot applies to this load: same file, same
+// opts (all fields comparable), and the arm was made under the current
+// generation. Callers hold no lock; entry resets the slot when claimed.
+func (m *manager) warmHit(file string, opts LoadOpts) bool {
+	if m.warm == nil || m.warmFile != file || m.warmOpts != opts {
+		return false
+	}
+	return true
+}
+
+func (m *manager) dropWarm() {
+	if m.warm == nil {
+		return
+	}
+	retirePipeline(m.warm)
+	m.warm = nil
+	m.warmFile = ""
+	m.warmOpts = LoadOpts{}
+}
+
+// Warm prebuilds and prerolls the NEXT cue into a slot (deck-style double
+// buffer for audio cues), so a later LoadWithOpts with the same file+opts
+// activates it instead of rebuilding. Callers must only Warm audio-only
+// media: a prerolled video pipeline paints its first frame on the live
+// output, which is exactly what the realtime rule forbids. The build
+// validators: a stale arm (a newer playback decision landed meanwhile) is
+// retired, never installed.
+func Warm(file string, opts LoadOpts) error {
+	gstInit()
+	mgr.mu.Lock()
+	buildGen := mgr.gen
+	if mgr.warm != nil {
+		retirePipeline(mgr.warm)
+		mgr.warm, mgr.warmFile, mgr.warmOpts = nil, "", LoadOpts{}
+	}
+	mgr.mu.Unlock()
+	p, err := buildPipeline(pipelineSpec{isTest: false, filename: file})
+	if err != nil {
+		return err
+	}
+	// Preroll parked (paused): first buffers decoded, nothing displayed, no
+	// audible output until a later activation starts the pipeline.
+	p.SetState(gst.StatePaused)
+	result, _ := p.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
+	if result == gst.StateChangeFailure {
+		retirePipeline(p)
+		return fmt.Errorf("prewarm preroll failed: %v", result)
+	}
+	mgr.mu.Lock()
+	current := mgr.gen == buildGen
+	if current {
+		mgr.warm = p
+		mgr.warmFile = file
+		mgr.warmOpts = opts
+		mgr.warmBuildGen = buildGen
+	}
+	mgr.mu.Unlock()
+	if !current {
+		// A newer playback decision landed while we built — warm now.
+		retirePipeline(p)
+		return nil
+	}
+	watchWarm(p)
+	return nil
+}
+
+// watchWarm parks the slot's error watch while the pipeline is idle: any
+// bus error or retirement unregisters. EOS cannot occur here — a PAUSED
+// pipeline never reaches end-of-stream on its own.
+func watchWarm(p *gst.Pipeline) {
+	p.GetPipelineBus().AddWatch(func(msg *gst.Message) bool {
+		mgr.mu.Lock()
+		current := mgr.warm == p
+		mgr.mu.Unlock()
+		if !current {
+			return false
+		}
+		if msg.Type() == gst.MessageError {
+			logs.Printf(logs.GSPPipeDebug, "gsp: warm pipeline error debug: %s", msg.ParseError().DebugString())
+			mgr.mu.Lock()
+			if mgr.warm == p {
+				retirePipeline(p)
+				mgr.warm, mgr.warmFile, mgr.warmOpts = nil, "", LoadOpts{}
+			}
+			mgr.mu.Unlock()
+			return false
+		}
+		return true
+	})
+}
+
+// InstallWarm activates the prewarmed pipeline for file+opts if the slot is
+// still the one Warm built: retire the current transport, install the warm
+// pipeline, play. False = stale/mismatched slot, caller falls back.
+func InstallWarm(file string, opts LoadOpts) bool {
+	mgr.mu.Lock()
+	p, ok := mgr.warm, mgr.warmFile == file && mgr.warmOpts == opts
+	if ok {
+		mgr.warm, mgr.warmFile, mgr.warmOpts = nil, "", LoadOpts{} // claim before retiring anything else
+	}
+	mgr.mu.Unlock()
+	if !ok {
+		return false
+	}
+	logs.Printf(logs.GSPWarm, "warm pipeline activated: %s", file)
+	// swap() owns the retire+install; give it the prerolled handle. Its
+	// clearPlayback/dropWarm have already been done above for the slot.
+	mgr.swap(p, file, opts)
+	watchAndPlay(p)
+	return true
 }
 
 func CurrentPlaying() string {
