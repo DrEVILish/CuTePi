@@ -10,7 +10,7 @@
     <span class="me-2">Source file missing from disk. Re-link to another media item or delete this cue.</span>
     <form class="d-inline-flex is-items-center is-gap-xs"
       hx-put="/api/cue/{{ .Cue.CuePos }}/replace" hx-target="#cueinspector-body" hx-swap="outerHTML">
-      <select name="filename" class="ftl-select ftl-select w-auto" aria-label="Replacement media">
+      <select name="filename" class="ftl-select w-auto" aria-label="Replacement media">
         <option value="" selected>Replace with&hellip;</option>
         {{ range .Pool }}
         <option value="{{ .Filename }}">{{ .Filename }}</option>
@@ -55,7 +55,7 @@
                  <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
                  <label class="small" for="insp-loop">Loop</label>
                  <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
-                   class="ftl-input ftl-input" style="width:5em"
+                   class="ftl-input" style="width:5em"
                    value="{{ .Cue.LoopCount }}"
                    title="Loop count: 0 = infinite, N = play N times"
                    aria-label="Loop count">
@@ -73,7 +73,7 @@
                <div class="ftl-row is-items-center is-gap-xs">
                  <input class="form-check-input" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
                  <label class="small" for="insp-schedule">Schedule</label>
-                 <input id="insp-schedule-time" name="schedule_time" type="time" class="ftl-input ftl-input" step="1"
+                 <input id="insp-schedule-time" name="schedule_time" type="time" class="ftl-input" step="1"
                    value="{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}"
                    aria-label="Time of day, to the second" title="Time of day, to the second">
                  <details class="day-picker" id="insp-schedule-days">
@@ -135,14 +135,14 @@
                 <div class="ftl-row is-items-center is-gap-xs">
                   <input class="form-check-input" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
                   <label class="small" for="insp-fadestop">Fade-stop others</label>
-                  <select id="insp-fadeaction" name="fadeAction" class="ftl-select ftl-select" style="width:auto" title="Which other cues fade out when this one starts">
+                  <select id="insp-fadeaction" name="fadeAction" class="ftl-select" style="width:auto" title="Which other cues fade out when this one starts">
                     <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                     <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
                     <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
                   </select>
-                  <input id="insp-fadeout" name="fadeOut" class="ftl-input ftl-input" style="width:4.5em"
+                  <input id="insp-fadeout" name="fadeOut" class="ftl-input" style="width:4.5em"
                     value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
-                  <select id="insp-fadecurve" name="fadeCurve" class="ftl-select ftl-select" style="width:auto"
+                  <select id="insp-fadecurve" name="fadeCurve" class="ftl-select" style="width:auto"
                     title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential">
                     <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
                     <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
@@ -179,14 +179,14 @@
             </div>
             <div class="ftl-row is-items-center is-gap-xs">
               <label class="insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
-              <select id="insp-img-fadeaction" name="fadeAction" class="ftl-select ftl-select" style="width:auto" title="Which other cues fade out when this one starts">
+              <select id="insp-img-fadeaction" name="fadeAction" class="ftl-select" style="width:auto" title="Which other cues fade out when this one starts">
                 <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                 <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
                 <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
               </select>
-              <input id="insp-img-fadeout" name="fadeOut" class="ftl-input ftl-input" style="width:4.5em"
+              <input id="insp-img-fadeout" name="fadeOut" class="ftl-input" style="width:4.5em"
                 value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
-              <select id="insp-img-fadecurve" name="fadeCurve" class="ftl-select ftl-select" style="width:auto"
+              <select id="insp-img-fadecurve" name="fadeCurve" class="ftl-select" style="width:auto"
                 title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential">
                 <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
                 <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
@@ -209,7 +209,7 @@
               data-volume-inspector aria-label="Volume (dB)">
             <div class="ftl-row is-items-center is-gap-2xs">
               <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" data-volume-step="-1" aria-label="Decrease volume by 1 dB">↓</button>
-              <input id="insp-volume-db" type="number" class="ftl-input ftl-input insp-volume-db"
+              <input id="insp-volume-db" type="number" class="ftl-input insp-volume-db"
                 value="{{ .Cue.Volume }}" min="-60" max="12" step="1" aria-label="Volume dB value">
               <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" data-volume-step="1" aria-label="Increase volume by 1 dB">↑</button>
             </div>
@@ -218,7 +218,7 @@
           <div class="insp-audio-settings">
             <div class="insp-time-field insp-fadein">
               <label class="insp-field-label" for="insp-audio-fadein">Fade In</label>
-              <input id="insp-audio-fadein" name="fadeIn" data-fade-in class="ftl-input ftl-input"
+              <input id="insp-audio-fadein" name="fadeIn" data-fade-in class="ftl-input"
                 value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade audio and video in (seconds)">
             </div>
             <label class="insp-field-label" for="insp-balance">Balance / Pan <output id="insp-balance-value">{{ .Cue.Balance }}</output></label>
@@ -241,26 +241,26 @@
         {{ if not (hasPrefix .Cue.Mimetype "image/") }}
         <div class="insp-time-field insp-fadein ftl-mt-xs">
           <label class="insp-field-label" for="insp-video-fadein">Fade In</label>
-          <input id="insp-video-fadein" data-fade-in class="ftl-input ftl-input"
+          <input id="insp-video-fadein" data-fade-in class="ftl-input"
             value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade audio and video in from silence and black (seconds)">
         </div>
         <div class="insp-time-field insp-fadeout ftl-mt-xs">
           <label class="insp-field-label" for="insp-video-fadeout">Fade Out</label>
-          <input id="insp-video-fadeout" data-fade-out class="ftl-input ftl-input"
+          <input id="insp-video-fadeout" data-fade-out class="ftl-input"
             value="{{ formatTime .Cue.FadeOut }}" placeholder="hh:mm:ss.ms" title="Fade audio and video out after playback (seconds)">
         </div>
         {{ end }}
         <div class="d-flex is-items-end is-gap-xs is-wrap ftl-mt-xs">
           <div class="insp-time-field">
             <label class="insp-field-label" for="insp-fit">Frame fit</label>
-            <select id="insp-fit" name="fit_mode" class="ftl-select ftl-select" style="width:auto" title="Fit: letterbox preserving aspect; Stretch: fill the screen, distorting aspect">
+            <select id="insp-fit" name="fit_mode" class="ftl-select" style="width:auto" title="Fit: letterbox preserving aspect; Stretch: fill the screen, distorting aspect">
               <option value="fit" {{ if ne .Cue.FitMode "stretch" }}selected{{ end }}>Fit</option>
               <option value="stretch" {{ if eq .Cue.FitMode "stretch" }}selected{{ end }}>Stretch</option>
             </select>
           </div>
           <div class="insp-time-field">
             <label class="insp-field-label" for="insp-rotation">Rotate</label>
-            <select id="insp-rotation" name="rotation" class="ftl-select ftl-select" style="width:auto" title="Rotate the frame clockwise">
+            <select id="insp-rotation" name="rotation" class="ftl-select" style="width:auto" title="Rotate the frame clockwise">
               <option value="0" {{ if eq .Cue.Rotation 0 }}selected{{ end }}>0&deg;</option>
               <option value="90" {{ if eq .Cue.Rotation 90 }}selected{{ end }}>90&deg;</option>
               <option value="180" {{ if eq .Cue.Rotation 180 }}selected{{ end }}>180&deg;</option>
@@ -269,7 +269,7 @@
           </div>
           <div class="insp-time-field">
             <label class="insp-field-label" for="insp-flip">Flip / Mirror</label>
-            <select id="insp-flip" name="flip" class="ftl-select ftl-select" style="width:auto" title="Mirror the frame">
+            <select id="insp-flip" name="flip" class="ftl-select" style="width:auto" title="Mirror the frame">
               <option value="none" {{ if ne .Cue.Flip "h" }}{{ if ne .Cue.Flip "v" }}selected{{ end }}{{ end }}>None</option>
               <option value="h" {{ if eq .Cue.Flip "h" }}selected{{ end }}>Mirror &#8596;</option>
               <option value="v" {{ if eq .Cue.Flip "v" }}selected{{ end }}>Flip &#8597;</option>

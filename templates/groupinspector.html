@@ -24,7 +24,7 @@
       </div>
       <div>
         <label class="ftl-label small mb-0" for="group-cuenum">Number</label>
-        <input id="group-cuenum" name="cueNum" class="ftl-input ftl-input" style="width:6em" maxlength="24"
+        <input id="group-cuenum" name="cueNum" class="ftl-input" style="width:6em" maxlength="24"
           value="{{ .Group.CueNum }}">
       </div>
     </div>
@@ -62,12 +62,12 @@
     <div class="ftl-row is-gap-xs {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
       <div>
         <label class="ftl-label small mb-0" for="group-duration">Hold each image (s)</label>
-        <input id="group-duration" name="durationSecs" type="number" min="0" step="1" class="ftl-input ftl-input" style="width:8em"
+        <input id="group-duration" name="durationSecs" type="number" min="0" step="1" class="ftl-input" style="width:8em"
           value="{{ if .Group.DurationMS }}{{ div .Group.DurationMS 1000 }}{{ end }}" placeholder="5">
       </div>
       <div>
         <label class="ftl-label small mb-0" for="group-fade">Fade between (s)</label>
-        <input id="group-fade" name="fadeSecs" type="number" min="0" step="1" class="ftl-input ftl-input" style="width:8em"
+        <input id="group-fade" name="fadeSecs" type="number" min="0" step="1" class="ftl-input" style="width:8em"
           value="{{ if .Group.FadeMS }}{{ div .Group.FadeMS 1000 }}{{ end }}" placeholder="0">
       </div>
     </div>
