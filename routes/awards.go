@@ -41,6 +41,8 @@ type awardsSession struct {
 	pos     int   // index of the next member to play
 	phase   awardsPhase
 	member  int // cuePos currently playing (playing/stopping only)
+	shuffle bool
+	loop    bool // order/loop semantics the session was built under
 }
 
 var (
@@ -101,8 +103,9 @@ func awardsGO(g ctp.Group) error {
 	awardsMu.Lock()
 	// New session when the group changed, the membership changed, or the
 	// mode settings changed (order/loop semantics come from the flags).
-	if awardsSt.groupID != g.GroupID || !sameInts(awardsSt.members, members) {
-		awardsSt = awardsSession{groupID: g.GroupID, members: members}
+	if awardsSt.groupID != g.GroupID || !sameInts(awardsSt.members, members) ||
+		awardsSt.shuffle != g.Shuffle || awardsSt.loop != g.Loop {
+		awardsSt = awardsSession{groupID: g.GroupID, members: members, shuffle: g.Shuffle, loop: g.Loop}
 	}
 	if len(members) == 0 {
 		awardsMu.Unlock()
@@ -217,6 +220,9 @@ func awardsAfterStop(groupID, member int) {
 		if cue, cerr := ctp.GetCue(strconv.Itoa(pos)); cerr == nil {
 			if lerr := loadAndPlayCue(cue); lerr != nil {
 				logs.Printf(logs.RTECuePlay, "awards continue-out failed pos=%d error=%v", pos, lerr)
+			} else if next, nerr := ctp.NextCuePos(pos); nerr == nil && next != 0 {
+				// Deck-style preload for whatever follows, like a normal GO.
+				armNextCue(gsp.Generation(), next)
 			}
 		}
 	}
@@ -232,15 +238,23 @@ func awardsStepOut(groupID int, members []int) int {
 	for _, m := range members {
 		inGroup[m] = true
 	}
+	// Break on no-progress: SelectStep clamps (nil, no move) at the sheet
+	// end, and without the guard this spins 64 wasted steps.
+	lastGid, lastPos := -1, -1
 	for i := 0; i < 64; i++ {
 		if err := ctp.SelectStep(1); err != nil {
 			break
 		}
-		if gid, _ := ctp.SelectedGroupPos(); gid != 0 {
+		gid, _ := ctp.SelectedGroupPos()
+		pos, _ := ctp.SelectedCuePos()
+		if gid == lastGid && pos == lastPos {
+			break
+		}
+		lastGid, lastPos = gid, pos
+		if gid != 0 {
 			return 0
 		}
-		pos, perr := ctp.SelectedCuePos()
-		if perr != nil || pos == 0 {
+		if pos == 0 {
 			break
 		}
 		if !inGroup[pos] {

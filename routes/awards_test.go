@@ -285,3 +285,63 @@ func TestAwardsEmptyGroup(t *testing.T) {
 		t.Fatalf("empty awards GO moved selection: group=%d", gid2)
 	}
 }
+
+// With Loop on, the stop of the last member wraps the session instead of
+// stepping out: the next GO replays the first member, selection unmoved.
+func TestAwardsLoopWrap(t *testing.T) {
+	awardsGstAvailable(t)
+	gid, _, _, _ := awardsFixture(t)
+	g, _ := ctp.GetGroup(gid)
+	g.Loop = true
+	if err := ctp.UpdateGroup(g); err != nil {
+		t.Fatal(err)
+	}
+
+	fire := func() {
+		t.Helper()
+		if err := FireSelected(); err != nil {
+			t.Fatalf("GO: %v", err)
+		}
+	}
+	fire() // m1
+	awardsWaitFor(t, "m1 playing", func() bool { return gsp.CurrentPlaying() == "aw1.wav" })
+	fire() // stop m1
+	awardsWaitFor(t, "m1 stopped", func() bool { return gsp.CurrentPlaying() == "" })
+	fire() // m2
+	awardsWaitFor(t, "m2 playing", func() bool { return gsp.CurrentPlaying() == "aw2.wav" })
+	fire() // stop m2 (last, loop) -> wrap, selection stays
+	awardsWaitFor(t, "wrapped idle", func() bool {
+		awardsMu.Lock()
+		defer awardsMu.Unlock()
+		return awardsSt.phase == awardsIdle && awardsSt.pos == 0
+	})
+	if gid2, _ := ctp.SelectedGroupPos(); gid2 != gid {
+		t.Fatalf("loop wrap moved selection off the group: group=%d", gid2)
+	}
+	fire() // m1 again
+	awardsWaitFor(t, "m1 replaying", func() bool { return gsp.CurrentPlaying() == "aw1.wav" })
+}
+
+// If the engine moves on without the session (direct stop here standing in
+// for a natural end, a remote fire, or panic), the next GO restarts from
+// the cursor — it plays the next member rather than stopping thin air.
+func TestAwardsStaleRestarts(t *testing.T) {
+	awardsGstAvailable(t)
+	gid, _, _, _ := awardsFixture(t)
+
+	if err := FireSelected(); err != nil {
+		t.Fatalf("GO 1: %v", err)
+	}
+	awardsWaitFor(t, "m1 playing", func() bool { return gsp.CurrentPlaying() == "aw1.wav" })
+
+	gsp.Stop() // engine moved on outside the session
+	awardsWaitFor(t, "engine idle", func() bool { return gsp.CurrentPlaying() == "" })
+
+	if err := FireSelected(); err != nil {
+		t.Fatalf("GO 2: %v", err)
+	}
+	awardsWaitFor(t, "m2 playing (cursor, not a stop)", func() bool { return gsp.CurrentPlaying() == "aw2.wav" })
+	if gid2, _ := ctp.SelectedGroupPos(); gid2 != gid {
+		t.Fatalf("stale restart moved selection: group=%d", gid2)
+	}
+}
