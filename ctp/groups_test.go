@@ -618,3 +618,47 @@ func TestAddCuePositionedPlacement(t *testing.T) {
 		}
 	}
 }
+
+// AwardsMode persists alongside the slideshow flags (same UPDATE path).
+func TestGroupAwardsModeRoundTrip(t *testing.T) {
+	db.Exec(`DELETE FROM cue_group`)
+	id, err := CreateGroup("Awards", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	g, err := GetGroup(id)
+	if err != nil {
+		t.Fatalf("GetGroup: %v", err)
+	}
+	if g.AwardsMode {
+		t.Fatalf("new group should not be in awards mode: %+v", g)
+	}
+	g.AwardsMode = true
+	g.Shuffle = true
+	g.Loop = true
+	g.FadeMS = 800
+	if err := UpdateGroup(g); err != nil {
+		t.Fatalf("UpdateGroup: %v", err)
+	}
+	got, err := GetGroup(id)
+	if err != nil {
+		t.Fatalf("GetGroup: %v", err)
+	}
+	if !got.AwardsMode || !got.Shuffle || !got.Loop || got.FadeMS != 800 {
+		t.Fatalf("awards settings not persisted: %+v", got)
+	}
+	// Export/import carries the flag (manifest round-trip).
+	egs, err := ExportGroups()
+	if err != nil {
+		t.Fatalf("ExportGroups: %v", err)
+	}
+	found := false
+	for _, eg := range egs {
+		if eg.GroupID == id && eg.AwardsMode {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("awards flag missing from export: %+v", egs)
+	}
+}

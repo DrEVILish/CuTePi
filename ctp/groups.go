@@ -16,6 +16,7 @@ type Group struct {
 	ParentGroupID int    `db:"parent_group_id"`
 	Collapse      bool   `db:"collapse"`
 	Slideshow     bool   `db:"slideshow"`
+	AwardsMode    bool   `db:"awards_mode"`
 	Shuffle       bool   `db:"shuffle"`
 	Loop          bool   `db:"loop"`
 	FadeMS        int    `db:"fade_ms"`
@@ -82,11 +83,11 @@ func UpdateGroup(g Group) error {
 	}
 	_, err := db.Exec(`
 		UPDATE cue_group SET name = ?, parent_group_id = ?, collapse = ?,
-			slideshow = ?, shuffle = ?, loop = ?, fade_ms = ?, duration_ms = ?,
+			slideshow = ?, awards_mode = ?, shuffle = ?, loop = ?, fade_ms = ?, duration_ms = ?,
 			cue_num = ?, color = ?
 		WHERE group_id = ?
 	`, g.Name, g.ParentGroupID, boolInt(g.Collapse), boolInt(g.Slideshow),
-		boolInt(g.Shuffle), boolInt(g.Loop), g.FadeMS, g.DurationMS,
+		boolInt(g.AwardsMode), boolInt(g.Shuffle), boolInt(g.Loop), g.FadeMS, g.DurationMS,
 		g.CueNum, g.Color, g.GroupID)
 	if err != nil {
 		log.Printf("Error updating cue group: %v", err)

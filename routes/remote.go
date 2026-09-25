@@ -43,13 +43,16 @@ const MediaFPS = 25
 
 // FireSelected is the GO action from /cue/selected/play, renderless: fire
 // the selected group's playlist (or cue), advance the selection when
-// goAdvance is on. HTTP handlers wrap the result in cuesheet HTML; remote
-// protocols have no session to re-render — clients pick the change up from
-// WS sync / the cuesheet poller.
+// goAdvance is on — except for Awards Mode, which owns its selection and
+// never advances (end-of-list steps out on its own). HTTP handlers wrap the
+// result in cuesheet HTML; remote protocols have no session to re-render —
+// clients pick the change up from WS sync / the cuesheet poller.
 func FireSelected() error {
 	if gid, gerr := ctp.SelectedGroupPos(); gerr == nil && gid > 0 {
 		if g, err := ctp.GetGroup(gid); err == nil {
-			playGroup(g)
+			if handled := playGroup(g); handled {
+				return nil
+			}
 			if ctp.GetGoAdvance() {
 				_ = ctp.SelectStep(1)
 			}

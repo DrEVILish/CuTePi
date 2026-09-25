@@ -141,6 +141,7 @@ type ExportGroup struct {
 	ParentGroupID int    `json:"parentGroupId"`
 	Collapse      bool   `json:"collapse"`
 	Slideshow     bool   `json:"slideshow"`
+	AwardsMode    bool   `json:"awardsMode"`
 	Shuffle       bool   `json:"shuffle"`
 	Loop          bool   `json:"loop"`
 	FadeMS        int    `json:"fadeMs"`
@@ -167,6 +168,7 @@ func ExportGroups() ([]ExportGroup, error) {
 			ParentGroupID: g.ParentGroupID,
 			Collapse:      g.Collapse,
 			Slideshow:     g.Slideshow,
+			AwardsMode:    g.AwardsMode,
 			Shuffle:       g.Shuffle,
 			Loop:          g.Loop,
 			FadeMS:        g.FadeMS,
@@ -198,6 +200,7 @@ func ImportGroups(groups []ExportGroup) (map[int]int, error) {
 			ParentGroupID: idMap[eg.ParentGroupID],
 			Collapse:      eg.Collapse,
 			Slideshow:     eg.Slideshow,
+			AwardsMode:    eg.AwardsMode,
 			Shuffle:       eg.Shuffle,
 			Loop:          eg.Loop,
 			FadeMS:        eg.FadeMS,

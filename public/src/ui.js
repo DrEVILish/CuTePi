@@ -2135,3 +2135,18 @@ if (qaSettings) {
     if (rail) rail.classList.add("is-active");
   }
 }
+
+// QA harness 2: ?modal=<id> force-shows any modal (uploadModal, ytdlModal,
+// qrModal, testModal, logsModal, showModal, deleteModal) with its state
+// classes applied directly — the same deterministic no-fade trick the
+// settings harness uses. ?modal=<id>:<pane> also selects a pane.
+const qaModal = new URLSearchParams(location.search).get("modal");
+if (qaModal) {
+  const m = document.getElementById(qaModal);
+  if (m) {
+    m.classList.add("show");
+    m.style.display = "block";
+    m.removeAttribute("aria-hidden");
+    document.body.insertAdjacentHTML("beforeend", '<div class="modal-backdrop fade show"></div>');
+  }
+}

@@ -12,6 +12,7 @@ import (
 
 	"CuTePi/ctp"
 	"CuTePi/gsp"
+	"CuTePi/logs"
 )
 
 // GoBar is the top-of-sheet trigger strip (§12.1): what GO fires (the
@@ -138,6 +139,7 @@ func Groups(rg *gin.RouterGroup) {
 		// (double-click) right away; the context-menu creation flow relies
 		// on this discoverable inline edit.
 		_ = ctp.SetSelectedGroup(id)
+		awardsSelectionSync()
 		renderCuesheet(c)
 	})
 
@@ -151,6 +153,7 @@ func Groups(rg *gin.RouterGroup) {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}
+		awardsSelectionSync()
 		renderCuesheet(c)
 	})
 
@@ -181,6 +184,14 @@ func Groups(rg *gin.RouterGroup) {
 			g.Collapse = c.PostForm("collapse") == "true" || c.PostForm("collapse") == "on"
 		}
 		g.Slideshow = c.PostForm("slideshow") == "true" || c.PostForm("slideshow") == "on"
+		g.AwardsMode = c.PostForm("awards") == "true" || c.PostForm("awards") == "on"
+		// Awards and Slideshow are exclusive modes: enabling one clears the
+		// other, here (save path) as well as in the inspector UI.
+		if g.AwardsMode {
+			g.Slideshow = false
+		} else if c.PostForm("slideshow") == "true" || c.PostForm("slideshow") == "on" {
+			g.AwardsMode = false
+		}
 		g.Shuffle = c.PostForm("shuffle") == "true" || c.PostForm("shuffle") == "on"
 		g.Loop = c.PostForm("loop") == "true" || c.PostForm("loop") == "on"
 		// The inspector's "Inside group" picker (absent in older callers —
@@ -326,6 +337,7 @@ func Groups(rg *gin.RouterGroup) {
 		// range to this header, cmd toggles its membership.
 		if c.Query("extend") == "1" {
 			if err := ctp.ExtendSelection(0, id); err == nil {
+				awardsSelectionSync()
 				renderCuesheet(c)
 				return
 			}
@@ -348,6 +360,7 @@ func Groups(rg *gin.RouterGroup) {
 				anchor = -id
 			}
 			if err := ctp.SetGroupSelection(anchor, out); err == nil {
+				awardsSelectionSync()
 				renderCuesheet(c)
 				return
 			}
@@ -356,6 +369,7 @@ func Groups(rg *gin.RouterGroup) {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}
+		awardsSelectionSync()
 		renderCuesheet(c)
 	})
 
@@ -465,15 +479,24 @@ func Groups(rg *gin.RouterGroup) {
 	})
 }
 
-// playGroup triggers a group's playlist action: a slideshow group runs its
-// runner, a plain group plays its first member (cues are a list — a plain
-// group has no implicit queue). Shared by the group route and the GO path.
-func playGroup(g ctp.Group) {
+// playGroup triggers a group's playlist action: an awards-mode group runs
+// its GO toggle, a slideshow group runs its runner, a plain group plays its
+// first member (cues are a list — a plain group has no implicit queue).
+// Shared by the group route and the GO path. Reports whether the selection
+// is already handled (awards owns it: the caller must NOT advance).
+func playGroup(g ctp.Group) bool {
+	if g.AwardsMode {
+		if err := awardsGO(g); err != nil {
+			logs.Printf(logs.RTECuePlay, "awards GO failed group=%d error=%v", g.GroupID, err)
+		}
+		return true
+	}
 	if g.Slideshow {
 		go goSafe(func() { slideshowRunner(g) })
-		return
+		return false
 	}
 	playFirstGroupMember(g.GroupID)
+	return false
 }
 
 // defaultSlideshowHold is the per-image hold when the group's duration_ms is
@@ -636,6 +659,8 @@ func openSelGroup(c *gin.Context, open bool) {
 }
 
 func slideshowRunner(g ctp.Group) {
+	// Starting any other playlist abandons an awards session elsewhere.
+	awardsSelectionLeft(0)
 	// Only image groups are slideshows, but the runner itself is kind-agnostic.
 	if !g.Slideshow {
 		playFirstGroupMember(g.GroupID)
@@ -760,6 +785,7 @@ func groupScope(groupID int, sheet *ctp.Cuesheet) map[int]bool {
 }
 
 func playFirstGroupMember(groupID int) {
+	awardsSelectionLeft(0)
 	sheet, err := ctp.GetCuesheet()
 	if err != nil {
 		return

@@ -9,6 +9,12 @@
     Slideshow: its cues cycle automatically with the settings below. Press <em>Play</em> on the sheet to start it.
   </div>
   {{ end }}
+  {{ if .Group.AwardsMode }}
+  <div class="alert alert-info py-2 px-3 small">
+    <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
+    Awards mode: GO plays one member, GO again fades it out — the selection stays on this group.
+  </div>
+  {{ end }}
 
   <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML"
     hx-trigger="change delay:200ms, submit"
@@ -50,23 +56,27 @@
         <input class="form-check-input" type="checkbox" id="group-slideshow" name="slideshow" value="true" {{ if .Group.Slideshow }}checked{{ end }}>
         <label class="small" for="group-slideshow">Slideshow</label>
       </div>
-      <div class="form-check form-check-inline" id="group-slideshow-opts">
-        <input class="form-check-input" type="checkbox" id="group-shuffle" name="shuffle" value="true" {{ if .Group.Shuffle }}checked{{ end }} {{ if not .Group.Slideshow }}disabled{{ end }}>
-        <label class="small" for="group-shuffle">Shuffle</label>
+      <div class="form-check form-check-inline">
+        <input class="form-check-input" type="checkbox" id="group-awards" name="awards" value="true" {{ if .Group.AwardsMode }}checked{{ end }}>
+        <label class="small" for="group-awards">Awards mode</label>
+      </div>
+      <div class="form-check form-check-inline" id="group-shuffle-wrap">
+        <input class="form-check-input" type="checkbox" id="group-shuffle" name="shuffle" value="true" {{ if .Group.Shuffle }}checked{{ end }} {{ if and (not .Group.Slideshow) (not .Group.AwardsMode) }}disabled{{ end }}>
+        <label class="small" for="group-shuffle" id="group-shuffle-label">{{ if .Group.AwardsMode }}Shuffle (random order, no repeats){{ else }}Shuffle{{ end }}</label>
       </div>
       <div class="form-check form-check-inline">
-        <input class="form-check-input" type="checkbox" id="group-loop" name="loop" value="true" {{ if .Group.Loop }}checked{{ end }} {{ if not .Group.Slideshow }}disabled{{ end }}>
+        <input class="form-check-input" type="checkbox" id="group-loop" name="loop" value="true" {{ if .Group.Loop }}checked{{ end }} {{ if and (not .Group.Slideshow) (not .Group.AwardsMode) }}disabled{{ end }}>
         <label class="small" for="group-loop">Loop</label>
       </div>
     </div>
     <div class="ftl-row is-gap-xs {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
-      <div>
+      <div id="group-duration-wrap">
         <label class="ftl-label small mb-0" for="group-duration">Hold each image (s)</label>
         <input id="group-duration" name="durationSecs" type="number" min="0" step="1" class="ftl-input" style="width:8em"
           value="{{ if .Group.DurationMS }}{{ div .Group.DurationMS 1000 }}{{ end }}" placeholder="5">
       </div>
       <div>
-        <label class="ftl-label small mb-0" for="group-fade">Fade between (s)</label>
+        <label class="ftl-label small mb-0" for="group-fade" id="group-fade-label">{{ if .Group.AwardsMode }}Fade out on stop (s){{ else }}Fade between (s){{ end }}</label>
         <input id="group-fade" name="fadeSecs" type="number" min="0" step="1" class="ftl-input" style="width:8em"
           value="{{ if .Group.FadeMS }}{{ div .Group.FadeMS 1000 }}{{ end }}" placeholder="0">
       </div>
@@ -78,16 +88,37 @@
       var box = document.querySelector(".groupinspector-body[data-group-id='{{ .Group.GroupID }}']");
       if (!box) return;
       var slideshow = box.querySelector("#group-slideshow");
+      var awards = box.querySelector("#group-awards");
+      // Awards and Slideshow are exclusive modes: checking one clears the
+      // other, and the shared Shuffle/Loop/Fade controls serve either mode
+      // (Hold is slideshow-only and hides under Awards).
       function syncOpts() {
-        var on = slideshow.checked;
+        var show = slideshow.checked, aw = awards.checked;
+        var any = show || aw;
         box.querySelectorAll("#group-shuffle, #group-loop").forEach(function (el) {
-          el.disabled = !on;
+          el.disabled = !any;
         });
+        var shuffleLabel = box.querySelector("#group-shuffle-label");
+        if (shuffleLabel) shuffleLabel.textContent = aw ? "Shuffle (random order, no repeats)" : "Shuffle";
+        var fadeLabel = box.querySelector("#group-fade-label");
+        if (fadeLabel) fadeLabel.textContent = aw ? "Fade out on stop (s)" : "Fade between (s)";
         var timings = box.querySelector("#group-slideshow-timings");
-        if (timings) timings.classList.toggle("row-disabled", !on);
-        box.querySelectorAll("#group-slideshow-timings input").forEach(function (el) { el.disabled = !on; });
+        if (timings) timings.classList.toggle("row-disabled", !any);
+        var durationWrap = box.querySelector("#group-duration-wrap");
+        if (durationWrap) durationWrap.style.display = aw ? "none" : "";
+        box.querySelectorAll("#group-slideshow-timings input").forEach(function (el) {
+          if (el.id === "group-duration") el.disabled = !show;
+          else el.disabled = !any;
+        });
       }
-      slideshow.addEventListener("change", syncOpts);
+      slideshow.addEventListener("change", function () {
+        if (slideshow.checked) awards.checked = false;
+        syncOpts();
+      });
+      awards.addEventListener("change", function () {
+        if (awards.checked) slideshow.checked = false;
+        syncOpts();
+      });
       syncOpts();
     })();
   </script>

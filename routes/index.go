@@ -554,6 +554,11 @@ func CurrentWait() waitState {
 // the operator does anything else during waits, so a triggered cue can never
 // interrupt a newer decision.
 func autoContinueFrom(endingPos int) {
+	// Awards sessions never chain: a member with AutoContinue set still
+	// waits for the operator's next GO.
+	if awardsSuppressAutoContinue(endingPos) {
+		return
+	}
 	cue, err := ctp.GetCue(strconv.Itoa(endingPos))
 	if err != nil || !cue.AutoContinue {
 		return
@@ -596,6 +601,7 @@ func autoContinueFrom(endingPos int) {
 			return
 		}
 		_ = ctp.SetCue(strconv.Itoa(next))
+		awardsSelectionSync()
 		// Preload whatever follows the chained cue (audio-only; see
 		// armNextCue) with the same GO-instantly contract the operator has.
 		if nn, nerr := ctp.NextCuePos(next); nerr == nil && nn != 0 {

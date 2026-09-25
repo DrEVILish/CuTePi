@@ -465,3 +465,47 @@ Spec'd enough to evaluate, not committed:
   sits one click behind the same state; mid-show failover is a single
   operator action. Requires a command-replay protocol, media mirroring
   strategy and conflict rules — deliberately out of the v1 scope.
+
+### 12.13 Awards Mode (group playback toggle)
+
+A group playback mode for ceremonies: the operator parks the selection on
+one group of cues and each GO press alternates **play → fade-stop** on a
+single member, without the selection ever leaving the group header.
+
+- **Model**: new `cue_group.awards_mode` flag, persisted like the slideshow
+  flags (DB column + `.CTP` manifest + group inspector). Awards and
+  Slideshow are mutually exclusive — enabling one clears the other, both in
+  the inspector UI and server-side on save.
+- **Settings reuse** (no new knobs except the mode flag itself): the group's
+  existing `shuffle` picks the play order (off = sheet order, on = shuffled
+  no-repeat bag: every member plays once, then the bag reshuffles), `loop`
+  decides what happens at the end of the list (on = wrap/reshuffle and keep
+  going; off = the stop of the last member moves the selection to the next
+  cue after the group, so the following GO continues the show normally),
+  and `fade_ms` is the fade-out applied by every stop-GO (0 = hard cut).
+  The inspector hides the slideshow-only Hold field when Awards is on and
+  labels the shared Shuffle/Loop/Fade controls for their awards meaning.
+- **GO cycle** (Space/GO, remote `/go`, HyperDeck `play` — all funnel
+  through `FireSelected`, so all transports behave identically):
+  - selection on the awards header, session idle → play the cursor member
+    (sequence: sheet order from the first; shuffle: pop the bag).
+  - session playing → fade the member out over `fade_ms`, then stop;
+    advance the cursor (sequence index / bag position).
+  - a GO arriving mid-fade is ignored (phase guard); a GO arriving when the
+    engine is no longer on the session's member (operator played something
+    else meanwhile) restarts the session from the cursor.
+  - empty group: GO is a no-op.
+- **Selection never advances** on awards GO presses (the `goAdvance` step
+  and the deck-style prewarm arm are both skipped) — the single exception
+  is the end-of-list stop with Loop off, which steps the selection out of
+  the group as above. Arrow keys/clicks move the selection normally; the
+  playing cue keeps ringing (leaving never stops audio) and the awards
+  session state resets, so the next GO on the group starts fresh.
+- **No automation inside a session**: the awards fire path bypasses
+  `loadAndPlayCueKeep`'s image-duration timer and the cue-end
+  auto-continue chain never fires for a session member (an awards cue with
+  AutoContinue set still waits for the operator). Member fires still mark
+  `last_result` and emit `cue_start` audit events like any other GO.
+- **Scope**: the member list is the group's subtree in sheet order (same
+  scope as `playFirstGroupMember`/slideshow), snapshotted when the session
+  starts.

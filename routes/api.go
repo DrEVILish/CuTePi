@@ -890,6 +890,7 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
+		awardsSelectionSync()
 		renderCuesheet(c)
 	})
 	rg.POST("/cue/prev", func(c *gin.Context) {
@@ -906,6 +907,7 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
+		awardsSelectionSync()
 		renderCuesheet(c)
 	})
 
@@ -1144,6 +1146,7 @@ func Api(rg *gin.RouterGroup) {
 		if perr == nil {
 			if c.Query("extend") == "1" {
 				if err := ctp.ExtendSelection(pos, 0); err == nil {
+					awardsSelectionSync()
 					renderCuesheet(c)
 					return
 				}
@@ -1165,10 +1168,11 @@ func Api(rg *gin.RouterGroup) {
 				if anchor == 0 {
 					anchor = pos
 				}
-				if err := ctp.SetSelection(anchor, out); err == nil {
-					renderCuesheet(c)
-					return
-				}
+			if err := ctp.SetSelection(anchor, out); err == nil {
+				awardsSelectionSync()
+				renderCuesheet(c)
+				return
+			}
 			}
 		}
 		err := ctp.SetCue(cuePos)
@@ -1178,6 +1182,7 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
+		awardsSelectionSync()
 		renderCuesheet(c)
 	})
 

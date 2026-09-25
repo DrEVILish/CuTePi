@@ -511,3 +511,32 @@ html[data-theme] .btn.btn-youtube:hover {
   width: 5.5rem;
   height: 1.4rem;
 }
+
+/* Button bridge (transitional): the markup carries both the bootstrap class
+   and the ftl variant while Bootstrap CSS is still in the cascade. Bootstrap's
+   unlayered `.btn` base (transparent bg, hairline border) outranks the
+   library's layered `.ftl-btn` rules, so the ftl token vocabulary never
+   reaches the paint. Own the same tokens unlayered here — under a ftl bundle
+   these resolve to the theme's palette; under an app: theme they hit the
+   achromatic fallbacks. Drop together with the Bootstrap cascade. */
+.btn[class*="ftl-btn"] {
+  background: var(--ftl-btn-bg, var(--ftl-surface-2));
+  color: var(--ftl-btn-fg, var(--ftl-text));
+  border: var(--ftl-btn-border-width, 1px) solid var(--ftl-btn-border, var(--ftl-border));
+  border-radius: var(--ftl-btn-radius, var(--ftl-radius));
+  padding: var(--ftl-btn-padding, calc(0.5em * var(--ftl-density, 1)) calc(1.1em * var(--ftl-density, 1)));
+  font-weight: var(--ftl-btn-weight, 400);
+  letter-spacing: var(--ftl-btn-tracking, normal);
+}
+.btn[class*="ftl-btn"]:hover {
+  background: var(--ftl-btn-bg-hover, color-mix(in srgb, var(--ftl-btn-bg, var(--ftl-surface-2)) 82%, var(--ftl-text)));
+}
+.btn[class*="ftl-btn-primary"] { --ftl-btn-bg: var(--ftl-accent); --ftl-btn-fg: var(--ftl-on-accent, var(--ftl-bg, #000)); --ftl-btn-border: var(--ftl-accent); --ftl-btn-weight: 600; }
+.btn[class*="ftl-btn-secondary"] { --ftl-btn-bg: transparent; --ftl-btn-fg: var(--ftl-accent); }
+.btn[class*="ftl-btn-danger"] { --ftl-btn-bg: var(--ftl-danger); --ftl-btn-fg: var(--ftl-on-danger, #fff); }
+.btn[class*="ftl-btn-success"] { --ftl-btn-bg: var(--ftl-success); --ftl-btn-fg: var(--ftl-on-success, #06231a); }
+.btn[class*="ftl-btn-ghost"] { --ftl-btn-bg: transparent; --ftl-btn-fg: var(--ftl-accent); --ftl-btn-border: transparent; }
+.btn[class*="ftl-btn-sm"] { padding: 0.3em 0.7em; font-size: 0.9em; }
+
+/* Same bridge for the alert/table/field hybrids the templates carry until
+   the component cutover finishes. */
