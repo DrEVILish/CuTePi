@@ -1061,15 +1061,15 @@ func TestUploadRejectsNoFiles(t *testing.T) {
 	}
 }
 
-// The index page carries the media-pool panel chrome (collapse button, the
-// always-available expand button, and the drag-to-resize splitter).
+// The index page carries the media-pool panel chrome (toggle button and
+// the drag-to-resize splitter).
 func TestIndexRendersPanelChrome(t *testing.T) {
 	r := setupTestServer(t)
 	body := get(t, r, "/").Body.String()
 	for _, want := range []string{
 		`id="mediapool-pane"`,
-		`id="mediapool-collapse-btn"`,
-		`id="mediapool-expand-btn"`,
+		`id="mediapool-toggle"`,
+		`id="cueinspector-toggle"`,
 		`id="mediapool-resizer"`,
 		`id="cuesheet-pane"`,
 	} {

@@ -77,16 +77,6 @@ body.upload-body {
   flex: none;
 }
 
-/* A shared theme that paints the bar with the accent (LCARS) makes the
-   accent-outline GO button invisible. Under ftl:* themes only — the
-   data-theme-id hook never matches this app's own themes — fill the pill
-   and put the theme's on-accent colour on the text. */
-html[data-theme-id^="ftl:"] .ftl-app-bar .btn-go {
-  background: var(--ctp-accent, #2fd6ff);
-  border-color: var(--ftl-on-accent, #000);
-  color: var(--ftl-on-accent, #000);
-}
-
 /* The bar is theme-painted; its furniture must read in the theme's bar
    foreground, not the app's page-muted token (windows95: grey-on-navy). */
 html[data-theme-id^="ftl:"] .ftl-app-bar :is(.topbar-clock, .ws-status, .text-muted) {
@@ -756,30 +746,34 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
   width: auto;
   height: auto;
 }
-#app-footer #mediapool-expand-btn,
-#app-footer #cueinspector-expand-btn {
-  display: none;
-}
-body.mediapool-collapsed #app-footer #mediapool-expand-btn,
-body.cueinspector-collapsed #app-footer #cueinspector-expand-btn {
-  display: inline-flex;
-}
-body.mediapool-collapsed #app-footer #mediapool-collapse-btn,
-body.cueinspector-collapsed #app-footer #cueinspector-collapse-btn {
-  display: none;
+#app-footer .panel-btn-label {
+  font-size: 0.78em;
+  margin-left: 0.35em;
+  white-space: nowrap;
 }
 /* Test output is an Edit-mode tool: hidden entirely in Show mode. */
 body.show-mode #showTestBtn {
   display: none;
 }
 /* The Cue Inspector is an Edit-mode tool: in Show mode the panel and its
-   resizer are hidden and the footer expand button is disabled, so there is
+   resizer are hidden and the footer toggle button is disabled, so there is
    no way to open or edit cues mid-show. */
 body.show-mode #cueinspector-panel,
 body.show-mode #cueinspector-resizer {
   display: none !important;
 }
-body.show-mode #app-footer #cueinspector-expand-btn {
+body.show-mode #app-footer #cueinspector-toggle {
+  opacity: 0.45;
+  pointer-events: none;
+}
+/* The Media Pool is an Edit-mode tool too: in Show mode the pane, its
+   resizer and its footer toggle go away with the inspector's, so the
+   cuesheet owns the full width mid-show. */
+body.show-mode #mediapool-pane,
+body.show-mode #mediapool-resizer {
+  display: none !important;
+}
+body.show-mode #app-footer #mediapool-toggle {
   opacity: 0.45;
   pointer-events: none;
 }

@@ -207,8 +207,8 @@ function applyShowMode(show) {
   const tests = document.getElementById("showTestBtn");
   if (tests) tests.disabled = !show;
   // The Cue Inspector is unavailable in Show mode (see layout.css): keep
-  // the footer expand button disabled too so it cannot be reopened.
-  const inspExpand = document.getElementById("cueinspector-expand-btn");
+  // the footer toggle button disabled too so it cannot be reopened.
+  const inspExpand = document.getElementById("cueinspector-toggle");
   if (inspExpand) inspExpand.disabled = show;
 }
 // Show mode is for performance: the sheet is locked. Editing gestures
@@ -585,6 +585,11 @@ filterMedia();
   }
   function setCollapsed(state) {
     document.body.classList.toggle("mediapool-collapsed", state);
+    const t = document.getElementById("mediapool-toggle");
+    if (t) {
+      t.setAttribute("aria-pressed", state ? "false" : "true");
+      t.classList.toggle("active", !state);
+    }
     try {
       localStorage.setItem(STORAGE_COLLAPSED, state ? "1" : "0");
     } catch (e) {}
@@ -600,8 +605,9 @@ filterMedia();
 
   // Delegated: works even after #mediapool is re-rendered by an htmx swap.
   document.addEventListener("click", (e) => {
-    if (e.target.closest("#mediapool-collapse-btn")) setCollapsed(true);
-    else if (e.target.closest("#mediapool-expand-btn")) setCollapsed(false);
+    if (e.target.closest("#mediapool-toggle")) {
+      setCollapsed(!document.body.classList.contains("mediapool-collapsed"));
+    }
   });
 
   // Drag-to-resize via the splitter handle.
@@ -1594,6 +1600,11 @@ document.addEventListener("click", (e) => {
   }
   function setCollapsed(state) {
     document.body.classList.toggle("cueinspector-collapsed", state);
+    const t = document.getElementById("cueinspector-toggle");
+    if (t) {
+      t.setAttribute("aria-pressed", state ? "false" : "true");
+      t.classList.toggle("active", !state);
+    }
     try { localStorage.setItem(STORAGE_COLLAPSED, state ? "1" : "0"); } catch (e) {}
   }
   // Tabs are marked active on the tabstrip AND on the pane container; the
@@ -1651,8 +1662,9 @@ document.addEventListener("click", (e) => {
 
   document.addEventListener("click", (e) => {
     if (!(e.target instanceof Element)) return;
-    if (e.target.closest("#cueinspector-collapse-btn")) setCollapsed(true);
-    else if (e.target.closest("#cueinspector-expand-btn")) setCollapsed(false);
+    if (e.target.closest("#cueinspector-toggle")) {
+      setCollapsed(!document.body.classList.contains("cueinspector-collapsed"));
+    }
     const tabBtn = e.target.closest("[data-inspector-tab]");
     if (tabBtn) setTab(tabBtn.dataset.inspectorTab);
   });

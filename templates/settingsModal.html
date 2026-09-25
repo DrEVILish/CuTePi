@@ -215,7 +215,7 @@
         var sel = document.getElementById("settingsDisplayResolution");
         var options = body.modes || [];
         if (current && options.indexOf(current) === -1) options.push(current);
-        sel.innerHTML = '<option value="">(file's own)</option>'
+        sel.innerHTML = '<option value="">(file\u2019s own)</option>'
           + options.map(function (mode) {
               return '<option value="' + mode + '">' + mode + '</option>';
             }).join("");

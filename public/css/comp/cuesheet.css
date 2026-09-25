@@ -333,32 +333,17 @@
   min-height: 2.2rem;
 }
 .btn-go {
+  /* Layout shell only: the paint (background, border, colour, shadow,
+     type) comes from the ftl-btn-go token vocabulary, so the GO button
+     takes each theme's primary look (e.g. winxp-luna's Start-button
+     green). Do not re-add paint here or themes stop owning GO. */
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
-  font-weight: 700;
-  font-size: 1.2em;
-  letter-spacing: 0.08em;
   white-space: nowrap;
-  padding: 0.15rem 1.2rem;
-  border-radius: var(--ctp-radius, 0.2rem);
-  background: transparent;
-  border: 2px solid var(--ctp-accent, #2fd6ff);
-  box-shadow: none;
-  color: var(--ctp-accent, #2fd6ff);
-  transition: box-shadow 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 .btn-go:active {
   transform: translateY(1px);
-}
-.btn-go:hover, .btn-go:focus-visible {
-  background: color-mix(in srgb, var(--ctp-accent, #2fd6ff) 15%, transparent);
-  border-color: var(--ctp-accent, #2fd6ff);
-  color: var(--ctp-accent, #2fd6ff);
-  /* Hot: the outline glows so the button reads "armed, press now". */
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--ctp-accent, #2fd6ff) 35%, transparent),
-    0 0 22px 4px color-mix(in srgb, var(--ctp-accent, #2fd6ff) 90%, transparent);
 }
 .go-num, .go-next-num {
   font-weight: 700;

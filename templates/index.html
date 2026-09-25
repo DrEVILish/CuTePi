@@ -61,21 +61,13 @@
         <span class="mode-label">{{ if .ShowMode }}SHOW{{ else }}EDIT{{ end }}</span>
       </button>
       <div class="ftl-row is-gap-xs btn-group-sm" role="group" aria-label="Panels">
-        <button type="button" class="btn ftl-btn-secondary" id="mediapool-collapse-btn"
-          title="Collapse the media pool" aria-label="Collapse the media pool">
-          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-sidebar"/></svg>
+        <button type="button" class="btn ftl-btn-secondary" id="mediapool-toggle" aria-pressed="true"
+          title="Show or hide the media pool" aria-label="Toggle the media pool">
+          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-sidebar"/></svg><span class="panel-btn-label">Pool</span>
         </button>
-        <button type="button" class="btn ftl-btn-secondary" id="mediapool-expand-btn"
-          title="Expand the media pool" aria-label="Expand the media pool">
-          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-sidebar"/></svg>
-        </button>
-        <button type="button" class="btn ftl-btn-secondary" id="cueinspector-collapse-btn"
-          title="Collapse the cue inspector" aria-label="Collapse the cue inspector">
-          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-columns"/></svg>
-        </button>
-        <button type="button" class="btn ftl-btn-secondary" id="cueinspector-expand-btn"
-          title="Expand the cue inspector" aria-label="Expand the cue inspector">
-          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-columns"/></svg>
+        <button type="button" class="btn ftl-btn-secondary" id="cueinspector-toggle" aria-pressed="true"
+          title="Show or hide the cue inspector" aria-label="Toggle the cue inspector">
+          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-columns"/></svg><span class="panel-btn-label">Inspector</span>
         </button>
       </div>
       <button type="button" id="showTestBtn" class="btn ftl-btn-sm ftl-btn-danger"
