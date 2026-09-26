@@ -1615,6 +1615,7 @@ document.addEventListener("dblclick", (e) => {
       strip.querySelectorAll("[data-inspector-tab]").forEach((b) => {
         const active = b.dataset.inspectorTab === tab;
         b.classList.toggle("active", active);
+        b.classList.toggle("is-active", active);
         b.setAttribute("aria-selected", active ? "true" : "false");
       });
     }

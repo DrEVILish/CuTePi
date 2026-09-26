@@ -393,7 +393,7 @@ tr.cue-drop-indicator.cue-drop-in td {
 .cueinspector-body {
   min-height: 100%;
 }
-.inspector-tabs .nav-link {
+.inspector-tabs .ftl-tab {
   padding: 0.15rem 0.8rem;
   font-size: 0.85rem;
 }
