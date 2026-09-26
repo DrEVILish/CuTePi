@@ -159,6 +159,7 @@ One row, left to right:
 - Selection: single-select, arrow-key navigable (Up/Down walk cues + group  headers; Right/Left open/close a selected group). Persisted in the DB; `POST /api/cue/:pos` selects. Space (or transport Play) acts on it.
 - **Context menu** (cue rows): colour, delete
 - **Missing source** cues: warning badge + the Inspector shows a Re-link / Delete cue banner.
+- **Scheduled** cues (schedule enabled, any time including midnight) show a clock icon + trigger time after the title.
 
 ### 5.5 Cue Inspector (bottom-docked panel)
 
@@ -167,12 +168,18 @@ One row, left to right:
 - Tabs (static strip in `index.html`; audio/video panes are omitted for image cues:
   - **Time** — waveform trim timeline (canvas of JSON peaks, draggable In/Out markers; **only dragging a handle changes trim**; clicks elsewhere are inert),
     Trim In/Out fields, Pre-Wait, Post-Wait, Loop + loop-count, Hold-last-frame, Auto-continue, fade-stop scope/time, playback-rate slider with 1× reset.
-    Renders even where duration is unknown (timeline duration-gated).
+    Renders even where duration is unknown (timeline duration-gated). The timeline shades the shared audio+video
+    fade-in/out envelope over the trim window (same curve the engine ramps).
   - **Video** — video Fade In / Fade Out (times).
-  - **Audio** — volume (dB slider −60..+12 with stepper buttons + reset), Fade In, Balance/Pan, Mute, EBU R128 loudness-gain readout.
+  - **Audio** — volume (dB slider −60..+12, double-click resets to 0 dB), Fade In / Fade Out, Balance/Pan
+    (double-click centres), Mute toggle button (danger-red while muted), EBU R128 loudness-gain readout.
   - **Media** — detailed codec info (VLC label/value style): container, overall bitrate, video codec/profile/resolution/fps/pixel format/colour
     space, audio codec/channels/sample rate/bitrate. From `media_meta`, refreshed by the thumbnail worker; missing fields just omit rows.
   - **Colour** — 12-swatch named palette as a radio chip grid + "None"; instant-save on change).
+- **Inspector edits apply to the NEXT firing, not the running instance.** Trim, fades, waits, schedule,
+  colour and structural settings are read when a cue fires — editing a playing cue never disturbs it.
+  Exception: volume, mute, balance and rate are pushed live to the running pipeline when you edit the
+  cue that is currently playing (and persisted for next time).
 - **Trim timeline extras**: Zoom mode (arm, then drag a box over the waveform), +/- zoom steps, Zoom reset; mouse-wheel pans a zoomed window left/right.
   Deep zoom fetches a pixel-matched envelope (`/api/media/:name/wave`) so bars stay ~1 per CSS pixel at every depth.
   The zoom window survives inspector re-renders (saves don't reset view).

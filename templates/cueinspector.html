@@ -124,7 +124,7 @@
               </button>
               <div class="insp-rate">
                 <label class="insp-field-label" for="insp-rate">Rate <output id="insp-rate-value">{{ .Cue.Rate }}×</output></label>
-                <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" title="Playback speed (pitch preserved). Double-click to reset to 1×">
+                <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" data-default="1" title="Playback speed (pitch preserved). Double-click to reset to 1×">
               </div>
              </div>
                <div class="insp-time-checks">
@@ -205,15 +205,12 @@
             <label class="ftl-label small mb-1" for="insp-volume">Volume</label>
             <input id="insp-volume" name="volume" type="range" min="-60" max="12" step="1"
               value="{{ .Cue.Volume }}" class="insp-volume-slider"
-              title="Per-cue master gain (dB); 0dB is the default"
-              data-volume-inspector aria-label="Volume (dB)">
+              title="Per-cue master gain (dB); 0dB is the default. Double-click to reset to 0 dB"
+              data-default="0" data-volume-inspector aria-label="Volume (dB)">
             <div class="ftl-row is-items-center is-gap-2xs">
-              <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" data-volume-step="-1" aria-label="Decrease volume by 1 dB">↓</button>
               <input id="insp-volume-db" type="number" class="ftl-input insp-volume-db"
                 value="{{ .Cue.Volume }}" min="-60" max="12" step="1" aria-label="Volume dB value">
-              <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" data-volume-step="1" aria-label="Increase volume by 1 dB">↑</button>
             </div>
-            <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" data-volume-reset>Reset to 0 dB</button>
           </div>
           <div class="insp-audio-settings">
             <div class="insp-time-field insp-fadein">
@@ -221,16 +218,21 @@
               <input id="insp-audio-fadein" name="fadeIn" data-fade-in class="ftl-input"
                 value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade audio and video in (seconds)">
             </div>
+            <div class="insp-time-field insp-fadeout">
+              <label class="insp-field-label" for="insp-audio-fadeout">Fade Out</label>
+              <input id="insp-audio-fadeout" data-fade-out class="ftl-input"
+                value="{{ formatTime .Cue.FadeOut }}" placeholder="hh:mm:ss.ms" title="Fade audio and video out after playback (seconds)">
+            </div>
             <label class="insp-field-label" for="insp-balance">Balance / Pan <output id="insp-balance-value">{{ .Cue.Balance }}</output></label>
             <div class="ftl-row is-items-center is-gap-xs">
               <span class="small">L</span>
               <input id="insp-balance" name="balance" type="range" min="-1" max="1" step="0.05" value="{{ .Cue.Balance }}"
-                class="ctp-slider ctp-slider-pan"
+                class="ctp-slider ctp-slider-pan" data-default="0"
                 title="Left (−1) / Centre (0) / Right (+1); 0 is centred. Double-click to reset to centre">
               <span class="small">R</span>
             </div>
-            <label class="small" for="insp-mute">
-              <input id="insp-mute" name="mute" type="checkbox" class="form-check-input me-1" value="true" {{ if .Cue.Mute }}checked{{ end }}> Mute
+            <label class="small mute-toggle" for="insp-mute">
+              <input id="insp-mute" name="mute" type="checkbox" value="true" {{ if .Cue.Mute }}checked{{ end }}> Mute
             </label>
             <span class="small text-muted">EBU R128 gain: {{ printf "%+.1f" .Cue.LoudnessGain }} dB</span>
           </div>
@@ -470,8 +472,106 @@
         if (view.to - view.from >= dur - 0.05) view = null;
       }
       drawWave(timeline);
+      drawFades(timeline);
       update(timeline, expand(stateOf(timeline)));
       window.__trimView = view; // survive the next save's re-render
+    }
+
+    // Fade envelope overlay: the ONE shared audio+video ramp (§12.7) drawn
+    // over the waveform — fade-in rising from the trim start, fade-out
+    // falling into the trim end. Values come from the audio/video tab
+    // mirrors ([data-fade-in]/[data-fade-out], formatTime strings); the
+    // curve select picks the same shape the engine ramps, mirrored here
+    // from gsp fadeShape so what you see is what the show does.
+    function parseFadeSecs(str) {
+      if (!str) return 0;
+      var parts = String(str).trim().split(":");
+      if (parts.length === 0 || parts.length > 3) return 0;
+      var sec = parseFloat(parts[parts.length - 1]);
+      if (isNaN(sec)) return 0;
+      var mult = 1;
+      for (var i = parts.length - 2; i >= 0; i--) {
+        mult *= 60;
+        var n = parseFloat(parts[i]);
+        if (isNaN(n) || n < 0) return 0;
+        sec += n * mult;
+      }
+      return sec < 0 ? 0 : sec;
+    }
+    function fadeShapeJS(curve, t) {
+      if (t <= 0) return 0;
+      if (t >= 1) return 1;
+      if (curve === "smooth") return t * t * (3 - 2 * t);
+      if (curve === "log") return Math.log10(1 + 9 * t);
+      if (curve === "exp") { var k = 3; return (Math.exp(k * t) - 1) / (Math.exp(k) - 1); }
+      return t;
+    }
+    function drawFades(timeline) {
+      var canvas = timeline.querySelector("#trim-waveform");
+      if (!canvas) return;
+      var ctx = canvas.getContext && canvas.getContext("2d");
+      if (!ctx) return;
+      var W = canvas.width, H = canvas.height;
+      if (!(W > 0) || !(H > 0)) return;
+      var dur = parseFloat(timeline.dataset.duration);
+      if (!(dur > 0)) return;
+      var finEl = document.querySelector("[data-fade-in]");
+      var foutEl = document.querySelector("[data-fade-out]");
+      var curveEl = document.getElementById("insp-fadecurve") || document.getElementById("insp-img-fadecurve");
+      var fin = finEl ? parseFadeSecs(finEl.value) : 0;
+      var fout = foutEl ? parseFadeSecs(foutEl.value) : 0;
+      if (!(fin > 0) && !(fout > 0)) return;
+      var curve = curveEl ? curveEl.value : "linear";
+      var st = expand(stateOf(timeline));
+      var end = st.posEnd > 0 ? st.posEnd : st.duration;
+      var vFrom = view ? view.from : 0;
+      var vTo = view ? view.to : dur;
+      var span = vTo - vFrom;
+      if (!(span > 0)) return;
+      var style = getComputedStyle(document.documentElement);
+      var col = (style.getPropertyValue("--ctp-accent") || "#2fd6ff").trim() || "#2fd6ff";
+      var dpr = W / (canvas.clientWidth || W) || 1;
+      var mid = H / 2;
+      var ramps = [];
+      if (fin > 0) ramps.push({ from: st.posStart, to: Math.min(end, st.posStart + fin), dir: 1, tag: "in" });
+      if (fout > 0) ramps.push({ from: Math.max(st.posStart, end - fout), to: end, dir: -1, tag: "out" });
+      ctx.save();
+      ramps.forEach(function (r) {
+        var x0 = Math.round((r.from - vFrom) / span * W);
+        var x1 = Math.round((r.to - vFrom) / span * W);
+        if (x1 <= 0 || x0 >= W || x1 - x0 < 2 * dpr) return;
+        x0 = Math.max(0, x0); x1 = Math.min(W, x1);
+        var step = Math.max(dpr, Math.floor((x1 - x0) / 400));
+        var gainAt = function (x) {
+          var t = (x - x0) / Math.max(1, x1 - x0);
+          return r.dir > 0 ? fadeShapeJS(curve, t) : fadeShapeJS(curve, 1 - t);
+        };
+        ctx.fillStyle = col;
+        ctx.globalAlpha = 0.22;
+        for (var x = x0; x < x1; x += step) {
+          var h = gainAt(x) * (mid - 2 * dpr);
+          ctx.fillRect(x, mid - h, step, h * 2);
+        }
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = col;
+        ctx.lineWidth = Math.max(1, Math.round(dpr));
+        ctx.beginPath();
+        for (var lx = x0; lx <= x1; lx += step) {
+          var y = mid - gainAt(lx) * (mid - 2 * dpr);
+          if (lx === x0) ctx.moveTo(lx, y); else ctx.lineTo(lx, y);
+        }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = col;
+        ctx.font = Math.round(10 * dpr) + "px sans-serif";
+        var label = r.tag === "in" ? "fade in (A+V)" : "fade out (A+V)";
+        var lw = ctx.measureText(label).width;
+        if (x1 - x0 > lw + 8 * dpr) {
+          var tx = r.tag === "in" ? x0 + 4 * dpr : x1 - 4 * dpr - lw;
+          ctx.fillText(label, Math.max(2, Math.min(W - lw - 2, tx)), 11 * dpr);
+        }
+      });
+      ctx.restore();
     }
 
     // Per-drag/zoom state, re-read from the live DOM (never cached per render).
@@ -757,6 +857,16 @@
     // at full duration); an empty state would paint NaN positions/markers.
     drawTarget(document.getElementById("trim-timeline"));
     fitMediaGrid();
+    // Live fade overlay: repaint the envelope while a fade field is edited
+    // (the save re-render repaints anyway). Direct listeners on this
+    // render's nodes — they die with the re-render, so nothing accumulates.
+    // The ui.js mirror-sync keeps every [data-fade-*] copy identical.
+    document.querySelectorAll("[data-fade-in],[data-fade-out],#insp-fadecurve,#insp-img-fadecurve").forEach(function (el) {
+      el.addEventListener("input", function () {
+        var tl = document.querySelector(".trim-timeline");
+        if (tl) drawTarget(tl);
+      });
+    });
 
     // Inspector swaps may replace the timeline AFTER the inline script ran
     // (htm4 evaluates fragments' scripts around the swap), so repaint from

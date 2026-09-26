@@ -67,7 +67,7 @@
           <td class="cue-name">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/title" hx-swap="outerHTML">{{ .Cue.Title }}</span>
             {{ if .Cue.WaitKind }}<span class="cue-wait-pill" title="{{ if eq .Cue.WaitKind "post" }}PostWait{{ else }}PreWait{{ end }} in progress">{{ .Cue.WaitLeftS }}s</span>{{ end }}
-            {{ if and .Cue.ScheduleEnabled (gt .Cue.ScheduleTimeMs 0) }}<span class="cue-slotsched" title="Scheduled trigger"> · <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-clock"/></svg> {{ formatSchedule .Cue.ScheduleTimeMs }}</span>{{ end }}
+            {{ if .Cue.ScheduleEnabled }}<span class="cue-slotsched" title="Scheduled trigger"> · <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-clock"/></svg> {{ formatSchedule .Cue.ScheduleTimeMs }}</span>{{ end }}
           </td>
           <td class="cue-time">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/preWait" hx-swap="outerHTML">{{ .Cue.PreWaitFmt }}</span>

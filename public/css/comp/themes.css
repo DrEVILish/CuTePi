@@ -338,6 +338,35 @@ html[data-theme] .btn.btn-youtube:hover {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+/* Mute renders as a small toggle button: the checkbox stays in the form
+   (instant-change save keeps working untouched) but hides visually, and
+   the label carries the button chrome — neutral when live, danger-red
+   when muted so the state reads at a glance. */
+.mute-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0.2em 0.7em;
+  border: 1px solid var(--ctp-border);
+  border-radius: var(--ctp-radius, 0.2rem);
+  cursor: pointer;
+  user-select: none;
+}
+.mute-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.mute-toggle:has(input:checked) {
+  background: var(--ctp-danger);
+  border-color: var(--ctp-danger);
+  color: #fff;
+  font-weight: 700;
+}
+.mute-toggle:has(input:focus-visible) {
+  outline: 2px solid var(--ctp-accent);
+  outline-offset: 1px;
+}
 
 /* Colour swatch chips: 12 named palette dots + "none". A radio group keeps
    keyboard/arrow navigation and the form's instant-change save working. */

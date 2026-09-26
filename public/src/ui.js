@@ -1555,27 +1555,23 @@ document.addEventListener("input", (e) => {
   if (e.target.matches("[data-fade-in]")) {
     document.querySelectorAll("[data-fade-in]").forEach(input => { input.value = e.target.value; });
   }
+  if (e.target.matches("[data-fade-out]")) {
+    document.querySelectorAll("[data-fade-out]").forEach(input => { input.value = e.target.value; });
+  }
   for (const id of ["insp-rate", "insp-balance"]) {
     if (e.target.id === id) document.getElementById(id + "-value").value = e.target.value + (id === "insp-rate" ? "×" : "");
   }
 });
 
-// Double-click on the playback-rate or balance/pan slider resets it (1× /
-// 0 — the old dedicated buttons were redundant).
+// Double-click on an inspector slider resets it to its default (volume
+// 0 dB, rate 1×, balance centre) — the old dedicated buttons were redundant.
 document.addEventListener("dblclick", (e) => {
-  if (e.target.id !== "insp-rate" && e.target.id !== "insp-balance") return;
-  e.target.value = e.target.id === "insp-rate" ? 1 : 0;
-  e.target.dispatchEvent(new Event("input", {bubbles: true}));
-  e.target.dispatchEvent(new Event("change", {bubbles: true}));
-});
-
-document.addEventListener("click", (e) => {
-  const button = e.target.closest("[data-volume-step], [data-volume-reset]");
-  if (!button) return;
-  const input = document.getElementById("insp-volume");
-  input.value = button.hasAttribute("data-volume-reset") ? 0 : Number(input.value) + Number(button.dataset.volumeStep);
-  input.dispatchEvent(new Event("input", {bubbles:true}));
-  input.dispatchEvent(new Event("change", {bubbles:true}));
+  if (!(e.target instanceof Element)) return;
+  const slider = e.target.closest('input[type="range"][data-default]');
+  if (!slider) return;
+  slider.value = slider.dataset.default;
+  slider.dispatchEvent(new Event("input", {bubbles: true}));
+  slider.dispatchEvent(new Event("change", {bubbles: true}));
 });
 
 // --- Cue Inspector: docked bottom panel (mirrors the mediapool pane) -----

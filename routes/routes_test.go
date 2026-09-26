@@ -1633,9 +1633,11 @@ func TestInspectorRendersForSelectedCue(t *testing.T) {
 		`data-tabpane="video"`,
 		`id="insp-video-fadein"`,
 		`id="insp-audio-fadein"`,
-		`data-volume-reset`,
-		`data-volume-step="-1"`,
-		`data-volume-step="1"`,
+		`id="insp-audio-fadeout"`,
+		`data-fade-out`,
+		`class="small mute-toggle"`,
+		`data-default="0"`,
+		`data-default="1"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected inspector markup %q, got:\n%s", want, body)
