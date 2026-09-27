@@ -1,14 +1,13 @@
 # CuTePi — Design Guide
 
 Living design/spec + architecture record. Updated whenever scope, architecture,
-or requirements change; do not let it drift out of sync with the code. This is
-a guide, not a changelog.
+or requirements change; This is a guide, not a changelog.
 
 ## 1. Overview
 
 CuTePi is a media cue-playback controller intended to run on a Raspberry Pi
-4/5, driving video/audio out of the HDMI port via GStreamer. A Go backend
-serves an htmx-driven "control centre" web UI (dark, operator-facing);
+4/5, driving video/audio out of an HDMI port via GStreamer. A Go backend
+serves an htmx-driven "control centre" web UI (themes provided by ftl-themes);
 SQLite3 is the single source of truth for state (media library, cue list,
 selection, settings).
 
@@ -21,7 +20,7 @@ selection, settings).
 - **Config/defaults**: `~/CTP/config/config.json` (env-overridable), port
   3001 default, media in `~/CTP/media/`, thumbnails in `~/CTP/thumbnails/`.
 - **Trust model**: trusted LAN appliance; optional operator password (see §7).
-- **Multi-client sync**: WebSocket hub with server-authoritative state; change-detection polling only to be used as the reconnect/fallback path.
+- **Multi-client sync**: WebSocket hub with server-authoritative state; polling only to be used as websocket reconnect path.
 
 ## 2. Product decisions
 
@@ -32,13 +31,13 @@ selection, settings).
 - **Undecodable sources**: fail **immediately with an error surfaced to the user** at cue time; an **import-time probe** (`ffmpeg -v error -t 1`) rejects bad files early.
 - **Cue trigger**: **Space** (control UI focused, not in an editable field) plays the selected cue; media-pool tiles are never selectable — the sheet always has a selected cue.
 - **Playback end**: a cue **stops** after playback — cues are a list, not a playlist; there is no implicit advance. Auto-continue is explicit and per-cue.
-- **Waits**: `preWait`/`postWait` apply **only to auto-continuing cues** (before start / after end). Auto-continue advances down the sheet; a stop on a group row triggers the group's action and continues.
+- **Waits**: `preWait`/`postWait` apply (before start / after end). Auto-continue advances down the sheet; a stop on a group row triggers the group's action and continues.
 - **Loop / Hold defaults**: `loop=off`, `hold=off` for new cues. `loop` always wins over auto-continue; `loop_count` (0 = infinite, N = play N times) is exhausted before an auto-continuing cue advances.
-- **Interruption**: behaviour when a new trigger interrupts a running playlist/slideshow is per-cue/per-group, not global (identity guards, §6.8).
 - **Trim**: `posStart`/`posEnd` are timecodes *into the source media*; 0 =  untrimmed at that end; values stored as given (no normalization).
 - **Cue groups**: visual folders, nestable, collapseable, hold cues, a group can act as a playlist.
 - **Slideshow**: a group of images can run slideshow mode from the cue group inspector — shuffle / loop / fade / duration-per-image on `cue_group`;
   images are visible cue rows inside the group with a "now showing" indicator.
+- **Awards Mode**: a group of audio tracks can run awards mode from the cue group inspector - shuffle / loop / fade, audio tracks are visible cue rows inside the group with a    "now showing" indicator.
 - **Settings editing**: all operators may edit
 - **Output level**: system output always 100%; volume is a **per-cue** control only (no global/master).
 - **Missing sources**: startup scan flags missing files; pool tile shows a  warning triangle; the cue shows a warning offering **delete the cue** or **re-link to another media file**. No periodic scan.
@@ -62,7 +61,7 @@ public/                static assets: css/, src/ (js), icons/, img/
 main.go network.go     entrypoint / server wiring / restart
 ```
 
-**Split of responsibilities**: playback/cues/selection/media-library state are server-authoritative; the browser is a mirror (WebSocket + poll fallback). Purely cosmetic UI state — column widths, panel sizes, theme choice — stays in `localStorage`.
+**Split of responsibilities**: playback/cues/selection/media-library state are server-authoritative; the browser is a mirror (WebSocket). Purely cosmetic UI state — panel sizes, theme choice — stays in `localStorage`.
 
 **htmx conventions**: htmx v4 vendored, explicit attribute inheritance. Successful state mutations return the complete target partial with `outerHTML`;
 status-only actions use `hx-swap="none"`;
@@ -104,21 +103,17 @@ Themes are browser-local presentation state via CSS variables (`--ctp-*`); **LCA
 and **Custom** (paste a JSON token map such as `{"--ctp-bg": "#0a0a12", "--ctp-accent": "#00ff88"}`).
 A theme change restyles the shared pane chrome (pool, inspector) together.
 
-### 5.2 Top bar (merged command header)
+### 5.2 Top bar
 
 One row, left to right:
 
-- WebSocket status dot (hover: a styled card with connection facts — live/offline, connected client count, server uptime, poll fallback — from `GET /api/serverinfo`),
+- WebSocket status dot (hover: a styled card with live updating connection facts — live/offline, connected client count, server uptime)
 - Wall clock (locale `HH:MM:SS`, tabular numerals).
-- **GO cluster** (in the version-guarded status partial):
-- The GO button (bordered, glowing — the loudest control on screen)
+- The GO button (the loudest control on screen)
 - *selected* cue it fires
-- **NOW cluster** (same partial):
 - playing cue number - cue name, progress indicator, time, remaining time.
-- menu dropdown, Tests / Settings / Export / Import / Logs / Restart / Shutdown.
-- The cuesheet has no GO bar of its own — the header is the single command strip.
-
-**Firing visuals on the sheet**: the playing row has an indicator on the left of the row, and a cue in a chain wait shows a live seconds pill.
+- full screen button
+- menu dropdown, Export / Import / Logs / Restart / Shutdown.
 
 ### 5.3 Media Pool (left pane)
 
@@ -135,14 +130,13 @@ One row, left to right:
 
 ### 5.4 Cuesheet (right pane)
 
+**Firing visuals on the sheet**: the playing row has an indicator on the left of the row, and a cue in a chain wait shows a live seconds pill.
+- Live Progress bar shown as background behind numerals of PreWait, Duration, PostWait if one of those items is in progress.
 - Sticky header, scrollable body. Columns: **icon** (media type / missing warning), **Number**, **Name**, **PreWait**, **Duration**, **PostWait**.
-  per-cue actions live in the Inspector and the row context menu. Column widths for drag-adjustable (width only, **Icon** and **Number** are fixed width), persisted.
+  per-cue actions live in the Inspector and the row context menu.
 - All cells editable by double-click; save on blur/enter. Time parser: `hh:mm:ss.ms` or a bare number = seconds.
-- **Groups** are first-class rows: numbered (editable `cue_num`, maxlength 24), coloured, selectable and nestable — subgroup headers render indented inside their parent's
-  block** (each level indents 1.1rem; the row carries `--depth`).
-  **An open group's block is enclosed by a fine hairline border** — the header draws the top edge, the last member the bottom, every row the sides 
-  so membership reads at a glance; collapsed groups draw only their header. Members' names indent same as subgroup headers; a collapsed group skips its whole subtree
-  in keyboard nav. Right-click group rows: Play, Inspector, Collapse/Expand, New subgroup, Delete group; group headers are draggable to move the whole subtree block.
+- **Groups** are first-class rows: numbered (editable `cue_num`, maxlength 24), coloured, selectable and nestable — cue and subgroup headers render indented inside their parent's block**
+  **An open group's block is enclosed by a fine hairline border** — the header draws the top edge, the last member the bottom, every row the sides so membership reads at a glance; collapsed groups draws the top edge, sides and bottom. Members' names indent same as subgroup headers; a collapsed group skips its whole subtree in keyboard nav. Right-click group rows: Delete group; group headers are draggable to move the whole subtree block.
 - **One drop model** (single cue, multi-selection block, or group block) — the hovered row band computes exactly one intent and draws exactly one indicator for it; the **indicator's indent shows where the drop lands**: indented to the member name (in-group, `cue-drop-in`) or plain (top-level, `cue-drop-top`):
   - pointer on a group header's **body** (below its near-first ~30% strip) → the drop **JOINS** the group this way: collapsed folder = highlight (lands **last**); expanded header = line right below the header (lands **first**); a dragged group nests as a subgroup;
   - pointer on the header's **top strip** → the plain top-level line above the header (between blocks — this is the transition zone around a header);
@@ -159,13 +153,13 @@ One row, left to right:
 - Selection: single-select, arrow-key navigable (Up/Down walk cues + group  headers; Right/Left open/close a selected group). Persisted in the DB; `POST /api/cue/:pos` selects. Space (or transport Play) acts on it.
 - **Context menu** (cue rows): colour, delete
 - **Missing source** cues: warning badge + the Inspector shows a Re-link / Delete cue banner.
-- **Scheduled** cues (schedule enabled, any time including midnight) show a clock icon + trigger time after the title.
+- **Scheduled** cues (schedule enabled, any time including midnight) show a clock icon after media icon.
 
 ### 5.5 Cue Inspector (bottom-docked panel)
 
 - Built and behaved like the Media Pool pane: shared resizer/collapse chrome
-  (collapse = fully hidden, one form spanning all tabs so any change saves instantly (htmx `change delay:200ms`, **silent flash** on commit — no dialogs / "Saved" text).
-- Tabs (static strip in `index.html`; audio/video panes are omitted for image cues:
+  (collapse = fully hidden, one form spanning all tabs so any change saves instantly (htmx `change delay:200ms`).
+- Tabs (static strip in `index.html`; audio panes are omitted for image cues:
   - **Time** — waveform trim timeline (canvas of JSON peaks, draggable In/Out markers; **only dragging a handle changes trim**; clicks elsewhere are inert),
     Trim In/Out fields, Pre-Wait, Post-Wait, Loop + loop-count, Hold-last-frame, Auto-continue, fade-stop scope/time, playback-rate slider with 1× reset.
     Renders even where duration is unknown (timeline duration-gated). The timeline shades the shared audio+video
@@ -188,10 +182,11 @@ One row, left to right:
 
 ### 5.7 Upload
 
-- Desktop: modal from the topbar (or Drag and drop onto the pool). Mobile: standalone `/upload`. Both: drag-and-drop + file picker, multi-file, no size limit,
+- Desktop: modal from the mediapool (or Drag and drop onto the pool). Mobile: standalone `/upload`. Both: drag-and-drop + file picker, multi-file, no size limit,
   reject non-media types (422). Metadata extracted synchronously but without blocking the HTTP response; duration/resolution/codec failures reject the import.
   YouTube/URL via yt-dlp with stage logging.
   Uploads, deletions, and thumbnail changes broadcast a targeted WebSocket refresh.
+- Ensure acurate and live updating progress bars for all upload / media import tasks.
 
 ### 5.8 Show export / import (`.CTP`)
 
@@ -222,16 +217,12 @@ assets (`gsp` test; skips when absent); the audio chain is
 
 ### 6.2 Trim, Hold, Loop, Volume, Seek
 
-- **Trim**: on load, seek to `posStart`; reaching `posEnd` = EOS. No trim if
-  both 0.
-- **Hold**: on EOS of a held video cue, seek to final frame and pause (frame
-  stays until Stop/Panic); image cues display as-is.
-- **Loop**: on EOS (natural or trim-Out), seek back to the in-point and
-  continue. `loop_count` 0 = infinite, N = N plays; loop wins over
-  auto-continue.
+- **Trim**: on load, seek to `posStart`; reaching `posEnd` = EOS. No trim if both 0.
+- **Hold**: on EOS of a held video cue, seek to final frame and pause (frame stays until Stop/Panic); image cues display as-is.
+- **Loop**: on EOS (natural or trim-Out), seek back to the in-point and continue. `loop_count` 0 = infinite, N = N plays; loop wins over auto-continue.
 - **Volume**: per-cue dB (−60..+12, default 0 = 0dB), converted
   `10^(dB/20)` for the GStreamer volume element; live-set via `SetVolume`.
-- **Seek**: absolute, clamped to clip duration and trim Out.
+- **Seek**: absolute, clamped to clip duration and trim Out. Live Seek disabled during Show Mode
 
 ### 6.3 Auto-continue & waits
 
@@ -309,98 +300,40 @@ goroutine — all comparing `gsp.CurrentCuePos()`. Keep them consistent.
 - `pre.sh` bootstraps: `go mod tidy`, build, vet, test.
 - Check before closing a session: `go build ./... && go vet ./... && go test ./...`.
 
-## 11. Change history
-
-History lives in git (`git log --oneline`; docs were consolidated 2026-09-17,
-dropping the separate CHANGELOG.md/README.md). DESIGN-level deltas that alter
-the guide above are folded in as they land — mark completed work, don't
-delete it.
-
-## 12. Planned features (spec'd, awaiting build)
-
-This section specs the 2026-09-14 feature batch. **Status as of 2026-09-17:
-§§12.1–12.7, 12.9–12.10 are built** (GO bar §5.2, wait pills §5.4, health/F8
-§5.4, multi-select + bulk §5.4, auto-number/renumber §5.4, topbar clock §5.2,
-fade curves §5.5, panic hold §6.5/Settings, test patterns §5.2) — only
-**§12.8 (remote protocols), §12.11 (under evaluation) and §12.12 (v2)** remain
-unbuilt.
-
-### 12.1 GO bar with next-cue preview (QLab-style)
-
-- A persistent strip at the top of the cuesheet pane: **GO → <num> <title>**
-  for the *selected* unit (Space/GO plays the selection), plus a dimmed
-  "next" line showing the unit that follows it in `SelectUnits` order.
-- **GO** (button + Space/Enter) triggers `POST /api/cue/selected/play`. With
-  "GO advances selection" on (default), the server re-selects the next unit
-  after firing, so repeated GOs walk the show. Rendered inside the cuesheet
-  partial, so it rides the existing sync paths — no new endpoint or poller.
-
-### 12.2 Running wait countdowns
-
-- PreWait/PostWait are invisible while they run — a hung cue and a deliberate
-  wait look identical. A shared wait-state (`cuePos`, kind pre/post,
-  `endsAtMs`, owned by the auto-continue chain, which switches its sleeps to
-  250 ms ticks) rides the existing per-second WS sync.
-- UI: the waiting row shows a live pill ("waiting 3.2s"); with
-  "GO advances selection", the pending cue's PreWait also counts down in the
-  GO bar's next line.
-
-### 12.3 Cue health states
-
-- Persisted per cue: `last_result` (0 = never played, 1 = ok, 2 = error) +
-  `last_played_at`. gsp's end hook marks `ok` for a completed cue; any
-  load/play error marks `error` (missing-file is the existing startup scan,
-  shown separately). Show import/clear resets results; an operator
-  "clear results" action exists too.
-- UI: glyph + edge tint in the icon column, so a scan mid-show finds broken
-  cues. **Jump to next broken cue** hotkey (F8): selection walks to the next
-  `error`/missing row and scrolls it into view.
 
 ### 12.4 Multi-select + bulk edit
 
 - Selection extends from a single id to an **anchor + set** (persisted):
-  Shift+arrows/click extend the range, Ctrl/Cmd-click toggles, Ctrl+A selects
-  all visible units, Esc collapses to the anchor. Arrow navigation keeps the
-  anchor; Space still plays the anchor cue only. Shift+arrows step the range
-  head one visible unit (stepping back shrinks; reaching the anchor clears).
+  Shift+arrows/click extend the range, Ctrl/Cmd-click toggles, Ctrl/Cmd+A selects
+  all visible units. Arrow navigation keeps the anchor; Space still plays the anchor cue only.
+  Shift+arrows step the range head one visible unit (stepping back shrinks; reaching the anchor clears).
   A range covers **visible rows in sheet order** (`SelectUnits`: collapsed
   members excluded, group headers included); headers persist in the set as
-  `-groupID` and highlight, but cue-only consumers (bulk ops, block drag, F8)
-  ignore them. Every single-selection write (cue or group) clears the set.
+  and highlight. Every single-selection write (cue or group) clears the set.
 - Row visuals: every selected row shares the anchor's highlight — one
   selection look; anchor identity lives in the GO bar, not a second tint.
-- **Bulk actions** (context menu when >1 selected): colour, fade scope/time,
-  auto-continue, assign-to-group, delete — one transactional server endpoint
-  (`POST /api/cue/bulk` with `{op, value, positions[]}`), not a client-side
-  loop of single-cue calls, so half a bulk edit can never persist.
 - Dragging any selected cue moves the whole selection as one block
   (relative order preserved).
 
 ### 12.5 Cue-number arithmetic on insert
 
-- Auto-numbering (setting, default on): new cues numbered 5, 10, 15…;
+- Auto-numbering (setting, default on): new cues numbered 1, 2, 3…;
   an insert *between* numbered cues takes a fractional number (12.5), kept as
   text — no schema change (`cueNum` is TEXT; existing CAST-INTEGER MAX for
   next-number computation still works).
 - **Renumber ×5** action recomputes the visible sequence to clean integers;
-  manual inline edits remain the override (auto-numbering never rewrites a
-  hand-set number).
 
 ### 12.6 Topbar clock
 
 - The current wall clock (locale `HH:MM:SS`) lives in the topbar next to the
   live-status dot, rendered client-side (1 s tick, no server round trip, no
-  sync path). A clock must not announce itself to screen readers: `role="img"`
-  with an `aria-label` of the time, updated only on focus.
-- Later sibling (also spec'd, §12.2): the **show clock** — performance
-  elapsed time started by the first GO.
+  sync path).
 
 ### 12.7 Fade curves (volume envelope automation)
 
-- Today every fade is a flat linear ramp of the shared audio/video envelope.
-  Per-cue **fade curve** setting selects the envelope shape `f(t)`, applied
+- Per-cue **fade curve** setting selects the envelope shape `f(t)`, applied
   identically to fade-in, fade-out and the slideshow fade (one ramp function,
-  three callers):
+  three callers) with visual representation next to the drop down.
   - `linear` — constant slope (current behaviour, default)
   - `smooth` — S-curve (smoothstep: slow start, fast middle, slow end) —
     natural-sounding audio fades, gentler light changes
@@ -408,24 +341,22 @@ unbuilt.
     matches how loudness is heard
   - `exp` — exponential (slow start, sharp finish)
 - Data: `cuesheet.fade_curve` TEXT default `'linear'`; validated against the
-  list above. UI: a curve picker next to the fade time in the inspector (and
-  in the bulk-edit op set, §12.4). Slideshow groups may set a group-level
-  curve used for their inter-slide fades.
+  list above. UI: a curve picker next to the fade time in the inspector.
+  Slideshow groups may set a group-level curve used for their inter-slide fades.
 
 ### 12.8 Remote control protocols (OSC + HyperDeck)
-
+- **QLab Remote** iOS, port 53000
 - **OSC** (UDP, port configurable, default 8000): address map
   `/cue/{pos}/play`, `/cue/{pos}/select`, `/cue/next`, `/cue/prev`,
   `/transport/play|pause|stop`, `/panic`, `/showtest/{name}`,
   `/volume/{dB}`. replies minimal; unknown addresses ignored (logged at
   debug). Server binds `0.0.0.0` or a configured address (toggles in
-  Settings).
+  Settings). Use Companion to drive CuTePi as if it were QLab.
 - **HyperDeck Remote Control Protocol** (TCP, default port 9993): Blackmagic
   text-command subset — `play`, `stop`, `record` (ignored/unsupported
   response), `load: <clip>` (select + load the cue whose title/number
   matches), `goto: <tc>`, `transport info`, `notify` — enough for HyperDeck
-  controllers, Stream Deck plugins and Companion to drive CuTePi as if it
-  were a deck. One client at a time; transport state is reported from the
+  controllers. One client at a time; transport state is reported from the
   gsp state machine.
 - **Trust boundary**: neither protocol authenticates (protocol limitation) —
   they are off by default and documented as control-room-LAN features.
@@ -437,8 +368,7 @@ unbuilt.
 
 - Setting: **"Panic cuts to a holding image"** + holding image picker (from
   the media pool). When on, Panic does not go to black — it immediately
-  loads and holds the configured image (full-frame, looping), so screens
-  never show dead black mid-show.
+  loads and holds the configured image (full-frame), so screens never show dead black mid-show.
 - Fallback: holding image missing/unplayable → plain panic to black, logged
   as an error. The setting lives with the other panic/transport settings.
 
@@ -454,24 +384,26 @@ unbuilt.
   frame). Patterns persist in `state`; clearing unlists them without
   deleting media.
 
-### 12.11 To be considered
-
-Spec'd enough to evaluate, not committed:
-
 - **Output preview thumbnail** — mirror the Pi's HDMI output in the topbar
   (click to expand): pipeline `tee → appsink` → MJPEG endpoint / WS frames.
   The one real pipeline change on the list; costs decode headroom on the Pi.
-- **Minimap for long shows** — VS Code-style scrollbar minimap coloured by
-  cue colour/type, click-to-jump. Pure client-side render from cuesheet
-  data; value grows with show size (200+ cues).
+  Add this as a new browser pop-out window.
 
-### 12.12 Slated for v2
-
-- **Master/standby machine sync** — a second Pi mirrors the show over the
+- **active/active machine sync** — a second Pi mirrors the show over the
   network: every playback decision is replayed to the standby over WS so it
   sits one click behind the same state; mid-show failover is a single
   operator action. Requires a command-replay protocol, media mirroring
   strategy and conflict rules — deliberately out of the v1 scope.
+  The sync should be driven by the client. So that if one machine drops, the front-end client is still connected to the second machine.
+  Fired cues, fire on both servers, the servers negotiate with each other and keep mediapool in sync.
+  Notify the operator if any media isn't in sync, only start a media sync from a user action.
+- For upload/yt-dlp operations, one server downloads then syncs to the second.
+- There needs to be a graceful client handoff if the main goes down.
+- Server A must be able to see Server B, Client A must be able to see both Server A and B
+- Client A, started via Server A's http://cutepi.local address, then discovered Server B and allowed the operator to link/sync the two together. mDNS must be handled correctly.
+- A joining Client B should instantly be able to follow or lead current actions.
+- If Server A disconnects, Client A must still function correctly and talk to Server B. A error warning must be displayed but UI functionality must not be interupted.
+  
 
 ### 12.13 Awards Mode (group playback toggle)
 
