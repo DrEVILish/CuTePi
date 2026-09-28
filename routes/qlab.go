@@ -41,6 +41,88 @@ func ListenOSC(addr string) {
 	}
 }
 
+// ListenOSCTCP serves the same OSC dictionary over TCP for controllers
+// that don't speak UDP — notably QLab Remote, which connects to TCP 53000
+// and frames packets with SLIP (RFC 1055 END-delimited). Shares the port
+// with the UDP listener (different protocol, no conflict). Replies stay
+// no-ops like the UDP half; full Remote handshake emulation (workspace /
+// cue-list replies) is a separate, larger piece of work.
+func ListenOSCTCP(addr string) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		logs.Printf(logs.RTEDeckErr, "osc/tcp listener: %v", err)
+		return
+	}
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go serveOSCTCP(conn)
+	}
+}
+
+func serveOSCTCP(conn net.Conn) {
+	defer conn.Close()
+	dec := &slipDecoder{}
+	buf := make([]byte, 8192)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			for _, pkt := range dec.feed(buf[:n]) {
+				if err := handleOSCDgram(pkt); err != nil {
+					logs.Printf(logs.RTEDeckErr, "osc/tcp %s: %v", conn.RemoteAddr(), err)
+				}
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// SLIP framing: END 0xC0 delimits packets, ESC 0xDB escapes (ESC_END 0xDC,
+// ESC_ESC 0xDD). Empty packets (back-to-back ENDs, leading END) carry
+// nothing and are dropped.
+const (
+	slipEND    = 0xC0
+	slipESC    = 0xDB
+	slipESCEnd = 0xDC
+	slipESCEsc = 0xDD
+)
+
+type slipDecoder struct {
+	buf []byte
+	esc bool
+}
+
+func (d *slipDecoder) feed(chunk []byte) [][]byte {
+	var out [][]byte
+	for _, b := range chunk {
+		switch {
+		case d.esc:
+			d.esc = false
+			if b == slipESCEnd {
+				d.buf = append(d.buf, slipEND)
+			} else if b == slipESCEsc {
+				d.buf = append(d.buf, slipESC)
+			} else {
+				d.buf = append(d.buf, b)
+			}
+		case b == slipESC:
+			d.esc = true
+		case b == slipEND:
+			if len(d.buf) > 0 {
+				out = append(out, d.buf)
+				d.buf = nil
+			}
+		default:
+			d.buf = append(d.buf, b)
+		}
+	}
+	return out
+}
+
 func handleOSCDgram(data []byte) error {
 	addr, args, err := oscDecode(data)
 	if err != nil || addr == "" {

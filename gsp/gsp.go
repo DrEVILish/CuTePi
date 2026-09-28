@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 
 	"CuTePi/config"
@@ -51,6 +52,8 @@ type manager struct {
 	cuePos       int           // cue position associated with the active clip (0 = not a cue)
 	onCueEnd     func(pos int) // invoked (in a goroutine) when an active cue reaches its end
 	gen          uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
+	paused       bool          // operator pause intent: Pause sets it, Play/swap clear it.
+	testShowing  bool          // a test pattern (not a file) is on the wall
 	warm         *gst.Pipeline // prebuilt+prerolled next cue; see Warm. Audio-only callers
 	warmFile     string        // only, since a prerolled video pipeline paints its
 	warmOpts     LoadOpts      // first frame onto the live wall (realtime-first rule)
@@ -65,6 +68,10 @@ var (
 func gstInit() {
 	initOnce.Do(func() {
 		gst.Init(nil)
+		// Bus watches (EOS/error handling in watchAndPlay/watchWarm) only
+		// dispatch on a running GLib main loop — without it a finished cue
+		// never fires its end hook and pipeline errors never surface.
+		go glib.NewMainLoop(glib.MainContextDefault(), false).Run()
 		// Position ticker: while a clip is playing, push one sync per
 		// displayed second over the WebSocket so connected clients advance
 		// their progress clock WITHOUT HTTP polling (the pollers are now the
@@ -176,6 +183,7 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 		m.fadeLevel = 0
 	}
 	m.starting = true
+	m.paused = false
 	m.gen++
 	m.mu.Unlock()
 	broadcastSoon()
@@ -195,6 +203,8 @@ func (m *manager) clearPlayback() {
 	m.brightEl = nil
 	m.panEl = nil
 	m.starting = false
+	m.paused = false
+	m.testShowing = false
 	m.fadeSerial++
 	m.cuePos = 0
 	m.version++
@@ -255,6 +265,9 @@ func Play() {
 	if p == nil || starting {
 		return
 	}
+	mgr.mu.Lock()
+	mgr.paused = false
+	mgr.mu.Unlock()
 	_, state := p.GetState(gst.StateNull, 0)
 	if state == gst.StateNull {
 		startPlayback(p)
@@ -295,6 +308,9 @@ func Pause() {
 	if err := p.SetState(gst.StatePaused); err != nil {
 		logs.Printf(logs.GSPPauseErr, "gsp: error pausing: %v", err)
 	}
+	mgr.mu.Lock()
+	mgr.paused = true
+	mgr.mu.Unlock()
 	CurrentPosition()
 	mgr.bump()
 }
@@ -311,14 +327,20 @@ func TogglePause() {
 		return
 	}
 	var err error
+	pausing := false
 	switch currentState {
 	case gst.StatePlaying:
 		err = p.SetState(gst.StatePaused)
+		pausing = true
 	case gst.StatePaused:
 		err = p.SetState(gst.StatePlaying)
 	}
 	if err != nil {
 		logs.Printf(logs.GSPToggleErr, "gsp: error toggling pause: %v", err)
+	} else {
+		mgr.mu.Lock()
+		mgr.paused = pausing
+		mgr.mu.Unlock()
 	}
 	mgr.bump()
 }
@@ -331,6 +353,17 @@ func Panic() {
 		mgr.pipeline = nil
 		mgr.clearPlayback()
 		mgr.gen++
+	} else {
+		// No pipeline, but a stale cue association may survive a load
+		// that tore down inside itself: clear it so Panic always means
+		// "nothing is armed", without bumping the generation (no new
+		// decision was taken).
+		mgr.currentFile = ""
+		mgr.cuePos = 0
+		mgr.lastPos = 0
+		mgr.starting = false
+		mgr.testShowing = false
+		mgr.version++
 	}
 	mgr.dropWarm() // PANIC tears everything down, including the warm slot
 	mgr.mu.Unlock()
@@ -343,6 +376,17 @@ func Stop() {
 	p := mgr.pipeline
 	mgr.mu.Unlock()
 	if p == nil {
+		// Same stale-association clear as Panic: a load that failed
+		// mid-flight can leave a cuePos with no pipeline behind it.
+		mgr.mu.Lock()
+		mgr.currentFile = ""
+		mgr.cuePos = 0
+		mgr.lastPos = 0
+		mgr.starting = false
+		mgr.testShowing = false
+		mgr.version++
+		mgr.mu.Unlock()
+		broadcastSoon()
 		return
 	}
 	if err := p.SetState(gst.StateNull); err != nil {
@@ -379,8 +423,19 @@ func ShowTest(pattern string) error {
 		return err
 	}
 	mgr.swap(newPipeline, "", LoadOpts{})
+	mgr.mu.Lock()
+	mgr.testShowing = true
+	mgr.mu.Unlock()
 	watchAndPlay(newPipeline)
 	return nil
+}
+
+// TestShowing reports whether a test pattern (rather than a file) is
+// currently on the wall. Drives the Tests toggle button state.
+func TestShowing() bool {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	return mgr.testShowing && mgr.pipeline != nil
 }
 
 // Load loads (and starts) playback of filename from the configured media
@@ -520,6 +575,17 @@ func InstallWarm(file string, opts LoadOpts) bool {
 		mgr.mu.Unlock()
 		return false
 	}
+	// The relinked sink must re-preroll before the swap: the flush seek
+	// re-drives the decoders, and on big files that can exceed the fire
+	// budget while a cold load lands in ~0.5s. Bound it — a slow slot
+	// falls back to cold instead of stalling the GO past a second.
+	if opts.WarmPreroll && !warmReady(p, 400*time.Millisecond) {
+		logs.Printf(logs.GSPWarm, "warm pipeline re-preroll slow: cold load")
+		mgr.mu.Lock()
+		retirePipeline(p)
+		mgr.mu.Unlock()
+		return false
+	}
 	logs.Printf(logs.GSPWarm, "warm pipeline activated: %s", file)
 	// swap() owns the retire+install; give it the prerolled handle.
 	mgr.swap(p, file, opts)
@@ -527,8 +593,108 @@ func InstallWarm(file string, opts LoadOpts) bool {
 	return true
 }
 
+// warmReady waits (bounded) for the pipeline to sit prerolled in PAUSED.
+func warmReady(p *gst.Pipeline, timeout time.Duration) bool {
+	result, _ := p.GetState(gst.StateNull, gst.ClockTime(timeout))
+	return result == gst.StateChangeSuccess
+}
+
+// wallVideoSink names the live video-output element: CUTEPI_WALL_SINK when
+// set, autovideosink otherwise. Single source so the cold build and the
+// warm-slot relink can never disagree. fbdevsink is the working pick on a
+// headless KMS console (autovideosink's GL/GBM choice prerolls but never
+// presents there); fakesink keeps headless tests display-free.
+func wallVideoSink() string {
+	if kind := os.Getenv("CUTEPI_WALL_SINK"); kind != "" {
+		return kind
+	}
+	return "autovideosink"
+}
+
+// videoStem is the shared video-branch plumbing (fresh slice every call —
+// callers append their own tail): queue, an optional DMABuf download,
+// then convert/balance/scale, two videoflip stages (rotate, then mirror;
+// method=none passes frames through untouched), and a second videoconvert
+// after the flips (videoflip handles only a subset of raw formats, so
+// without a converter on the sink side a picky wall sink such as
+// fbdevsink's RGB16 framebuffer cannot negotiate at all — decodebin then
+// fails delayed linking and the cue silently never plays; passthrough
+// cost when formats already match).
+//
+// download is for DMABuf-producing file decodes only: hardware decoders
+// are the sole DMABuf source, while the test-pattern source (videotestsrc,
+// system memory) negotiates worse with v4l2convert in the chain (its
+// device caps probe can fail the query and leave the source unlinked —
+// silent no-pattern). Callers pass dmaBufUpstream(srcPad) for files.
+func videoStem(download bool) []string {
+	stem := []string{"queue"}
+	if download {
+		stem = append(stem, videoDownload()...)
+	}
+	return append(stem, "videoconvert", "videobalance", "videoscale", "videoflip", "videoflip", "videoconvert")
+}
+
+// videoDownload names an optional DMABuf download stage for hardware
+// decoders: Pi v4l2h264dec emits DMA_DRM buffers that videoconvert cannot
+// map, stalling the chain with no error and no EOS. Probed once, guarded
+// by availability so non-V4L2 systems build the same chain as before.
+var (
+	videoDownloadOnce sync.Once
+	videoDownloadEls  []string
+)
+
+func videoDownload() []string {
+	videoDownloadOnce.Do(func() {
+		if el, err := gst.NewElement("v4l2convert"); err == nil && el != nil {
+			videoDownloadEls = []string{"v4l2convert"}
+		}
+	})
+	return videoDownloadEls
+}
+
+func indexOfName(names []string, want string) int {
+	for i, n := range names {
+		if n == want {
+			return i
+		}
+	}
+	return -1
+}
+
+func firstByFactory(m map[string][]*gst.Element, factory string) *gst.Element {
+	if els := m[factory]; len(els) > 0 {
+		return els[0]
+	}
+	return nil
+}
+
+// dmaBufUpstream reports whether the just-linked decodebin pad already
+// carries DMABuf memory, i.e. a hardware decoder produced it: only then is
+// the v4l2convert download stage useful. Probing the stage for
+// system-memory streams breaks negotiation (its device caps query can fail
+// and sink the whole link — silent no-play for software-decoded files),
+// so the stage is conditional on the actual upstream caps, not structural.
+// Unreadable caps default to including it (hardware-first).
+func dmaBufUpstream(srcPad *gst.Pad) bool {
+	if srcPad == nil || !srcPad.HasCurrentCaps() {
+		return true
+	}
+	caps := srcPad.GetCurrentCaps()
+	if caps == nil {
+		return true
+	}
+	// No Unref: go-gst owns the reference via a finalizer; unrefing here
+	// double-frees (gst_mini_object_unref assertion failures in the log).
+	for i := 0; i < caps.GetSize(); i++ {
+		if f := caps.GetFeaturesAt(i); f != nil && f.Contains("memory:DMABuf") {
+			return true
+		}
+	}
+	return false
+}
+
 // warmWireVideo swaps the prerolled video branch's output edge from
-// fakesink to the live wall: unlink the fake sink, install autovideosink,
+// fakesink to the live wall: unlink the fake sink, install the wall sink,
 // sync it, done — the pipeline is parked PAUSED, and startPlayback's
 // SetState(Playing) prerolls the new sink (~a frame) with decoder context
 // already warm. False = un-recoverable wiring state; caller cold-loads.
@@ -538,12 +704,11 @@ func warmWireVideo(p *gst.Pipeline) bool {
 	if tail == nil || fake == nil {
 		return true // not a video preroll (audio slot): nothing to relink
 	}
-	// ponytail: env override is a stage-side knob (force fakesink/xv) for
-	// video-out debugging and lets tests run naming/relink without a display.
-	kind := os.Getenv("CUTEPI_WALL_SINK")
-	if kind == "" {
-		kind = "autovideosink"
-	}
+	// Wall sink shared with the cold build (see wallVideoSink): the env
+	// override is a stage-side knob (fbdevsink on headless KMS consoles,
+	// fakesink/xv for video-out debugging) and lets tests run
+	// naming/relink without a display.
+	kind := wallVideoSink()
 	sink, err := gst.NewElement(kind)
 	if err != nil {
 		return false
@@ -656,17 +821,14 @@ func Rate() float64 {
 	return mgr.rate
 }
 
-// IsPaused reports whether the active pipeline is PAUSED. False when nothing
-// is loaded (so callers don't special-case "stopped" separately).
+// IsPaused reports the operator pause intent (Pause sets it, Play/swap clear
+// it, a hold-parked end sets it). Intent, not a live state query: a polled
+// GetState races transitions (fresh Play still reads PAUSED) and can block
+// on a wedged bus. False when nothing is loaded.
 func IsPaused() bool {
 	mgr.mu.Lock()
-	p := mgr.pipeline
-	mgr.mu.Unlock()
-	if p == nil {
-		return false
-	}
-	_, state := p.GetState(gst.StateNull, 0)
-	return state == gst.StatePaused
+	defer mgr.mu.Unlock()
+	return mgr.paused && mgr.pipeline != nil
 }
 
 // Loop reports whether the active pipeline loops at end-of-stream. With no
@@ -966,6 +1128,9 @@ func (m *manager) handleEnd(p *gst.Pipeline) bool {
 			m.mu.Unlock()
 			seekAtRate(p, inPoint)
 			p.SetState(gst.StatePlaying)
+			m.mu.Lock()
+			m.paused = false
+			m.mu.Unlock()
 			m.bump()
 			return true
 		}
@@ -974,6 +1139,9 @@ func (m *manager) handleEnd(p *gst.Pipeline) bool {
 
 	if hold {
 		p.SetState(gst.StatePaused)
+		m.mu.Lock()
+		m.paused = true
+		m.mu.Unlock()
 		m.bump()
 	} else {
 		m.clearIfCurrent(p)
@@ -1236,16 +1404,24 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			// Two videoflip stages (rotate, then mirror) so a cue can
 			// combine e.g. 90° with a horizontal mirror; method=none
 			// passes frames through untouched.
-			elementNames = []string{"queue", "videoconvert", "videobalance", "videoscale", "videoflip", "videoflip", "autovideosink"}
+			// The second videoconvert sits after the flips: videoflip handles
+			// only a subset of raw formats, so without a converter on the sink
+			// side a picky wall sink (fbdevsink's RGB16 framebuffer) cannot
+			// negotiate at all — decodebin then fails delayed linking and the
+			// cue silently never plays. Passthrough cost when formats match.
+			stem := videoStem(!spec.isTest && dmaBufUpstream(srcPad))
+			elementNames = append(stem, wallVideoSink())
 			if d := config.Display(); d.Resolution != "" && !d.UseEDID && gstCapsWidthHeightOK(d.Resolution) {
 				// Manual wall resolution: retune the decoded stream to the
 				// destination size (videoscale picks it up from the caps).
-				elementNames = append(elementNames[:6:6], "capsfilter", "autovideosink")
+				elementNames = append(videoStem(!spec.isTest && dmaBufUpstream(srcPad)), "capsfilter", wallVideoSink())
 			}
 			if spec.warmSink {
 				// Warm-slot video preroll: decode into fakesink — silent, no
 				// wall takeover. warm-vf-tail is the relink anchor at activation.
-				elementNames = []string{"queue", "videoconvert", "videobalance", "videoscale", "videoflip", "videoflip", "fakesink"}
+				// Warm slots are always file decodes; the download applies
+				// exactly when the pad carries DMABuf (see dmaBufUpstream).
+				elementNames = append(videoStem(dmaBufUpstream(srcPad)), "fakesink")
 			}
 		}
 		queueName += "-" + srcPad.GetStreamID()
@@ -1263,21 +1439,35 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			return
 		}
 		elements[0].Set("name", queueName)
+		// Role map built from the same slice the elements were created
+		// from, so it stays correct whatever optional stages the chain
+		// carries. (Factory introspection is not reliably exposed, and
+		// positional wiring silently mis-aimed every per-cue setting on
+		// hardware-decoded pipelines.)
+		byFactory := make(map[string][]*gst.Element, len(elements))
+		for i, e := range elements {
+			f := elementNames[i]
+			byFactory[f] = append(byFactory[f], e)
+		}
 		// Settings-tab output tuning (only real pipelines; the warm slot
 		// prerolls with default plumbing so it can never grab a hw device).
 		if !spec.warmSink && !spec.isTest {
 			if isAudio {
 				applyAudioSink(elements[len(elements)-1])
-			} else if len(elementNames) == 8 && elementNames[6] == "capsfilter" {
-				setResolutionCaps(elements[6])
+			} else if i := indexOfName(elementNames, "capsfilter"); i >= 0 {
+				setResolutionCaps(elements[i])
 			}
 		}
-		if spec.warmSink && elementNames[6] == "fakesink" {
-			// Relink anchors for install-time: last videoflip = output edge,
-			// the fake sink gets a findable name (startPlayback's pool).
-			elements[5].Set("name", "warm-vf-tail")
-			elements[6].Set("name", "warm-video-sink")
-			elements[6].Set("sync", false)
+		if spec.warmSink {
+			if i := indexOfName(elementNames, "fakesink"); i > 0 {
+				// Relink anchors for install-time: whatever feeds the fake
+				// sink is the output edge (post-flip converter, or the
+				// capsfilter when a wall resolution is configured); the
+				// fake sink gets a findable name (startPlayback's pool).
+				elements[i-1].Set("name", "warm-vf-tail")
+				elements[i].Set("name", "warm-video-sink")
+				elements[i].Set("sync", false)
+			}
 		}
 		pipeline.AddMany(elements...)
 		gst.ElementLinkMany(elements...)
@@ -1307,20 +1497,33 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		}
 		// Retain the video "videobalance" element so the fade-to-black ramp can
 		// drive its brightness; a fresh clip always starts at full brightness.
+		// Elements resolve by role from the build slice, never by position:
+		// optional stages (the v4l2convert download, the wall-resolution
+		// capsfilter) shift indices, and positional wiring silently aimed
+		// every setting at the wrong element on hardware-decoded pipelines.
 		if isVideo {
 			mgr.mu.Lock()
 			if mgr.pipeline == pipeline {
-				mgr.brightEl = elements[2]
-				elements[2].Set("brightness", mgr.fadeLevel-1)
+				if el := firstByFactory(byFactory, "videobalance"); el != nil {
+					mgr.brightEl = el
+					el.Set("brightness", mgr.fadeLevel-1)
+				}
 				// Per-cue frame geometry (§5.5): letterbox vs stretch on
 				// videoscale, rotation then mirror on the two videoflips.
 				fit := mgr.fitMode
 				if fit != "stretch" {
 					fit = "fit"
 				}
-				elements[3].Set("add-borders", fit == "fit")
-				elements[4].Set("method", rotationMethod(mgr.rotation))
-				elements[5].Set("method", flipMethod(mgr.flip))
+				if el := firstByFactory(byFactory, "videoscale"); el != nil {
+					el.Set("add-borders", fit == "fit")
+				}
+				flips := byFactory["videoflip"]
+				if len(flips) > 0 {
+					flips[0].Set("method", rotationMethod(mgr.rotation))
+				}
+				if len(flips) > 1 {
+					flips[1].Set("method", flipMethod(mgr.flip))
+				}
 			}
 			mgr.mu.Unlock()
 		}

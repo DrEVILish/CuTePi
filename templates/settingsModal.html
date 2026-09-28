@@ -72,12 +72,27 @@
               </div>
 
               <div class="ftl-field">
+                <label class="ftl-label" for="settingsEscFadeMs">ESC fade-out time (ms)</label>
+                <input class="ftl-input" id="settingsEscFadeMs" name="escFadeMs" type="number" min="0" max="10000" step="50" placeholder="500" />
+                <div class="ftl-field-hint ftl-text-muted">Single ESC fades the running output over this time, then stops. A second ESC within a second panics immediately.</div>
+              </div>
+
+              <div class="ftl-field">
                 <label class="ftl-label">Panic holding image</label>
                 <div class="ftl-row is-items-center is-gap-xs">
                   <span id="settingsPanicHold" class="ftl-field-hint ftl-text-muted mb-0">off (cut to black)</span>
                   <button type="button" class="btn ftl-btn-sm ftl-btn-secondary ftl-btn" id="settingsPanicHoldClear">Clear</button>
                 </div>
                 <div class="ftl-field-hint ftl-text-muted">Set from a media item's menu ("Set as holding image"). PANIC then loads and holds it instead of cutting to black.</div>
+              </div>
+
+              <div class="ftl-field">
+                <label class="ftl-label" for="settingsInstanceName">Instance name</label>
+                <div class="ftl-row is-items-center is-gap-xs">
+                  <input class="ftl-input" id="settingsInstanceName" type="text" placeholder="cutepi" autocomplete="off" />
+                  <button type="button" class="btn ftl-btn-sm ftl-btn-secondary ftl-btn" id="settingsInstanceApply">Apply</button>
+                </div>
+                <div class="ftl-field-hint ftl-text-muted">Renames the machine: hostname and <span id="settingsInstanceMdns">cutepi.local</span> update. Your browser address changes — reconnect at the new name.</div>
               </div>
 
               <div class="ftl-field">
@@ -123,9 +138,10 @@
             <div class="tab-pane fade" id="settingsTabAudio" role="tabpanel">
               <div class="row">
                 <div class="col ftl-field">
-                  <label class="ftl-label" for="settingsAudioDevice">Output device</label>
-                  <input class="ftl-input" id="settingsAudioDevice" name="audioDevice" type="text" placeholder="auto (e.g. plughw:CARD=b1,DEV=0)" />
-                  <div class="ftl-field-hint ftl-text-muted">Empty = automatic (PulseAudio). When set, playback pins to this ALSA device (e.g. the HDMI sink).</div>
+                  <label class="ftl-label" for="settingsAudioDeviceSel">Output device</label>
+                  <select class="ftl-select" id="settingsAudioDeviceSel" aria-label="Output device"></select>
+                  <input class="ftl-input ftl-mt-xs" id="settingsAudioDevice" name="audioDevice" type="text" placeholder="Custom ALSA device (e.g. plughw:CARD=b1,DEV=0)" hidden />
+                  <div class="ftl-field-hint ftl-text-muted">Automatic pins nothing. Pick a destination, or choose Custom to type an ALSA device (e.g. the HDMI sink).</div>
                 </div>
                 <div class="col ftl-field">
                   <label class="ftl-label" for="settingsAudioChannels">Channel layout</label>
@@ -208,6 +224,39 @@
     document.querySelectorAll(".settings-tabs .ftl-tab").forEach(function (t) { t.classList.remove("is-active"); });
     e.target.classList.add("is-active");
   });
+  function loadAudioDevices(current) {
+    fetch("/api/audio/devices", { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        var sel = document.getElementById("settingsAudioDeviceSel");
+        var input = document.getElementById("settingsAudioDevice");
+        var options = (body && body.devices) || [];
+        var html = '<option value="">Automatic</option>';
+        options.forEach(function (d) {
+          html += '<option value="' + d.id + '">' + d.label + '</option>';
+        });
+        html += '<option value="__custom">Custom\u2026</option>';
+        sel.innerHTML = html;
+        var known = !current || options.some(function (d) { return d.id === current; });
+        if (known) {
+          sel.value = current || "";
+          input.hidden = true;
+        } else {
+          sel.value = "__custom";
+          input.hidden = false;
+          input.value = current;
+        }
+        sel.onchange = function () {
+          if (sel.value === "__custom") {
+            input.hidden = false;
+            input.focus();
+          } else {
+            input.hidden = true;
+            input.value = sel.value;
+          }
+        };
+      });
+  }
   function loadDisplayModes(current) {
     fetch("/api/display/modes", { headers: { Accept: "application/json" } })
       .then(function (r) { return r.json(); })
@@ -237,6 +286,29 @@
           : "No password set (open access).";
         document.getElementById("settingsPanicHold").textContent = s.panicHold
           ? s.panicHold : "off (cut to black)";
+        document.getElementById("settingsEscFadeMs").value =
+          (s.escFadeMs === undefined || s.escFadeMs === null) ? "" : s.escFadeMs;
+        document.getElementById("settingsInstanceName").value = s.instanceName || "";
+        document.getElementById("settingsInstanceMdns").textContent =
+          (s.instanceName || "cutepi") + ".local";
+        document.getElementById("settingsInstanceApply").onclick = function () {
+          var name = document.getElementById("settingsInstanceName").value;
+          fetch("/api/setting/hostname", {
+            method: "POST",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            body: "hostname=" + encodeURIComponent(name)
+          }).then(function (resp) { return resp.text().then(function (t) { return {ok: resp.ok, text: t}; }); })
+          .then(function (r) {
+            var st = document.getElementById("settingsStatus");
+            try {
+              var host = JSON.parse(r.text).hostname;
+              document.getElementById("settingsInstanceName").value = host;
+              document.getElementById("settingsInstanceMdns").textContent = host + ".local";
+            } catch (e) {}
+            st.textContent = r.ok ? "Renamed — reconnect at the new .local address." : r.text;
+            st.className = r.ok ? "text-success" : "text-danger";
+          }).catch(function () {});
+        };
         document.getElementById("settingsAutoNumber").checked = !!s.autoNumber;
         document.getElementById("settingsGoAdvance").checked = !!s.goAdvance;
         document.getElementById("settingsTheme").value =
@@ -247,6 +319,7 @@
         document.getElementById("settingsDisplayRefresh").value = d.refreshHz || "";
         var a = s.audio || {};
         document.getElementById("settingsAudioDevice").value = a.device || "";
+        loadAudioDevices(a.device || "");
         document.getElementById("settingsAudioChannels").value = a.channels || "2.0";
         document.getElementById("settingsAudioRate").value = a.rate || "48000";
         var ap = s.ap || {};

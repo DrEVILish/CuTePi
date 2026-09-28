@@ -70,11 +70,17 @@
           <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-columns"/></svg><span class="panel-btn-label">Inspector</span>
         </button>
       </div>
-      <button type="button" id="showTestBtn" class="btn ftl-btn-sm ftl-btn-danger"
-        hx-post="/api/test" hx-swap="none"
-        title="Show a test pattern on the output" aria-label="Show a test pattern">
-        <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-video"/></svg>&nbsp;Tests
-      </button>
+      <div class="btn-group" role="group" aria-label="Test output">
+        <button type="button" id="showTestBtn" class="btn ftl-btn-sm ftl-btn-danger" aria-pressed="false"
+          hx-post="/api/test/toggle" hx-swap="none"
+          title="Toggle the test pattern on the output" aria-label="Toggle a test pattern">
+          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-video"/></svg>&nbsp;Tests
+        </button>
+        <button type="button" class="btn ftl-btn-sm ftl-btn-danger" data-test-open
+          title="Open the test pattern picker" aria-label="Open the test pattern picker">
+          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-chevron-up"/></svg>
+        </button>
+      </div>
       <button type="button" class="btn ftl-btn-sm ftl-btn-secondary ms-auto" data-settings-open
         title="Open settings" aria-label="Open settings">
         <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-settings"/></svg>&nbsp;Settings

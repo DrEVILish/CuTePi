@@ -162,6 +162,10 @@
               <input id="insp-img-duration" name="cueDuration" class="form-control form-control-sm" value="{{ if .Cue.CueDuration }}{{ formatTime .Cue.CueDuration }}{{ end }}" placeholder="hh:mm:ss.ms" title="How long the image stays on screen (blank = indefinitely)">
             </div>
             <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-img-fadein">Fade In</label>
+              <input id="insp-img-fadein" name="fadeIn" data-fade-in class="form-control form-control-sm" value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade the image in from black (seconds)">
+            </div>
+            <div class="insp-time-field">
               <label class="insp-field-label" for="insp-img-prewait">PreWait</label>
               <input id="insp-img-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="hh:mm:ss.ms" title="Wait this long before the image shows">
             </div>
@@ -453,11 +457,33 @@
       i0 = Math.max(0, i0); i1 = Math.min(src.length, i1);
       if (i1 <= i0) return;
       var bars = resampleMax(src.slice(i0, i1), want);
-      var mid = canvas.height / 2;
-      var w = canvas.width / bars.length;
+      var W = canvas.width, H = canvas.height, mid = H / 2;
+      var gridColour = (style.getPropertyValue("--ctp-border") || "#176095").trim() || "#176095";
+      var dimColour = (style.getPropertyValue("--ctp-muted") || "#7ca6c3").trim() || "#7ca6c3";
+      // Backdrop wash so silence reads as a track, not a void.
+      ctx.fillStyle = "rgba(127,127,127,0.08)";
+      ctx.fillRect(0, 0, W, H);
+      // Second gridlines, stepping out until labels would breathe (~70px).
+      var pxPerSec = W / span;
+      var step = 1;
+      var steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+      for (var si = 0; si < steps.length; si++) {
+        if (pxPerSec * steps[si] >= 70) { step = steps[si]; break; }
+        step = steps[si];
+      }
+      ctx.fillStyle = gridColour;
+      for (var t = Math.ceil(vFrom / step) * step; t <= vTo + 1e-6; t += step) {
+        ctx.fillRect(Math.round((t - vFrom) * pxPerSec), 0, 1, H);
+      }
+      // Centre line: silence draws as a line on it, not nothing.
+      ctx.fillStyle = dimColour;
+      ctx.fillRect(0, Math.round(mid) - 1, W, 2);
+      var w = W / bars.length;
       for (var i = 0; i < bars.length; i++) {
         var v = Math.max(0, Math.min(1, bars[i])) * (mid - 2);
-        ctx.fillRect(i * w + 0.5, mid - v, Math.max(1, w - 1), v * 2);
+        var h = Math.max(2, v * 2);
+        ctx.fillStyle = waveColour;
+        ctx.fillRect(i * w + 0.5, mid - h / 2, Math.max(1, w - 1), h);
       }
     }
     function drawTarget(timeline) {

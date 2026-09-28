@@ -83,26 +83,41 @@ func splitHhMmSs(v string) (int, int, int, error) {
 	return 0, 0, 0, fmt.Errorf("invalid HH:MM[:SS] format")
 }
 
-// builtinTestPatterns is the curated GStreamer videotestsrc set offered in
-// the Tests modal (§12.10); custom pool items ride on top of it.
+// builtinTestPatterns is the full GStreamer videotestsrc enum offered in
+// the Tests modal (§12.10); custom pool items ride on top of it. Names are
+// the exact videotestsrc nicks (verified against gst-inspect 1.26) —
+// anything else silently falls back to the default smpte.
 var builtinTestPatterns = []struct {
 	Name  string
 	Label string
 }{
-	{"smpte-rp-219", "SMPTE bars"},
-	{"smpte100", "SMPTE 100"},
+	{"smpte", "SMPTE bars"},
+	{"smpte75", "SMPTE 75%"},
+	{"smpte100", "SMPTE 100%"},
 	{"snow", "Snow"},
 	{"black", "Black"},
 	{"white", "White"},
 	{"red", "Red"},
 	{"green", "Green"},
 	{"blue", "Blue"},
-	{"checkers-1", "Checkers fine"},
-	{"checkers-4", "Checkers coarse"},
-	{"circle", "Circle"},
+	{"checkers-1", "Checkers 1px"},
+	{"checkers-2", "Checkers 2px"},
+	{"checkers-4", "Checkers 4px"},
+	{"checkers-8", "Checkers 8px"},
+	{"circular", "Circle"},
 	{"blink", "Blink"},
-	{"solid", "Solid"},
+	{"zone-plate", "Zone plate"},
+	{"gamut", "Gamut"},
+	{"chroma-zone-plate", "Chroma zone"},
+	{"solid-color", "Solid color"},
+	{"ball", "Moving ball"},
+	{"bar", "Bar"},
+	{"pinwheel", "Pinwheel"},
 }
+
+// lastTestPattern is what the Tests toggle re-shows; the default SMPTE
+// bars until the operator picks another (in-memory only).
+var lastTestPattern = "smpte"
 
 // shutdownProcess terminates this process after a short grace so the HTTP
 // response making the request can flush first. SIGTERM is handled in
@@ -161,6 +176,7 @@ func systemdUnit() string {
 func Api(rg *gin.RouterGroup) {
 	registerThemeRoutes(rg)
 	registerDisplayRoute(rg)
+	registerAudioRoute(rg)
 	rg.GET("/ws", func(c *gin.Context) {
 		ws.Handle(c.Writer, c.Request)
 	})
@@ -319,6 +335,25 @@ func Api(rg *gin.RouterGroup) {
 		c.Status(http.StatusOK)
 	})
 
+	// ESC key: fade the running output to black over the Settings >
+	// General ESC fade time, then stop everything including any background
+	// soundtrack. Nothing loaded is a plain stop. Returns immediately; the
+	// fade runs out in the background like the queued fade-then-play.
+	rg.POST("/esc", func(c *gin.Context) {
+		if gsp.CurrentPlaying() == "" {
+			gsp.Stop()
+			c.Status(http.StatusOK)
+			return
+		}
+		durMs := ctp.GetEscFadeMs()
+		logs.Printf(logs.RTEStop, "ESC fade-stop %dms", durMs)
+		goSafe(func() {
+			gsp.FadeAndStop(durMs)
+			gsp.Stop()
+		})
+		c.Status(http.StatusOK)
+	})
+
 	// Fade & stop the active clip over the given duration (ms); no duration
 	// means "stop now". Mirrors the fade-to-black used when a subsequent cue
 	// triggers with its own fadeOut set.
@@ -344,8 +379,40 @@ func Api(rg *gin.RouterGroup) {
 		}
 		pattern := strings.TrimPrefix(c.Param("pattern"), "/")
 		if pattern == "" {
-			pattern = "smpte-rp-219"
+			pattern = lastTestPattern
 		}
+		// "toggle" rides the wildcard (gin forbids a static sibling next
+		// to /*pattern): the Tests button. On when dark (shows the last
+		// pattern), off when a test is showing (stops it). Answers the
+		// state so the button tracks it.
+		if pattern == "toggle" {
+			if gsp.TestShowing() {
+				gsp.Stop()
+				c.JSON(http.StatusOK, gin.H{"showing": false})
+				return
+			}
+			pattern = lastTestPattern
+			if err := gsp.ShowTest(pattern); err != nil {
+				logs.Printf(logs.RTETest, "show test failed pattern=%q error=%v", pattern, err)
+				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+			logs.Printf(logs.RTETest, "Show test pattern=%q", pattern)
+			c.JSON(http.StatusOK, gin.H{"showing": true, "pattern": pattern})
+			return
+		}
+		known := false
+		for _, p := range builtinTestPatterns {
+			if p.Name == pattern {
+				known = true
+				break
+			}
+		}
+		if !known {
+			c.String(http.StatusBadRequest, "unknown test pattern")
+			return
+		}
+		lastTestPattern = pattern
 		if err := gsp.ShowTest(pattern); err != nil {
 			logs.Printf(logs.RTETest, "show test failed pattern=%q error=%v", pattern, err)
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
@@ -356,13 +423,18 @@ func Api(rg *gin.RouterGroup) {
 	})
 
 	// GET /api/testpatterns: what the Tests modal lists — built-ins plus the
-	// operator's pinned pool items.
+	// operator's pinned pool items, plus live toggle state for the button.
 	rg.GET("/testpatterns", func(c *gin.Context) {
 		builtin := make([]gin.H, 0, len(builtinTestPatterns))
 		for _, p := range builtinTestPatterns {
 			builtin = append(builtin, gin.H{"name": p.Name, "label": p.Label})
 		}
-		c.JSON(http.StatusOK, gin.H{"builtin": builtin, "custom": ctp.TestPatterns()})
+		c.JSON(http.StatusOK, gin.H{
+			"builtin": builtin,
+			"custom":  ctp.TestPatterns(),
+			"showing": gsp.TestShowing(),
+			"current": lastTestPattern,
+		})
 	})
 
 	// Pin/unpin a pool item as a custom test pattern (media tile menu).
@@ -728,6 +800,17 @@ func Api(rg *gin.RouterGroup) {
 
 	// Panic holding image (§12.9): filename from the media pool; empty
 	// clears. Set from a tile's context menu or the Settings modal.
+	// Instance rename: hostname + mDNS (<name>.local). Errors fail loudly
+	// (the operator must know the address did NOT change); Avahi refresh
+	// trouble only warns.
+	rg.POST("/setting/hostname", func(c *gin.Context) {
+		name := strings.TrimSpace(c.PostForm("hostname"))
+		if err := SetInstanceName(name); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"hostname": InstanceName()})
+	})
 	rg.POST("/setting/panichold", func(c *gin.Context) {
 		filename := strings.TrimSpace(c.PostForm("filename"))
 		if filename != "" {
@@ -750,6 +833,8 @@ func Api(rg *gin.RouterGroup) {
 			"loop":        gsp.Loop(),
 			"authEnabled": config.HasAuth(), // never return the password itself
 			"panicHold":   ctp.GetPanicHoldImage(),
+			"escFadeMs":   ctp.GetEscFadeMs(),
+			"instanceName": InstanceName(),
 			"autoNumber":  ctp.GetAutoNumber(),
 			"goAdvance":   ctp.GetGoAdvance(),
 			"showMode":    ctp.GetShowMode(),
@@ -787,6 +872,7 @@ func Api(rg *gin.RouterGroup) {
 			APSSID            string `json:"apSSID" form:"apSSID"`
 			APPass            string `json:"apPass" form:"apPass"`
 			APEnabled         *bool  `json:"apEnabled" form:"apEnabled"`
+			EscFadeMs         *int   `json:"escFadeMs" form:"escFadeMs"`
 		}
 		if err := c.ShouldBind(&body); err != nil {
 			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
@@ -800,6 +886,12 @@ func Api(rg *gin.RouterGroup) {
 		}
 		if body.Loop != nil {
 			gsp.SetLoop(*body.Loop)
+		}
+		if body.EscFadeMs != nil {
+			if err := ctp.SetEscFadeMs(*body.EscFadeMs); err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+				return
+			}
 		}
 		// A blank password means "unchanged" (forms always send the field);
 		// the explicit clear checkbox disables auth.

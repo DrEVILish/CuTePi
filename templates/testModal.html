@@ -47,6 +47,7 @@
           b.textContent = p.label;
           b.onclick = function () {
             htmx.ajax("POST", "/api/test/" + encodeURIComponent(p.name), {swap: "none"});
+            if (window.setTestPressed) setTestPressed(true);
           };
           grid.appendChild(b);
         });
@@ -57,6 +58,7 @@
           b.title = "Play this media as a test pattern";
           b.onclick = function () {
             htmx.ajax("POST", "/api/play/" + encodeURIComponent(name), {swap: "none"});
+            if (window.setTestPressed) setTestPressed(false);
           };
           custom.appendChild(b);
         });

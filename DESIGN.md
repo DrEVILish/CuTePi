@@ -17,21 +17,32 @@ selection, settings).
   (URL downloads).
 - **Playback**: GStreamer, including test-pattern playback.
 - **DB**: SQLite3 via `sqlx`
-- **Config/defaults**: `~/CTP/config/config.json` (env-overridable), port
-  3001 default, media in `~/CTP/media/`, thumbnails in `~/CTP/thumbnails/`.
+- **Config/defaults**: `~/cutepi/config/config.json` (env-overridable), port
+  3001 default in dev, port 80 in production and test, media in
+  `~/cutepi/media/`, thumbnails in `~/cutepi/thumbnails/`.
 - **Trust model**: trusted LAN appliance; optional operator password (see §7).
-- **Multi-client sync**: WebSocket hub with server-authoritative state; polling only to be used as websocket reconnect path.
+- **Multi-client sync**: WebSocket hub with server-authoritative state. No
+  polling — all status flows over the socket.
 
 ## 2. Product decisions
 
 - **Platform**: Raspberry Pi 4/5, headless, video+audio out of HDMI, pure
   server Debian Trixie (raspbian) — no X11/Wayland; gstreamer playback drives the HDMI connector directly, not a windowed sink.
-- **Audio**: HDMI embedded ALSA, **exclusive to CuTePi** (only audio producer).
-- **Codecs**: any file; decode **hardware-first (v4l2 h264/hevc) with software fallback** via GStreamer autoplugging.
+- **Audio**: HDMI embedded ALSA by default, **exclusive to CuTePi** (only
+  audio producer). The operator may pick a different output device in the
+  Settings Audio tab (enumerated from `aplay -L`); the engine routes through
+  `alsasink` when a device is set.
+- **Codecs**: any video, image or audio file (within reason); decode
+  **hardware-first (v4l2 h264/hevc) with software fallback** via GStreamer
+  autoplugging.
 - **Undecodable sources**: fail **immediately with an error surfaced to the user** at cue time; an **import-time probe** (`ffmpeg -v error -t 1`) rejects bad files early.
-- **Cue trigger**: **Space** (control UI focused, not in an editable field) plays the selected cue; media-pool tiles are never selectable — the sheet always has a selected cue.
+- **Cue trigger**: **SPACE = GO** (control UI focused, not in an editable
+  field) plays the selected cue; with nothing selected, GO resumes transport.
+  Media-pool tiles are never selectable — they join the sheet via
+  double-click, Enter, or the tile menu.
 - **Playback end**: a cue **stops** after playback — cues are a list, not a playlist; there is no implicit advance. Auto-continue is explicit and per-cue.
-- **Waits**: `preWait`/`postWait` apply (before start / after end). Auto-continue advances down the sheet; a stop on a group row triggers the group's action and continues.
+- **Waits**: `preWait` applies before every start, `postWait` after every end.
+  Auto-continue advances down the sheet; a stop on a group row triggers the group's action and continues.
 - **Loop / Hold defaults**: `loop=off`, `hold=off` for new cues. `loop` always wins over auto-continue; `loop_count` (0 = infinite, N = play N times) is exhausted before an auto-continuing cue advances.
 - **Trim**: `posStart`/`posEnd` are timecodes *into the source media*; 0 =  untrimmed at that end; values stored as given (no normalization).
 - **Cue groups**: visual folders, nestable, collapseable, hold cues, a group can act as a playlist.
@@ -41,8 +52,11 @@ selection, settings).
 - **Settings editing**: all operators may edit
 - **Output level**: system output always 100%; volume is a **per-cue** control only (no global/master).
 - **Missing sources**: startup scan flags missing files; pool tile shows a  warning triangle; the cue shows a warning offering **delete the cue** or **re-link to another media file**. No periodic scan.
-- **Show export/import**: `.CTP` = ZIP of a JSON manifest (all cue info incl. the **audit trail**) + referenced media; import restores with a modal choice: **append to end or overwrite**.
-- **Logs**: viewable in the Web UI with level filter + clear; changing the level changes what is **recorded** (runtime switch). Structured playback events form an **audit trail** shipped in `.CTP` exports.
+- **Show export/import**: `.CTP` = ZIP of a JSON manifest (cuesheet +
+  selection, per-cue settings, groups incl. nesting + slideshow settings —
+  manifest v2) + referenced media; import restores with a modal choice:
+  **append to end or overwrite**.
+- **Logs**: viewable in the Web UI with level filter + clear; changing the level changes what is **recorded** (runtime switch). Structured playback events form an **audit trail** (append-only ring; clearing the log never clears it).
 - **yt-dlp**: URL import is a core, imperative feature (not a convenience).
 
 ## 3. Architecture & repo layout
@@ -50,15 +64,15 @@ selection, settings).
 ```
 config/config.go       config load/save, path expansion, defaults, auth password
 ctp/ctp.go, db.go      domain types + SQLite schema/access/migrations
-gsp/gsp.go             GStreamer pipeline manager (single mutex-guarded pipeline, atomic swap), state version counter
+gsp/gsp.go, background.go  GStreamer pipeline manager (single mutex-guarded pipeline, atomic swap; warm preroll slot; separate playbin soundtrack pipeline), state version counter
 media/                 ffprobe metadata (Probe), thumbnails, waveform peaks
 worker/                DB-backed thumbnail/pending queue (survives restart)
-routes/*.go            HTTP handlers: index, api, groups, show (export/import), upload, youtube, auth, install, public
-logs/logs.go           stable [SUBSYS-E###] codes + ring; audit trail
+routes/*.go            HTTP handlers: public, index, api (embeds themes/display/audio), groups, show (export/import), logs, upload, youtube; background listeners for scheduler, HyperDeck, OSC UDP + TCP/SLIP
+logs/logs.go           logging + ring; audit trail
 ws/                    WebSocket hub (server-authoritative sync)
-templates/*.html       server-rendered htmx fragments + pages
-public/                static assets: css/, src/ (js), icons/, img/
-main.go network.go     entrypoint / server wiring / restart
+templates/*.html       server-rendered htmx fragments + pages (index, cuesheet, cueinspector, groupinspector, cueeditcol, mediainfo, mediacontrols, settingsModal, testModal, qrModal, ytdlModal, logsModal, showModal, uploadModal, …)
+public/                static assets: css/, src/ (bootstrap, htmx, dnd, dropzone, ui.js), img/ (logo, placeholders), fonts/; icons and theme packs served from the ftl-themes submodule via the `/ftl/` route
+main.go                entrypoint / server wiring / restart
 ```
 
 **Split of responsibilities**: playback/cues/selection/media-library state are server-authoritative; the browser is a mirror (WebSocket). Purely cosmetic UI state — panel sizes, theme choice — stays in `localStorage`.
@@ -72,35 +86,50 @@ status-only actions use `hx-swap="none"`;
 Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
 `media` → **`mediapool`**; `cues` → **`cuesheet`**.
 
-- `mediapool`: `media_id`, `filename` (unique), `mimetype`, `size`, `duration`
-  (float sec), `resolution`, `codec`, `media_title`, `thumbnail_pending`,
-  `waveform` (JSON peaks), `waveform_pending`, `media_meta` (ffprobe JSON for
-  the Media tab), `date_added`. Sort newest-first
-  (`date_added DESC, media_id DESC`).
-- `cuesheet`: order `cuePos` (unique, reindexed 1..N on reorder); `cueNum`
-  (unique label); `media_id` FK → mediapool (ON DELETE CASCADE); `title`;
-  `preWait`, `cueDuration`, `postWait`, trim `posStart`/`posEnd` (ms, 0 =
-  untrimmed); `hold`, `loop` (both default 0), `loop_count` (0 = infinite),
-  `autoContinue`, `color`, `fadeOut`, `fadeAction`, `volume` (dB, default 0 =
-  0dB);   `parent` (`cue_group.group_id`, 0 = top level). `parent` is the single
-  source of membership truth: it is written explicitly by the op that moves
-  or creates the cue, and never re-derived. `sheet_index` is visual order
-  only. The renderer reads both literally and never writes (see §6.4).
+- `mediapool`: `media_id`, `filename` (unique), `mimetype`, `size`,
+  `duration` (float sec), `resolution`, `thumbnail_pending`, `waveform`
+  (JSON peaks), `waveform_pending`, `missing` (source absent from disk),
+  `loudness_gain` (EBU R128), `media_meta` (ffprobe JSON for the Media tab),
+  `date_added`. `codec` and `media_title` were removed by migration
+  (write-only, read by nothing) — codec detail lives in `media_meta`.
+  Sort newest-first (`date_added DESC, media_id DESC`).
+- `cuesheet`: `cue_id`, order `cuePos` (unique, stable identity — never
+  reindexed); `cueNum` (TEXT label); `media_id` FK → mediapool
+  (ON DELETE CASCADE); `title`; `preWait`, `cueDuration`, `postWait`, trim
+  `posStart`/`posEnd` (ms, 0 = untrimmed); `hold`, `loop` (both default 0),
+  `loop_count` (0 = infinite); `color`; `parent` (`cue_group.group_id`,
+  0 = top level). `parent` is the single source of membership truth: it is
+  written explicitly by the op that moves or creates the cue, and never
+  re-derived. Playback controls: `fadeOut`, `fadeAction`, `fadeIn`,
+  `fade_curve`, `volume` (dB, default 0 = 0dB), `mute`, `balance`, `rate`;
+  geometry: `fit_mode`, `rotation`, `flip`; health: `last_result`,
+  `last_played_at`; scheduling: `schedule_enabled`, `schedule_days`,
+  `schedule_time_ms`; `autoContinue`. `sheet_index` is the visual **and**
+  playback order (what-you-see-is-what-plays); `cuePos` is the stable
+  identity. The renderer reads both literally and never writes (see §6.4).
 - `cue_group`: `group_id`, `name`, `parent_group_id` (nesting; validated
-  acyclic, depth ≤ 8), `collapse`, `slideshow`, `shuffle`, `loop`, `fade_ms`,
-  `duration_ms`, `cue_num`, `color`.
-- `state`: small server-authoritative key/value store — persisted selection
-  (cue `cuePos`, or group id negated), sync version counter.
-- `config.json`: port, `poll_interval_ms`, `loop` (direct-load default),
-  `auth_password`, working-dir paths.
+  acyclic, depth ≤ 8), `collapse`, `slideshow`, `awards_mode`, `shuffle`,
+  `loop`, `fade_ms`, `duration_ms`, `cue_num`, `color`, `anchor_pos`
+  (legacy: pre-`sheet_index` empty-group anchor), `sheet_index` (header
+  position in the visual sequence).
+- `state`: small server-authoritative key/value store for operator
+  preferences — persisted selection (cue `cuePos`, 0 = none; multi-select
+  anchor + set), `escFadeMs`, `goAdvance`, `showMode`, `autoNumberCues`,
+  `panicHoldImage`, `testPatterns` (pinned custom patterns).
+- `config.json`: port, `loop` (direct-load default), `auth_password`,
+  working-dir paths, audio device/channels/rate, remote enable flags + ports
+  (see §12.8).
 
 ## 5. UX / UI design (per panel)
 
 ### 5.1 Overall shell and themes
 
 Exactly 100vh: topbar (natural height) + content row (media pool | cuesheet panes) with no page-level scroll; only the panes scroll internally (`scrollbar-gutter: stable`).
-Themes are browser-local presentation state via CSS variables (`--ctp-*`); **LCARS**, **QLab**, **Future SciFi** (default),
-and **Custom** (paste a JSON token map such as `{"--ctp-bg": "#0a0a12", "--ctp-accent": "#00ff88"}`).
+Themes come from **ftl-themes, imported as a submodule** (`third_party/ftl-themes`):
+the picker merges the app theme with the ftl manifest (`ftl:<slug>`, default
+`ftl:xbmc`); app CSS always wins via `@layer`. The theme id is browser-local
+presentation state. Fonts, icons and theme packs are vendored by ftl-themes
+— nothing is fetched from a CDN.
 A theme change restyles the shared pane chrome (pool, inspector) together.
 
 ### 5.2 Top bar
@@ -113,7 +142,7 @@ One row, left to right:
 - *selected* cue it fires
 - playing cue number - cue name, progress indicator, time, remaining time.
 - full screen button
-- menu dropdown, Export / Import / Logs / Restart / Shutdown.
+- menu dropdown, Panic (confirm), Stop, Fade out, Export / Import / Logs / Restart / Shutdown.
 
 ### 5.3 Media Pool (left pane)
 
@@ -165,7 +194,8 @@ One row, left to right:
     Renders even where duration is unknown (timeline duration-gated). The timeline shades the shared audio+video
     fade-in/out envelope over the trim window (same curve the engine ramps).
   - **Video** — video Fade In / Fade Out (times).
-  - **Audio** — volume (dB slider −60..+12, double-click resets to 0 dB), Fade In / Fade Out, Balance/Pan
+  - **Audio** — output device picker (Settings Audio tab source; default
+    HDMI embedded), volume (dB slider −60..+12, double-click resets to 0 dB), Fade In / Fade Out, Balance/Pan
     (double-click centres), Mute toggle button (danger-red while muted), EBU R128 loudness-gain readout.
   - **Media** — detailed codec info (VLC label/value style): container, overall bitrate, video codec/profile/resolution/fps/pixel format/colour
     space, audio codec/channels/sample rate/bitrate. From `media_meta`, refreshed by the thumbnail worker; missing fields just omit rows.
@@ -180,10 +210,26 @@ One row, left to right:
 - Top of the panel: cue badge, title, `Source: <file>`. When the source is missing, a warning banner replaces the timeline area with a **Re-link** dropdown (media pool) and **Delete cue**.
 - Group selection shows the **Group Inspector**: name, `cue_num`, colour, slideshow on/off, shuffle/loop (enabled when slideshow on), **duration and fade in seconds** (persisted as ms).
 
+### 5.6 Settings modal
+
+- **General** — instance name (renaming changes the machine hostname and
+  refreshes mDNS, so the crew reaches it at the new `.local` address);
+  single-ESC fade time (default 1000 ms, video + audio to black/silence).
+- **Audio** — output device picker (default HDMI embedded ALSA) +
+  channels/rate, persisted to `config.json`.
+- **Network** — one enable/disable toggle per remote item (HyperDeck,
+  OSC UDP, OSC TCP/SLIP), all **off by default**; ports + OSC bind address
+  configurable; the tab lists each server with its live on/off state.
+  HyperDeck clip listing source is selectable here: Cuesheet (default) or
+  MediaPool.
+
 ### 5.7 Upload
 
-- Desktop: modal from the mediapool (or Drag and drop onto the pool). Mobile: standalone `/upload`. Both: drag-and-drop + file picker, multi-file, no size limit,
-  reject non-media types (422). Metadata extracted synchronously but without blocking the HTTP response; duration/resolution/codec failures reject the import.
+- Desktop: modal from the mediapool (or Drag and drop onto the pool). Mobile: standalone `/upload`. Both: drag-and-drop + file picker, multi-file, **no size limit** —
+  before uploading, warn if the total exceeds the available disk space.
+  Any video, image or audio file is accepted; the import probe rejects
+  undecodable files (422). Metadata is extracted synchronously
+  (validate-then-render: the pool only shows validated media); duration/resolution/codec failures reject the import.
   YouTube/URL via yt-dlp with stage logging.
   Uploads, deletions, and thumbnail changes broadcast a targeted WebSocket refresh.
 - Ensure acurate and live updating progress bars for all upload / media import tasks.
@@ -192,7 +238,7 @@ One row, left to right:
 
 - **Export** (`GET /api/show/export`): ZIP of `cutepi.json` (cuesheet +
   selection, per-cue settings, **groups incl. nesting + slideshow settings —
-  manifest v2**, audit trail) + referenced media files (`media/<filename>`).
+  manifest v2**) + referenced media files (`media/<filename>`).
 - **Import** (Show modal): restore with **append to end** or **overwrite**;
   all referenced media validated as available (in the `.CTP` or local pool)
 
@@ -210,15 +256,32 @@ One row, left to right:
 Single mutex-guarded pipeline handle in a `manager` struct; atomic
 stop-then-replace via `swap()`; EOS/error clear the current reference
 (`clearIfCurrent`); one `buildPipeline()` for files and test patterns. A cue
-position (`CurrentCuePos`) and playing-file (`CurrentPlaying`) are tracked for
-guards. GStreamer runtime is smoke-tested against real `gst-launch-1.0`
-assets (`gsp` test; skips when absent); the audio chain is
-`queue → audioconvert → audioresample → volume → autoaudiosink`.
+position (`CurrentCuePos`), a generation counter (`Generation`, bumped on
+every load), and playing-file (`CurrentPlaying`) are tracked for guards.
+GStreamer runtime is smoke-tested against real `gst-launch-1.0`
+assets (`gsp` test; skips when absent).
+- **Video stem**: `queue [+ v4l2convert on DMABuf pads] → videoconvert →
+  videobalance → videoscale → videoflip → videoflip → videoconvert`
+  (fit/rotate/flip wiring).
+- **Audio chain**: `queue → audioconvert → audioresample → volume →
+  audiopanorama → scaletempo → sink` (`alsasink` when an Audio device is
+  set — see §5.6 — else the default sink).
+- **Wall sink**: the pipeline drives the HDMI connector directly, not a
+  windowed sink; decode is hardware-first (v4l2 h264/hevc) with software
+  fallback via GStreamer autoplugging.
+- **Warm slot**: the next cue can be prerolled into a `fakesink` slot
+  (`Warm`) and relinked to the wall on GO (`InstallWarm`) for ~0-latency
+  starts; a 400 ms prewarm budget falls back to a cold build. Images are
+  exempt from warm.
+- **Soundtrack**: slideshow audio cues become a background-music playlist on
+  their own `playbin` pipeline (`gsp.BackgroundPlaylist`) under the slides
+  for the whole run. The soundtrack plays **only as part of a slideshow** —
+  any main-pipeline decision (Stop, Panic, a new load) kills it with it.
 
 ### 6.2 Trim, Hold, Loop, Volume, Seek
 
 - **Trim**: on load, seek to `posStart`; reaching `posEnd` = EOS. No trim if both 0.
-- **Hold**: on EOS of a held video cue, seek to final frame and pause (frame stays until Stop/Panic); image cues display as-is.
+- **Hold**: on EOS of a held video cue, seek to final frame and pause (frame stays until Stop/Panic); an image cue with blank duration holds indefinitely (infinite hold) — a slideshow group's per-image duration overrides this for its members.
 - **Loop**: on EOS (natural or trim-Out), seek back to the in-point and continue. `loop_count` 0 = infinite, N = N plays; loop wins over auto-continue.
 - **Volume**: per-cue dB (−60..+12, default 0 = 0dB), converted
   `10^(dB/20)` for the GStreamer volume element; live-set via `SetVolume`.
@@ -226,8 +289,9 @@ assets (`gsp` test; skips when absent); the audio chain is
 
 ### 6.3 Auto-continue & waits
 
-Per-cue `autoContinue`; `preWait` pause before start and `postWait` after end apply only to it; advances down the sheet. A generation counter guards the
-chain — any operator playback during the wait disarms it (even replaying the *same* cue; the old cuePos-equality guard could not detect that).
+Per-cue `autoContinue`; `preWait` pauses before every start and `postWait`
+after every end; advances down the sheet. A generation counter guards the
+chain — any operator playback during the wait disarms it (even replaying the *same* cue; a cuePos-equality guard could not detect that).
 
 ### 6.4 Groups & slideshow
 
@@ -247,16 +311,16 @@ chain — any operator playback during the wait disarms it (even replaying the *
   state from older builds — parents pointing at deleted groups go to 0 and
   missing indices are backfilled — never membership judgement calls.
 - Slideshow: a per-group goroutine cycles member images with shuffle/loop, `duration_ms` hold (default fallback if unset), and `fade_ms` fade;
-  `POST /api/group/:id/play`. A **cuePos identity guard** aborts the run when the operator plays something else, and after the fade completes, so a stale
+  `POST /api/group/:id/play`. A **generation guard** aborts the run when the operator plays anything else, and after the fade completes, so a stale
   loop can't clobber a newer choice.
 - **Slideshow soundtrack**: audio cues inside a slideshow group do not slide — they become the background-music playlist (`gsp.BackgroundPlaylist`, its
-  own audio pipeline, shuffled when the group shuffles) played underneath the slides for the whole run. Any main-pipeline decision — Stop, Panic, a new
+  own audio pipeline, shuffled when the group shuffles) played underneath the slides for the whole run. The soundtrack exists only inside the slideshow run: any main-pipeline decision — Stop, Panic, a new
   load — kills the soundtrack with it.
 
 ### 6.5 Queued fade-then-play
 
 `POST /api/play`/cue-play with a running pipeline and a `fadeOut > 0` runs `FadeAndStop(fadeOut)` in a background goroutine, then loads the target cue —
-guarded by the same identity check: if `CurrentCuePos()` moved away from the target during the fade, the queued load bails (an operator's newer cue/stop
+guarded by the generation check: if the generation moved past the target's during the fade, the queued load bails (an operator's newer cue/stop
 wins). Errors are logged, not swallowed.
 
 ### 6.6 Cue trigger
@@ -265,9 +329,9 @@ Space (not in an editable field) → plays the selected cue; on a group selectio
 
 ### 6.7 Synchronization & inspector auto-follow
 
-WebSocket hub (`/api/ws`) is the **primary** channel: while playing, the pipeline ticker pushes one sync per displayed second, waking the
-version-guarded pollers immediately; change-detection polling (`/api/nowplaying/status`, interval from `config.json`) runs only as the
-fallback while the socket is disconnected. The topbar shows the socket state as a status dot.
+WebSocket hub (`/api/ws`) is the **only** channel: while playing, the pipeline ticker pushes one sync per displayed second over the socket.
+No polling anywhere — every widget (nowplaying, cuesheet, clocks) renders
+from socket pushes. The topbar shows the socket state as a status dot.
 
 ### 6.8b Scheduled fire (wall-clock)
 
@@ -280,25 +344,41 @@ crossing. Decision-accurate, not output-accurate: pipeline build takes ~100s of 
 
 ### 6.8 Identity guards (three places, one invariant)
 
-The invariant *"start only if the operator hasn't moved on"* is implemented in `slideshowRunner`, the auto-continue chain, and the queued fade-then-play
-goroutine — all comparing `gsp.CurrentCuePos()`. Keep them consistent.
+The invariant *"start only if the generation hasn't moved"* is implemented in `slideshowRunner`, the auto-continue chain, and the queued fade-then-play
+goroutine — all comparing `gsp.Generation()`, which bumps on every load. Generation (not cuePos) is the guard because replaying the *same* cue still
+moves the generation. Keep them consistent.
+
+### 6.9 ESC / Panic
+
+- **Single ESC** fades video and audio out together — to black and silence —
+  over the configured fade time (default 1000 ms, adjustable in Settings
+  General), then stops.
+- **Double ESC** (second press within ~1 s) cuts everything immediately:
+  video and audio stop at once, the screen goes black, no sound plays.
 
 ## 7. Error handling & logging
 
-- Distinct, loggable codes `[SUBSYS-E###]` (`GSP`, `RTE`, `NET`, `YDL`) via `logs.Printf`; greppable, never reused for a different meaning.
-- Failures at trust boundaries reject cleanly (undecodable imports 4xx at import rather than cue time; missing media 409; settings validation).
+- Failures at trust boundaries reject cleanly with conventional statuses:
+  undecodable imports 422 at import rather than cue time; absent pool items
+  404; delete-while-playing 409; firing a cue whose source is missing 409;
+  Test/pattern calls in Show mode 403; unknown test pattern 400; settings
+  validation 400/422.
 - Optional auth: `AuthMiddleware` (config `auth_password`, editable in Settings) applies to all routes including static assets; browser basic-auth
   prompt; 401 wrong password; 200 once accepted. `GET /api/settings` reports `authEnabled` but never the password.
 
 ## 8. Testing & verification
 
-- `go test ./...` — `config`, `ctp`, `media`, `worker`, `routes` (HTTP-level template renders, auth, groups, slideshow), `gsp` (real GStreamer smoke),
-  migration and export/import round-trip tests. The suite speaks HTTP only — it never executes the browser JS (`ui.js`/`dnd.js` hover, intent and
-  modifier-click logic), so sheet-interaction behaviour is verified manually; no browser harness exists (deliberate: the interaction bugs to date all
-  lived in the server model, which the suite does cover).
-- `./smoke-test.sh` — end-to-end over HTTP with generated media: upload → pool → cue → play → trim → stop → delete; converges on re-run.
-- `pre.sh` bootstraps: `go mod tidy`, build, vet, test.
-- Check before closing a session: `go build ./... && go vet ./... && go test ./...`.
+- The Go suite speaks HTTP only — template renders, auth, groups,
+  slideshow, audio/display/video settings, warm slot, awards, QLab/remote,
+  themes, inspector behaviour, plus real-GStreamer smoke and
+  migration/export-import round-trips. It never executes the browser JS
+  (`ui.js`/drag-and-drop hover, intent and modifier-click logic), so
+  sheet-interaction behaviour is verified manually; no browser harness
+  exists (deliberate: the interaction bugs to date all lived in the server
+  model, which the suite does cover).
+- Expected build process (until the build pipeline is confirmed): tidy the
+  module, build every package, vet, then run the full test suite — and
+  repeat that check before closing a session.
 
 
 ### 12.4 Multi-select + bulk edit
@@ -345,24 +425,29 @@ goroutine — all comparing `gsp.CurrentCuePos()`. Keep them consistent.
   Slideshow groups may set a group-level curve used for their inter-slide fades.
 
 ### 12.8 Remote control protocols (OSC + HyperDeck)
-- **QLab Remote** iOS, port 53000
-- **OSC** (UDP, port configurable, default 8000): address map
-  `/cue/{pos}/play`, `/cue/{pos}/select`, `/cue/next`, `/cue/prev`,
-  `/transport/play|pause|stop`, `/panic`, `/showtest/{name}`,
-  `/volume/{dB}`. replies minimal; unknown addresses ignored (logged at
-  debug). Server binds `0.0.0.0` or a configured address (toggles in
-  Settings). Use Companion to drive CuTePi as if it were QLab.
+- **QLab Remote** iOS app and the **Companion QLab module** are the
+  reference clients: QLab protocol on TCP port 53000 (SLIP-framed) plus
+  UDP 53000, speaking the QLab address dictionary (`/go`, `/stop`,
+  `/pause`, `/resume`, `/panic`, `/reset`, `/next`, `/previous`,
+  `/cue/{n}/start|go|load|panic|stop|select`). Unknown addresses are
+  ignored (logged at debug).
 - **HyperDeck Remote Control Protocol** (TCP, default port 9993): Blackmagic
   text-command subset — `play`, `stop`, `record` (ignored/unsupported
   response), `load: <clip>` (select + load the cue whose title/number
-  matches), `goto: <tc>`, `transport info`, `notify` — enough for HyperDeck
-  controllers. One client at a time; transport state is reported from the
-  gsp state machine.
+  matches), `clips count` / `clips get`, `goto: <tc>`, `transport info`,
+  `notify` — enough for HyperDeck controllers. Connection handling follows
+  [hyperdeck-server-connection](https://github.com/mint-dewit/hyperdeck-server-connection):
+  at most one client at a time by default (like a real deck), and transport
+  notifications are broadcast to every connected client. Transport state is
+  reported from the gsp state machine.
 - **Trust boundary**: neither protocol authenticates (protocol limitation) —
-  they are off by default and documented as control-room-LAN features.
-- **Configuration lives in the Settings modal**: enable/disable toggle +
-  port per protocol (and OSC bind address), persisted in `config.json`;
-  the modal lists both servers with their live on/off state.
+  they are **off by default** and documented as control-room-LAN features.
+- **Configuration lives in the Settings modal Network tab**: one
+  enable/disable toggle per remote item (HyperDeck, OSC UDP, OSC TCP/SLIP)
+  + port per protocol (and OSC bind address), persisted in `config.json`;
+  the tab lists every server with its live on/off state. The HyperDeck clip
+  listing source is selectable: Cuesheet (default — cue rows in play order)
+  or MediaPool.
 
 ### 12.9 Panic holding image
 
@@ -377,7 +462,9 @@ goroutine — all comparing `gsp.CurrentCuePos()`. Keep them consistent.
 - **GStreamer built-ins**: the Tests menu (topbar) lists a curated set of
   `videotestsrc` patterns — SMPTE, SMPTE100, Snow, Black, White, Red, Green,
   Blue, Checkers-1..4, Circle, Blink, Solid, Barcode — played fullscreen via
-  the existing `ShowTest` path (no cue created; ESC/Stop ends).
+  the existing `ShowTest` path (no cue created; ESC/Stop ends). Test
+  patterns are **not available in Show mode** (the Tests entry is locked;
+  the API refuses with 403).
 - **Custom patterns**: the operator can flag any media-pool item as a test
   pattern (media context menu → *Add to test patterns*), which pins it into
   the same Tests menu; selecting one Loads it directly (images hold their

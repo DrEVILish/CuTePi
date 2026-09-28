@@ -293,6 +293,37 @@ func SetSelectedGroup(groupID int) error {
 	return setSelectedGroupPos(groupID)
 }
 
+// stateKeyEscFadeMs persists the ESC fade-out time in milliseconds
+// (default 500): single ESC fades the running output over this time, then
+// stops. Set in Settings > General.
+const stateKeyEscFadeMs = "escFadeMs"
+
+// DefaultEscFadeMs is the ESC fade time when nothing is stored.
+const DefaultEscFadeMs = 500
+
+// GetEscFadeMs reports the ESC fade-out time in ms.
+func GetEscFadeMs() int {
+	var val string
+	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyEscFadeMs); err != nil {
+		return DefaultEscFadeMs
+	}
+	ms, err := strconv.Atoi(strings.TrimSpace(val))
+	if err != nil || ms < 0 {
+		return DefaultEscFadeMs
+	}
+	return ms
+}
+
+// SetEscFadeMs persists the ESC fade-out time (0..10000 ms).
+func SetEscFadeMs(ms int) error {
+	if ms < 0 || ms > 10000 {
+		return fmt.Errorf("esc fade must be 0..10000 ms")
+	}
+	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyEscFadeMs, strconv.Itoa(ms))
+	return err
+}
+
 // stateKeyGoAdvance persists the GO-bar behaviour: fire the selected unit and
 // then move the selection to the next one (default on), so repeated GOs walk
 // the show. The group- and cue-play routes consult it after firing.

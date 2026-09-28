@@ -3,6 +3,7 @@ package routes
 import (
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"CuTePi/ctp"
@@ -95,6 +96,11 @@ func schedulerTick(now time.Time) {
 				// and the fire falls back to the plain build path.
 				opts := cueOpts(cue.AsCue(), false)
 				goSafe(func() {
+					// Stills never warm (see armNextCue): instant EOS plus a
+					// flush-seek that never re-prerolls stalls activation.
+					if strings.HasPrefix(cue.AsCue().Mimetype, "image/") {
+						return
+					}
 					if warmErr := gsp.Warm(cue.Filename, opts); warmErr != nil {
 						log.Printf("CuTePi: scheduled cue %d prewarm: %v", cue.CuePos, warmErr)
 					}

@@ -101,11 +101,13 @@ func actionRouted(routes map[string]bool, u string) bool {
 			return true
 		}
 	}
-	// A wildcard route also answers the bare literal before its slash.
+	// A wildcard route also answers the bare literal before its slash, and
+	// any sub-path beneath it (e.g. /api/test/toggle under /api/test/*).
 	for r := range routes {
 		parts := strings.SplitN(r, " ", 2)
 		if i := strings.Index(parts[1], "/*"); i > 0 && strings.HasPrefix(parts[1], "/api") {
-			if "POST /api"+stripAPI(u) == parts[0]+" "+parts[1][:i] {
+			want := parts[0] + " " + parts[1][:i]
+			if got := "POST /api" + stripAPI(u); got == want || strings.HasPrefix(got, want+"/") {
 				return true
 			}
 		}

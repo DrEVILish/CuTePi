@@ -180,6 +180,12 @@ func mediaInfoRows(cue ctp.Cue) []MediaRow {
 			{Label: "Resolution", Value: cue.Resolution},
 		}
 	}
+	// Stills get a curated set: raw probe values read as broken on images
+	// (container "png_pipe", a bogus "25 fps" frame rate the format implies
+	// but a still never has), so show what an operator can use instead.
+	if strings.HasPrefix(cue.Mimetype, "image/") {
+		return imageInfoRows(cue, info)
+	}
 	add("Container", info.Container)
 	if info.Duration > 0 {
 		rows = append(rows, MediaRow{Label: "Duration", Value: ctp.FormatTime(int(info.Duration * 1000))})
@@ -216,6 +222,64 @@ func mediaInfoRows(cue ctp.Cue) []MediaRow {
 		}
 	}
 	return rows
+}
+
+// imageInfoRows is the Media tab for stills: type, resolution, pixel
+// format and file size — never container internals, frame rates or
+// bitrates, which are meaningless (or actively wrong) for a still.
+func imageInfoRows(cue ctp.Cue, info media.MediaInfo) []MediaRow {
+	rows := make([]MediaRow, 0, 4)
+	add := func(label, value string) {
+		if value != "" && value != "0" {
+			rows = append(rows, MediaRow{Label: label, Value: value})
+		}
+	}
+	codec := cue.MediaType
+	res, pixFmt := cue.Resolution, ""
+	if v := info.Video; v != nil {
+		if v.Codec != "" {
+			codec = v.Codec
+		}
+		if v.Width > 0 && v.Height > 0 {
+			res = fmt.Sprintf("%d x %d", v.Width, v.Height)
+		}
+		pixFmt = v.PixFmt
+	}
+	add("Type", friendlyImageKind(codec))
+	add("Resolution", res)
+	add("Pixel format", pixFmt)
+	if cue.Size > 0 {
+		rows = append(rows, MediaRow{Label: "File size", Value: formatSize(cue.Size)})
+	}
+	if len(rows) == 0 {
+		return []MediaRow{
+			{Label: "Type", Value: cue.Mimetype},
+			{Label: "Codec", Value: cue.MediaType},
+			{Label: "Resolution", Value: cue.Resolution},
+		}
+	}
+	return rows
+}
+
+// friendlyImageKind turns a still codec ("png", "mjpeg") into operator
+// words ("PNG image", "JPEG image").
+func friendlyImageKind(codec string) string {
+	switch strings.ToLower(codec) {
+	case "png":
+		return "PNG image"
+	case "mjpeg", "jpeg", "jpg":
+		return "JPEG image"
+	case "gif":
+		return "GIF image"
+	case "bmp":
+		return "BMP image"
+	case "webp":
+		return "WebP image"
+	case "":
+		return "Image"
+	default:
+		return strings.ToUpper(codec) + " image"
+	}
 }
 
 func inspectorData() gin.H {
@@ -337,6 +401,10 @@ func nowplayingData() gin.H {
 		"Duration":    formatClock(dur),
 		"DurationRaw": dur,
 		"Remaining":   formatClock(rem),
+		// Dead-reckoning flag for the widget clock: the client advances
+		// the displayed time from PositionRaw while playing, so the timer
+		// tracks real time instead of lagging a server round trip behind.
+		"Playing": gsp.CurrentPlaying() != "" && !gsp.IsPaused(),
 	}
 	// Merged header (§5.2): the partial also carries the GO cluster and the
 	// playing cue's identity, so one version-guarded render keeps the whole
@@ -438,8 +506,17 @@ func armNextCue(gen uint64, pos int) {
 		if gsp.Generation() != gen {
 			return
 		}
+		armStarted := time.Now()
+		// Stills never warm: a single frame prerolls to instant EOS and the
+		// activation flush-seek never re-prerolls it (5 s stall, then
+		// teardown). Cold stills load in ~300 ms anyway — warm buys nothing.
+		if strings.HasPrefix(next.Mimetype, "image/") {
+			return
+		}
 		if err := gsp.Warm(next.Filename, cueOpts(next, false)); err != nil {
 			logs.Printf(logs.GSPWarm, "prewarm %q: %v", next.Filename, err)
+		} else {
+			logs.Printf(logs.GSPWarm, "prewarmed %q in %.0fms", next.Filename, time.Since(armStarted).Seconds()*1000)
 		}
 	})
 }
@@ -454,9 +531,13 @@ func armNextCue(gen uint64, pos int) {
 // protocols, auto-continue chains, the scheduler, preload arming).
 func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 	return gsp.LoadOpts{
-		InPoint:        float64(cue.PosStart) / 1000,
-		OutPoint:       float64(cue.PosEnd) / 1000,
-		Hold:           cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")),
+		InPoint:  float64(cue.PosStart) / 1000,
+		OutPoint: float64(cue.PosEnd) / 1000,
+		Hold: cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")) ||
+			// A blank display duration means indefinitely: with no timer to
+			// end it and no hold to park it, a still would EOS-teardown on
+			// its first frame (the inspector promises "blank = indefinitely").
+			(strings.HasPrefix(cue.Mimetype, "image/") && cue.CueDuration == 0),
 		Loop:           cue.Loop,
 		LoopCount:      cue.LoopCount,
 		Volume:         cue.Volume,
@@ -487,10 +568,11 @@ func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
 	gsp.SetCuePos(cue.CuePos)
 	gsp.Play()
 	logs.Emit(logs.AuditEvent{Event: "cue_start", Pos: cue.CuePos, Title: cue.Title})
-	// Still images never reach end-of-stream, so a set display duration
-	// ends the cue on a timer (then auto-continues like any other end).
-	// Hold keeps the frame up and only advances the chain. The generation
-	// guard drops stale timers when the operator acts meanwhile.
+	// A set display duration ends the still on a timer (then
+	// auto-continues like any other end). A blank duration holds the frame
+	// indefinitely instead (cueOpts forces hold): without that, the still
+	// would EOS-teardown on its first frame. The generation guard drops
+	// stale timers when the operator acts meanwhile.
 	if strings.HasPrefix(cue.Mimetype, "image/") && cue.CueDuration > 0 {
 		gen, pos, hold := gsp.Generation(), cue.CuePos, cue.Hold
 		dur := time.Duration(cue.CueDuration) * time.Millisecond

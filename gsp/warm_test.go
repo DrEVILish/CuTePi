@@ -163,7 +163,7 @@ func TestWarmWireVideoAudioSlotNoop(t *testing.T) {
 	}
 }
 
-// The actual video-warm path: a real H.264 file armed with WarmPreroll
+// The actual video-warm path: a still image armed with WarmPreroll
 // prerolls onto the named fakesink (warm-video-sink), and the activation
 // relink swaps the wall sink in and plays — the first frame must reach the
 // real autovideosink without the pipeline erroring. This is the test path
@@ -177,18 +177,24 @@ func TestWarmVideoPrewarmAndRelink(t *testing.T) {
 	config.SetConfigFilePath(dir + "/config.json")
 	config.SetDirsForTesting(dir)
 	out := filepath.Join(dir, "warm-video.mp4")
-	// Video-only MJPEG: this CI box has no audio device (audio branch
-	// fails blocking preroll for env reasons) and no H.264 decoder plugin,
-	// so MJPEG video covers the fakesink preroll + relink path everywhere.
+	// Video-only MJPEG: no audio branch (this CI box has no audio device —
+	// audio preroll fails for env reasons). On Pi hardware decodebin picks
+	// v4l2jpegdec, whose firmware path is unreliable (buffer-pool
+	// activation fails / stalls silently) — run Pi suites with
+	// GST_PLUGIN_FEATURE_RANK=v4l2jpegdec:0 (the production service carries
+	// the same override) to route JPEG through software jpegdec.
 	if err := runCmd("ffmpeg", "-v", "error",
 		"-f", "lavfi", "-i", "color=c=gray:size=64x64:rate=10:duration=2",
-		"-c:v", "mjpeg",
-		"-c:a", "aac", out); err != nil {
+		"-c:v", "mjpeg", out); err != nil {
 		t.Skipf("ffmpeg fixture failed: %v", err)
 	}
 
 	t.Setenv("CUTEPI_WALL_SINK", "fakesink") // headless env: no display sink
-	opts := LoadOpts{WarmPreroll: true}
+	// Hold: both sinks are sync=false fakesinks, so the 2s fixture would
+	// EOS-teardown before the assertions below (now that a GLib main loop
+	// actually dispatches bus messages). Held, the end parks the last
+	// frame and CurrentPlaying stays put.
+	opts := LoadOpts{WarmPreroll: true, Hold: true}
 	if err := Warm("warm-video.mp4", opts); err != nil {
 		t.Fatalf("Warm video: %v", err)
 	}

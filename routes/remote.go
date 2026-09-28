@@ -121,10 +121,13 @@ func remotePanic() error {
 	return nil
 }
 
-// StartRemote launches both protocol listeners.
+// StartRemote launches the protocol listeners: HyperDeck on TCP 9993,
+// OSC datagrams on UDP 53000, and OSC-over-TCP (SLIP) on TCP 53000 for
+// QLab Remote and other TCP-only controllers.
 func StartRemote() {
 	go ListenHyperdeck(":9993")
 	go ListenOSC(":53000")
+	go ListenOSCTCP(":53000")
 }
 
 // cueByNum resolves a HyperDeck "clip id" / OSC cue reference: the row

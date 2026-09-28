@@ -30,6 +30,7 @@
       </button>
       <input type="range" class="ctp-slider ctp-scrubber flex-grow-1"
         id="nowplaying-scrubber" value="{{ .PositionRaw }}" min="0" max="{{ .DurationRaw }}" step="0.05"
+        data-playing="{{ if .Playing }}1{{ else }}0{{ end }}"
         aria-label="Seek within the clip">
       <small class="text-nowrap" id="now-time" title="{{ .Duration }} total">{{ .Position }} / -<span id="now-remaining" class="remaining-slow">{{ .Remaining }}</span></small>
     </div>
@@ -56,9 +57,27 @@
       });
     }
 
+    // Dead reckoning: advance the displayed clock from the last server
+    // position while playing, so the timer tracks real time instead of
+    // lagging a server round trip behind. The next server render resets
+    // the base. Skipped while scrubbing, while paused, and when the
+    // duration is unknown (held stills stay frozen, correctly).
+    var basePos = parseFloat(root.value) || 0;
+    var baseMs = Date.now();
+    var playing = root.getAttribute("data-playing") === "1";
+    function fmtClock(sec) {
+      sec = Math.max(0, sec);
+      var m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+      return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+    }
     // Pulse the remaining time indicator based on time left.
     var pulseTimer = setInterval(function () {
       if (!remEl || !timeEl) return;
+      if (playing && duration > 0 && document.activeElement !== root) {
+        var live = Math.min(duration, basePos + (Date.now() - baseMs) / 1000);
+        root.value = live;
+        if (timeEl.firstChild) timeEl.firstChild.textContent = fmtClock(live) + " / -";
+      }
       var pos = parseFloat(root.value) || 0;
       var remSec = Math.max(0, duration - pos);
       // Update the text (mm:ss)

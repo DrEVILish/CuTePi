@@ -85,6 +85,19 @@ document.body.addEventListener("htmx:responseError", (e) => {
   }
 });
 
+// Tests toggle button state: pressed while a pattern is on the wall.
+// Synced from toggle responses, modal Hide, and once at load (a test may
+// already run from another client).
+function setTestPressed(on) {
+  const btn = document.getElementById("showTestBtn");
+  if (!btn) return;
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  btn.classList.toggle("is-active", on);
+}
+fetch("/api/testpatterns", { headers: { Accept: "application/json" } })
+  .then((r) => (r.ok ? r.json() : null))
+  .then((d) => { if (d) setTestPressed(!!d.showing); })
+  .catch(() => {});
 htmx.on("htmx:after:request", (e) => {
   const el = e.detail.ctx?.sourceElement;
   const ok = (e.detail.ctx?.request?.status ?? 500) < 400;
@@ -96,9 +109,13 @@ htmx.on("htmx:after:request", (e) => {
     return;
   }
   if (el && el.id === "dropform" && ok) hideModal("uploadModal");
-  if (el && el.id === "testHideBtn" && ok) hideModal("testModal");
+  if (el && el.id === "testHideBtn" && ok) { hideModal("testModal"); setTestPressed(false); }
   if (el && el.id === "deleteConfirmBtn" && ok) hideModal("deleteModal");
-  if (el && el.id === "showTestBtn" && ok) showModal("testModal");
+  if (el && el.id === "showTestBtn" && ok) {
+    try {
+      setTestPressed(!!JSON.parse(e.detail.ctx.text || "{}").showing);
+    } catch (_) {}
+  }
   if (el && el.id === "settingsForm") {
     const status = document.getElementById("settingsStatus");
     if (!status) return;
@@ -203,9 +220,10 @@ function applyShowMode(show) {
     const label = t.querySelector(".mode-label");
     if (label) label.textContent = show ? "SHOW" : "EDIT";
   }
-  // Test output is only available in Show mode.
+  // Test output is an Edit-mode tool (the server 403s it in Show mode,
+  // which locks the sheet): enabled while editing, disabled on Show.
   const tests = document.getElementById("showTestBtn");
-  if (tests) tests.disabled = !show;
+  if (tests) tests.disabled = show;
   // The Cue Inspector is unavailable in Show mode (see layout.css): keep
   // the footer toggle button disabled too so it cannot be reopened.
   const inspExpand = document.getElementById("cueinspector-toggle");
@@ -314,6 +332,7 @@ document.addEventListener("htmx:afterSwap", () => {
 // Column resizing was removed; clear the old persisted widths.
 try { localStorage.removeItem("cutepi.cuesheet.colWidths"); } catch (e) {}
 
+let lastEscPress = 0;
 window.addEventListener("keydown", (e) => {
   const active = document.activeElement;
   const tag = active && active.nodeName ? active.nodeName.toLowerCase() : "";
@@ -358,12 +377,23 @@ window.addEventListener("keydown", (e) => {
       htmx.trigger("#ArrowLeft", "arrowLeft")
     }
   }
-  // Escape = stop — but only when no context menu holds the gesture: menus
-  // use Escape to close (their own listeners run for the same keydown), and
-  // closing a menu must not also kill playback.
+  // Escape = fade out and stop; a second Escape within a second is a hard
+  // PANIC (no fade, holding image if configured) — but only when no
+  // context menu holds the gesture: menus use Escape to close (their own
+  // listeners run for the same keydown), and closing a menu must not also
+  // kill playback.
   if (plain && ["Escape"].indexOf(e.code) > -1) {
     const menuOpen = document.querySelector(".cue-context-menu:not([hidden])");
-    if (!menuOpen) htmx.trigger("#esc", "esc")
+    if (!menuOpen) {
+      const now = Date.now();
+      if (now - lastEscPress < 1000) {
+        lastEscPress = 0;
+        htmx.trigger("#panichard", "panichard");
+      } else {
+        lastEscPress = now;
+        htmx.trigger("#esc", "esc");
+      }
+    }
   }
   // Ctrl/Cmd+A selects every rendered cue (plain focus only).
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyA" && plain) {
