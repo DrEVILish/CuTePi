@@ -428,7 +428,35 @@ The measurements come from the kernel's ftrace, outside the service, without ope
   under-reads (15.9 against 27). A 10 ms poll of a 16.7 ms signal only counts correctly while every sample interval
   stays under the frame interval, and it does not here.
 
-#### Proposed fix (needs a decision; not a small change)
+#### Decision (2026-10-01): GPU compositor, option A
+
+GStreamer's GPU mixer replaces the per-cue planes (DESIGN §6.1.1). Feasibility, measured on the Pi 4 at 1080p60
+before the decision. Test clips were made on the Pi: H.264 `testsrc2` with a frame counter, HEVC `testsrc`.
+The GPU ran at 500 MHz, not throttled.
+
+| Chain | Where | Result |
+|---|---|---|
+| H.264 hw decode → `glupload` → `glcolorconvert` (RGBA) | headless | 95 fps (decoder-bound) |
+| … → `glvideomixer` (convenience bin), 1 layer | headless | **33–41 fps**: the bin's extra conversions |
+| … → `glvideomixerelement` (bare element), 1 layer | headless | **87 fps** |
+| HEVC hw decode as `DMA_DRM` SAND128 → `glupload` → mixer, 1 layer | headless | **176 fps** (GPU reads the tiled frames) |
+| HEVC + HEVC, both 50 % | headless | 130 fps |
+| H.264 + HEVC, both 50 % | headless | 72 fps |
+| HEVC ×3, all 50 % | headless | 91 fps |
+| H.264 ×1 → mixer → `glimagesink` (GBM) | HDMI | 58.8 fps average, 0 dropped |
+| HEVC ×1 | HDMI | 59.8 fps, 0 dropped |
+| **HEVC + HEVC, both 50 %** | HDMI | **59.9 fps, 0 dropped** |
+| H.264 + HEVC, both 50 % | HDMI | 55.6 average, 60.0 once running, 0 dropped |
+
+HDMI figures come from `fpsdisplaysink` (rendered/dropped counts); build step 5 re-measures with the per-refresh
+kernel trace. Dead ends:
+- `gldownload` to a DMABuf for one of our own planes: V3D renders UIF-tiled buffers, which it refuses to export as
+  linear, and the display controller cannot scan UIF.
+- `glvideomixer` into `glimagesink` gave 1–3 fps on the display.
+- `kmssink` with the HEVC SAND128 DMABuf: caps negotiate, but it describes the buffer as linear and the kernel
+  refuses the framebuffer (ERANGE).
+
+#### Earlier proposal (superseded)
 
 A **wall compositor in the service** replaces `kmssink`:
 - An appsink per cue hands its DMABuf frames to one Go goroutine.

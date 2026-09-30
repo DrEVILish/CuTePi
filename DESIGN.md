@@ -36,9 +36,12 @@ selection, settings).
   is set to** (a 1080p60 wall shows 60 frames a second, whatever the clip's
   own rate): no dropped or stalled frames during playback or during fades.
   Clips at a lower rate repeat frames evenly to fill the display rate.
-- **Codecs**: any video, image or audio file (within reason); decode
-  **hardware-first (v4l2 h264/hevc) with software fallback** via GStreamer
-  autoplugging.
+- **Output quality first**: what reaches the screen is the top priority. Performance work may not coarsen fades,
+  freeze pictures mid-crossfade, or lower resolution or frame rate to save work.
+- **Codecs**: CuTePi plays **any codec the user provides** — every file GStreamer can decode, video, image or audio.
+  Decode is **hardware-first (V4L2 H.264 and HEVC on the Pi 4; HEVC only on the Pi 5) with software fallback** via
+  GStreamer autoplugging; the hardware formats are fast paths, never the supported set. When a file is expected to play
+  below full rate on the current hardware, **import warns** (media pool and inspector) but never refuses it (§5.7).
 - **Undecodable sources**: fail **immediately with an error surfaced to the user** at cue time; an **import-time probe** (`ffmpeg -v error -t 1`) rejects bad files early.
 - **Cue trigger**: **SPACE = GO** and **ESC = fade out** (twice = panic) work from anywhere in the control UI —
   focused buttons, checkboxes, selects, sliders and open dialogs included — except while typing into a text field.
@@ -71,6 +74,7 @@ selection, settings).
 config/config.go       config load/save, path expansion, defaults, auth password
 ctp/ctp.go, db.go      domain types + SQLite schema/access/migrations
 gsp/gsp.go, background.go  GStreamer pipeline manager (single mutex-guarded pipeline, atomic swap; warm preroll slot; separate playbin soundtrack pipeline), state version counter
+gsp/wall*.go, kms.go   video output: the GPU compositor wall (§6.1, being built) and the KMS display-plane wall (current default, kept as fallback)
 media/                 ffprobe metadata (Probe), thumbnails, waveform peaks
 worker/                DB-backed thumbnail/pending queue (survives restart)
 routes/*.go            HTTP handlers: public, index, api (embeds themes/display/audio), groups, show (export/import), logs, upload, youtube; background listeners for scheduler, HyperDeck, OSC UDP + TCP/SLIP
@@ -298,6 +302,10 @@ Tabs, grouped by purpose:
   (validate-then-render: the pool only shows validated media); duration/resolution/codec failures reject the import.
   YouTube/URL via yt-dlp with stage logging.
   Uploads, deletions, and thumbnail changes broadcast a targeted WebSocket refresh.
+- **Playback warning (planned)**: from the probed codec, resolution and frame rate, import estimates whether the file
+  plays at full rate on this hardware (hardware decoder or software, and its measured capacity) and shows a warning on
+  the pool tile and in the inspector when it will not, e.g. "HEVC 2160p: software decode, about 20 fps expected on this
+  Pi". It informs; it never refuses a file.
 - Ensure acurate and live updating progress bars for all upload / media import tasks.
 - **Name clashes**: before any bytes are sent, the browser asks the server (`POST /upload/check`) which chosen files
   share a name with a file already in the pool, or with another file in the same batch. If any do, a dialog lists
@@ -362,11 +370,14 @@ position (`CurrentCuePos`), a generation counter (`Generation`, bumped on
 every load), and playing-file (`CurrentPlaying`) are tracked for guards.
 GStreamer runtime is smoke-tested against real `gst-launch-1.0`
 assets (`gsp` test; skips when absent).
-- **Wall: one display layer per cue (KMS)**. With `CUTEPI_WALL_SINK=kmssink` (the Pi default, set in the unit's
-  `playback-env.conf`) every pipeline that shows video gets its own hardware overlay plane on the HDMI output
-  (`gsp/kms.go`, `gsp/wall.go`). All `kmssink`s share one DRM file descriptor, which the service opens at startup and
-  holds as DRM master. The display controller does the compositing: per-plane alpha (fades, crossfades, opacity), zpos
-  (stacking), position/size (render rectangle) and 0°/180°/mirror rotation — no CPU, at the display's refresh rate.
+- **Wall: GPU compositor (target design, being built — §6.1.1).** Replaces the per-cue display planes below as the
+  default once it matches them feature for feature; until then it is selected with `CUTEPI_WALL=gl`.
+- **Wall: one display layer per cue (KMS)** — current default and fallback. With `CUTEPI_WALL_SINK=kmssink` (the Pi
+  default, set in the unit's `playback-env.conf`) every pipeline that shows video gets its own hardware overlay plane on
+  the HDMI output (`gsp/kms.go`, `gsp/wall.go`). All `kmssink`s share one DRM file descriptor, which the service opens at
+  startup and holds as DRM master. The display controller does the compositing: per-plane alpha (fades, crossfades,
+  opacity), zpos (stacking), position/size (render rectangle) and 0°/180°/mirror rotation — no CPU, at the display's
+  refresh rate.
   - Video chain: `queue → kmssink` for hardware-decoded frames (DMABuf straight to the plane, no copy); `queue →
     videoconvert → kmssink` for system-memory frames (software decode, stills, test patterns); 90°/270° add
     `v4l2convert → capsfilter(I420, on-screen size) → identity drop-allocation → videoflip`; Stretch adds a
@@ -375,22 +386,13 @@ assets (`gsp` test; skips when absent).
     is a display commit taking a vblank, as is each video frame, so a 30 fps clip keeps every frame through a fade
     (measured 30 fps during a 1 s ESC fade). A 60 fps clip loses frames only while it fades. Alpha is blended over the
     black primary plane, so colours scale evenly (no hue shift, no grey wash).
-  - **Frame-rate limits (measured on the Pi 4 at 1080p60; TEST_REPORT O1).** Each `kmssink` frame is a blocking
-    `SetPlane` commit and each alpha write is another commit on the same CRTC. The driver serialises them, so the
-    whole wall gets **60 commits a second**, shared by every plane and every alpha write. Results:
-    - one 1080p60 or 720p60 H.264 clip: 60 fps;
-    - a 60 fps clip while it fades: about 42 fps (each alpha write costs one frame);
-    - two layers at once (crossfade, opacity): about 27 fps each, even for 30 fps clips.
-  - **Decoder limits.**
-    - The H.264 decoder manages about 70 fps of 1080p in total. Two 1080p60 H.264 layers at once freeze (late
-      frames are dropped), including during a crossfade between two such cues.
-    - HEVC decodes in hardware but reaches the plane only through a software untile (about 1 fps at 1080p60).
-      GStreamer 1.26 cannot hand the decoder's SAND128 frames to `kmssink`, although the planes support them.
-  - **Proposed (not decided): a wall compositor** that replaces `kmssink`.
-    - One goroutine takes each cue's DMABuf frames from an appsink.
-    - Once per refresh it makes one non-blocking atomic commit that carries every plane's frame, alpha and zpos.
-    - It imports frames with an explicit DRM format and modifier, which covers SAND128.
-    - This removes the commit and HEVC limits. The decoder limit stays.
+  - **Frame-rate limits (measured on the Pi 4 at 1080p60; TEST_REPORT O1)** — the reason for the GPU compositor.
+    Each `kmssink` frame is a blocking `SetPlane` commit and each alpha write is another commit on the same CRTC. The
+    driver serialises them, so the whole wall gets **60 commits a second**, shared by every plane and every alpha
+    write: one 1080p60 or 720p60 H.264 clip plays at 60 fps; a 60 fps clip fades at about 42 fps; two layers at once
+    get about 27 fps each; two 1080p60 H.264 layers freeze. HEVC reaches the plane only through a software untile
+    (about 1 fps at 1080p60): `kmssink` cannot import the decoder's SAND128 frames (it describes them as linear, and the
+    kernel refuses the framebuffer).
   - The primary plane underneath is the console framebuffer, kept black: at startup the service switches the active
     virtual terminal to graphics mode (`KDSETMODE KD_GRAPHICS`), so no console text, login prompt, kernel message or
     cursor reaches HDMI while it runs; text mode returns on a clean shutdown.
@@ -414,6 +416,82 @@ assets (`gsp` test; skips when absent).
   their own `playbin` pipeline (`gsp.BackgroundPlaylist`) under the slides
   for the whole run. The soundtrack plays **only as part of a slideshow** —
   any main-pipeline decision (Stop, Panic, a new load) kills it with it.
+
+### 6.1.1 GPU compositor wall (target design)
+
+**Why.** The KMS plane wall cannot give full-rate fades, full-rate multiple layers or hardware HEVC on the Pi 4 (§6.1).
+GStreamer's GPU mixer does all three on the Pi 4's V3D GPU, measured before this design was adopted (TEST_REPORT O1,
+"GPU compositor feasibility"): on the HDMI display at 1080p60, one HEVC layer 59.8 fps, **two HEVC layers at 50 %
+opacity 59.9 fps**, H.264 + HEVC at 50 % 60 fps once running, 0 frames dropped; headless throughput 176 fps for one
+HEVC layer, 130 fps for two, 91 fps for three.
+
+**Shape.** One long-running **wall pipeline** owns the display for the life of the service; cues come and go as
+sources feeding it.
+
+```
+cue pipeline (one per playing cue, as today: decode, trim, seek, rate, loop, audio)
+  … → decoder → glupload → glcolorconvert → RGBA GLMemory → appsink (bridge)
+                                                                  │  exact timestamps (below)
+wall pipeline (always running)                                    ▼
+  appsrc (pad per cue layer) ─┐
+  appsrc …                    ├→ glvideomixerelement (background black, one pad per layer:
+  panic image (armed pad)  ───┘     alpha, zorder, xpos/ypos/width/height)
+                                 → capsfilter (display size and refresh, e.g. 1920×1080 @ 60)
+                                 → glimagesink (GBM/KMS: renders into scanout buffers, one page flip per refresh)
+```
+
+- **Mixer element.** Use `glvideomixerelement` with one explicit `glupload → glcolorconvert` per input. The
+  convenience `glvideomixer` bin inserts extra per-frame conversions and managed only 33–40 fps for a single 1080p
+  layer; the bare element manages 87 fps (H.264, decoder-bound) to 176 fps (HEVC).
+- **Display.** `glimagesink` with the GBM window system (`GST_GL_PLATFORM=egl GST_GL_WINDOW=gbm`,
+  `GST_GL_GBM_DRM_DEVICE` = the HDMI card) renders the composited frame into scanout buffers and page-flips once per
+  refresh on the primary plane. It is the DRM master, so the service no longer opens the display itself in this mode
+  (the per-plane code in `gsp/kms.go` is not used). GPU buffers cannot go to our own overlay planes instead: V3D
+  renders in a tiled layout (UIF) that the display controller cannot scan out, and a CPU readback is too slow.
+- **Every codec.** Hardware-decoded frames enter the GPU without copies: H.264 as DMABuf, HEVC as `DMA_DRM` NV12 with
+  the Broadcom SAND128 modifier, which Mesa's V3D driver samples directly (this is what makes hardware HEVC usable).
+  Software-decoded frames (VP9, AV1, ProRes, MPEG-2, …), stills and test patterns are uploaded from system memory by
+  `glupload`. There is one path for all of them.
+- **Cue → wall bridge (timestamps).** Each cue stays its own pipeline, so trim, seek, pause, rate, loop and warm
+  preroll keep working per cue. All pipelines use the same system clock. A frame's running time in its cue pipeline
+  maps to the wall pipeline exactly: `wall_rt = cue_rt + (cue_base_time − wall_base_time)`, re-read on every frame
+  (pause and resume move the cue's base time). Frames are pushed into the wall's live `appsrc` ahead of time (a
+  small bounded queue), and the mixer takes, at each output frame, the newest frame due by then. No timestamping on
+  arrival: no jitter, no judder for content at the display rate.
+- **Layers.** A cue's layer is a mixer pad. Stacking is pad `zorder` (new cues under outgoing ones, as today, §6.5);
+  opacity, fades and crossfades are pad `alpha`, applied **every output frame** (60 steps a second at 60 Hz, finer
+  than the plane wall's 30) at no cost to the video; geometry is `xpos/ypos/width/height`. A layer that stops showing
+  frames (pause, hold) keeps its last frame on screen. Black is the mixer background.
+- **Rotation, mirror, fit, crop.** Rotation and mirror by `glvideoflip` in the cue's GPU chain; fit modes by pad size
+  and position. Crop is applied as the frame's source rectangle in the GPU chain (to be verified: video crop meta
+  through `glupload`, else a GPU crop step) — never a CPU copy.
+- **Panic.** The holding image is a permanent mixer pad at the top `zorder`, alpha 0. A panic sets its alpha to 1: it
+  shows on the next output frame (at most one refresh plus the sink's flip). The target stays a mean under 50 ms
+  (§12.9).
+- **Test patterns** become a source on their own pad, generated at the display's size and rate, as today.
+- **Quality notes.** The mixer composites in 8-bit RGBA at the output size. Unscaled layers are pixel-exact. Scaled
+  layers use the GPU's bilinear filter, softer than the display controller's polyphase scaler, so full-screen,
+  unscaled output is the reference case. Colour conversion follows each stream's colorimetry (`glcolorconvert`).
+- **Audio** stays per cue on its own sink for now (simultaneous cues, §6.1.2, add a mixer). The wall adds a fixed
+  latency (about one output frame plus the page flip); audio is delayed by the same amount so lips stay in sync.
+- **Limits that remain.** The H.264 decoder manages about 70 fps of 1080p in total (two 1080p60 H.264 layers cannot
+  both be full rate); HEVC decodes about 90 + 90 fps; software codecs run at CPU speed. Import warns when a file is
+  expected to play below full rate (§5.7).
+- **Pi 5.** Same design: the Pi 5 has HEVC hardware decode (no H.264), a faster V3D GPU, and the same GBM/KMS path.
+
+**Build order.** Each step lands only once measured on the Pi (frame rate traced per refresh, as in TEST_REPORT O1),
+with the KMS plane wall as the default until the GPU wall covers everything it does:
+1. Wall pipeline and display ownership (`CUTEPI_WALL=gl`): black background at the display rate; console stays
+   hidden; clean start and shutdown.
+2. One cue through the bridge: play, pause, seek, trim, rate, loop, hold, stop; A/V sync offset.
+3. Layers: fades, fade-in, crossfade (fade and stop others), opacity, geometry, fit, rotation, mirror, crop.
+4. Stills, test patterns, slideshow, warm preroll, panic holding image (armed pad).
+5. Measure against the plane wall on the same clips, then make the GPU wall the default.
+
+### 6.1.2 Simultaneous cues (planned, after §6.1.1)
+
+Several cues playing at once, each on its own layer, with one audio mixer (`audiomixer`) feeding the HDMI device;
+the interface and remote protocols show every running cue. What "stop others" means per cue is still to be decided.
 
 ### 6.2 Trim, Hold, Loop, Volume, Seek
 
