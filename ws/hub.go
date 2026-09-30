@@ -3,6 +3,8 @@ package ws
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,17 +13,49 @@ import (
 
 var (
 	upgrader = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
-		// Allow any origin – trusted local network.
+		// Same-origin only: a page on another site must not be able to open
+		// the push channel with the operator's cached credentials. Clients
+		// that send no Origin (non-browser tools) are allowed.
+		CheckOrigin: sameOrigin,
 	}
 	mu      sync.Mutex
 	clients = make(map[*client]bool)
 )
 
-type client struct {
-	conn  *websocket.Conn
-	write sync.Mutex
+// sameOrigin reports whether the handshake's Origin (if any) names the
+// request's own Host.
+func sameOrigin(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return true
+	}
+	u, err := url.Parse(o)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
+
+// client is one connected browser. Broadcasts never write to the socket
+// directly: they set a pending flag and wake the client's own writer
+// goroutine, so one stalled peer can never delay the others (or the ctp/gsp
+// bump paths that broadcast). Flags coalesce: messages are idempotent
+// "re-fetch" hints, so N syncs queued behind a slow write collapse to one.
+type client struct {
+	conn         *websocket.Conn
+	wake         chan struct{} // cap 1
+	pmu          sync.Mutex
+	pendingSync  bool
+	pendingMedia bool
+}
+
+// writeDeadline caps every client write: a dead phone or half-closed laptop
+// is evicted instead of pinning its writer forever.
+const writeDeadline = 2 * time.Second
+
+// readLimit caps a client->server frame. Clients send nothing but control
+// frames; anything large is abuse.
+const readLimit = 4 << 10
 
 // Handle upgrades the HTTP request to a WebSocket and registers the client.
 // It blocks until the client disconnects. Mount as GET /api/ws.
@@ -30,52 +64,84 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	c := &client{conn: conn}
+	conn.SetReadLimit(readLimit)
+	c := &client{conn: conn, wake: make(chan struct{}, 1)}
+
+	// Register BEFORE the connect hint: a broadcast racing the handshake
+	// then lands as a pending flag the writer delivers after the hint,
+	// instead of being lost. The hint is written here, before the writer
+	// goroutine starts, so conn still has a single writer.
 	mu.Lock()
 	clients[c] = true
 	mu.Unlock()
-
-	// Send an initial sync hint so the newly-connected client refreshes immediately.
-	c.write.Lock()
 	_ = conn.SetWriteDeadline(time.Now().Add(writeDeadline))
-	_ = conn.WriteJSON(map[string]string{"type": "sync"})
-	c.write.Unlock()
+	if err := conn.WriteJSON(map[string]string{"type": "sync"}); err != nil {
+		drop(c)
+		return
+	}
+
+	done := make(chan struct{})
+	go c.writer(done)
 
 	// Read loop: we don't expect client messages, but reading detects close.
-	// Idle-policy: server pings every 4 minutes; a browser answers
-	// automatically with pong, which refreshes the 5-minute read deadline —
-	// a dead client (no pongs) is evicted, a healthy one lives forever.
+	// Idle policy: the writer pings every 4 minutes; a browser answers with
+	// pong, which refreshes the 5-minute read deadline — a dead client (no
+	// pongs) is evicted, a healthy one lives forever.
 	const readTimeout = 5 * time.Minute
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(readTimeout))
 	})
 	_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
-	ping := time.NewTicker(4 * time.Minute)
-	defer ping.Stop()
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case <-ping.C:
-				c.write.Lock()
-				_ = conn.SetWriteDeadline(time.Now().Add(writeDeadline))
-				_ = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeDeadline))
-				c.write.Unlock()
-			}
-		}
-	}()
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			break
 		}
 	}
+	close(done)
+	drop(c)
+}
+
+// writer is the only goroutine that writes to c.conn after registration.
+func (c *client) writer(done <-chan struct{}) {
+	ping := time.NewTicker(4 * time.Minute)
+	defer ping.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ping.C:
+			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeDeadline)); err != nil {
+				drop(c)
+				return
+			}
+		case <-c.wake:
+			c.pmu.Lock()
+			sendSync, sendMedia := c.pendingSync, c.pendingMedia
+			c.pendingSync, c.pendingMedia = false, false
+			c.pmu.Unlock()
+			for _, kind := range []struct {
+				send bool
+				msg  []byte
+			}{{sendSync, syncMsg}, {sendMedia, mediaMsg}} {
+				if !kind.send {
+					continue
+				}
+				_ = c.conn.SetWriteDeadline(time.Now().Add(writeDeadline))
+				if err := c.conn.WriteMessage(websocket.TextMessage, kind.msg); err != nil {
+					drop(c)
+					return
+				}
+			}
+		}
+	}
+}
+
+// drop unregisters c and closes its socket (idempotent).
+func drop(c *client) {
 	mu.Lock()
 	delete(clients, c)
 	mu.Unlock()
-	_ = conn.Close()
+	_ = c.conn.Close()
 }
 
 // ClientCount reports how many WebSocket clients are currently connected
@@ -89,51 +155,41 @@ func ClientCount() int {
 // Broadcast notifies all connected clients that server state changed.
 // Callers (ctp bump, gsp bump) should invoke this after committing the new
 // state so browsers can re-fetch the authoritative server rendering.
-// Non-blocking: fans out without holding the hub lock during writes.
+// Never blocks on the network.
 func Broadcast() {
-	broadcast("sync")
+	broadcast(false)
 }
 
 // BroadcastMedia notifies clients that the media pool partial should be
 // refreshed without forcing an unrelated cuesheet refresh.
 func BroadcastMedia() {
-	broadcast("media")
+	broadcast(true)
 }
 
-// writeDeadline caps every client write. Without it one stalled TCP peer
-// (dead phone, half-closed laptop) blocks broadcast() — which runs on the
-// ctp/gsp bump paths — and with it the whole server's HTTP handlers and
-// event flow. 2s: slow Wi-Fi clients still get every sync; dead ones are
-// evicted at the next broadcast.
-// ponytail: serial fan-out means worst case 2s per dead client per
-// broadcast; per-client writer goroutines if a real deployment ever
-// shows that stall.
-const writeDeadline = 2 * time.Second
+var (
+	syncMsg, _  = json.Marshal(map[string]string{"type": "sync"})
+	mediaMsg, _ = json.Marshal(map[string]string{"type": "media"})
+)
 
-func broadcast(kind string) {
+func broadcast(media bool) {
 	mu.Lock()
-	if len(clients) == 0 {
-		mu.Unlock()
-		return
-	}
-	// Snapshot clients to avoid holding lock during writes.
 	snapshot := make([]*client, 0, len(clients))
 	for c := range clients {
 		snapshot = append(snapshot, c)
 	}
 	mu.Unlock()
 
-	msg, _ := json.Marshal(map[string]string{"type": kind})
 	for _, c := range snapshot {
-		c.write.Lock()
-		_ = c.conn.SetWriteDeadline(time.Now().Add(writeDeadline))
-		err := c.conn.WriteMessage(websocket.TextMessage, msg)
-		c.write.Unlock()
-		if err != nil {
-			mu.Lock()
-			delete(clients, c)
-			mu.Unlock()
-			_ = c.conn.Close()
+		c.pmu.Lock()
+		if media {
+			c.pendingMedia = true
+		} else {
+			c.pendingSync = true
+		}
+		c.pmu.Unlock()
+		select {
+		case c.wake <- struct{}{}:
+		default: // a wake is already queued; it will see this flag
 		}
 	}
 }

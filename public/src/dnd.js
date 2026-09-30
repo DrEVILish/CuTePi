@@ -22,23 +22,45 @@
     }
   }
 
-  function uploadFiles(files) {
+  // Server refusals are an error page (reason in its <pre>) or, for a name
+  // clash, JSON with an "error" field.
+  function uploadErrorText(status, text) {
+    try {
+      const j = JSON.parse(text);
+      if (j && j.error) return j.error;
+    } catch (err) { /* not JSON */ }
+    const doc = new DOMParser().parseFromString(text || "", "text/html");
+    return (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim().slice(0, 300) || ("server returned " + status);
+  }
+
+  // Pool drag-and-drop upload (§5.7): free-space check first, then an XHR
+  // so the floating card shows live byte progress and the import phase.
+  async function uploadFiles(files) {
     if (!files || files.length === 0) return;
+    files = Array.from(files);
+    if (window.cutepiCheckSpace && !(await window.cutepiCheckSpace(files))) return;
+    const choice = window.cutepiUploadChoice ? await window.cutepiUploadChoice(files) : { go: true, onConflict: "" };
+    if (!choice.go) return;
     const formData = new FormData();
+    if (choice.onConflict) formData.append("onConflict", choice.onConflict);
     for (const file of files) {
       formData.append("media", file);
     }
-    fetch("/upload", {
-      method: "POST",
-      headers: { "HX-Request": "true" },
-      body: formData,
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("server returned " + res.status);
-        return res.text();
-      })
-      .then((html) => replaceById("mediapool", html))
-      .catch((err) => console.error("CuTePi: upload failed", err));
+    const label = files.length === 1 ? files[0].name : files.length + " files";
+    const card = window.cutepiProgress ? window.cutepiProgress("Uploading " + label + "…") : null;
+    try {
+      const res = await window.cutepiUpload("/upload", formData, (pct, text) => {
+        if (card) card.set(pct, text);
+      });
+      if (res.status < 200 || res.status >= 300) {
+        throw new Error(uploadErrorText(res.status, res.text));
+      }
+      replaceById("mediapool", res.text);
+      if (card) card.done(window.cutepiUploadSummary ? window.cutepiUploadSummary(res.result) : "Imported " + label, true);
+    } catch (err) {
+      console.error("CuTePi: upload failed", err);
+      if (card) card.done("Upload failed: " + err.message, false);
+    }
   }
 
   function addCueAt(filename, cuePos, query) {

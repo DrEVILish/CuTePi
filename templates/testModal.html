@@ -1,22 +1,26 @@
 {{ define "testModal.html" }}
 
-<div class="modal fade" id="testModal" tabindex="-1" aria-labelledby="testModalLabel" aria-hidden="true">
+<div class="app-modal fade" id="testModal" tabindex="-1" aria-labelledby="testModalLabel" aria-hidden="true">
   <div class="modal-dialog">
-    <div class="modal-content">
+    <div class="modal-content modal">
       <div class="modal-header">
-        <h1 class="modal-title fs-5" id="testModalLabel">Show Test</h1>
+        <span class="modal-title" id="testModalLabel">Show Test</span>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <div id="test-pattern-grid" class="d-flex is-wrap is-gap-xs ftl-mb-xs" aria-label="Built-in test patterns"></div>
+        <div id="test-pattern-grid" class="d-flex is-wrap is-gap-xs mb-xs" aria-label="Built-in test patterns"></div>
         <div id="test-custom-grid" class="d-flex is-wrap is-gap-xs" aria-label="Custom test patterns"></div>
-        <p class="ftl-text-muted small ftl-mt-xs mb-0">Pin your own media from its tile menu ("Add to test patterns").</p>
+        <div class="form-check mt-xs">
+          <input class="checkbox" type="checkbox" id="testOverlay">
+          <label class="form-check-label" for="testOverlay">Show resolution &amp; frame rate on the pattern</label>
+        </div>
+        <p class="text-muted small mt-xs mb-0">Pin your own media from its tile menu ("Add to test patterns").</p>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn ftl-btn-secondary" data-bs-dismiss="modal">Keep</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Keep</button>
         <button
           type="button"
-          class="btn ftl-btn-danger"
+          class="btn btn-danger"
           id="testHideBtn"
           hx-post="/api/stop"
           hx-swap="none"
@@ -29,31 +33,50 @@
 </div>
 
 <script>
-  var testPatternsLoaded = false;
   document.addEventListener("click", function (e) {
     var btn = e.target.closest("[data-test-open]");
     if (!btn) return;
     // Opening Tests shows the picker; it does NOT auto-play SMPTE (the
     // transport's TV button still fires the default pattern directly).
     bootstrap.Modal.getOrCreateInstance(document.getElementById("testModal")).show();
-    if (!testPatternsLoaded) {
-      testPatternsLoaded = true;
+    {
+      // Rebuilt on every open: pins added or removed from the media tile menu
+      // since the last open must show up without a page reload.
       var grid = document.getElementById("test-pattern-grid");
       var custom = document.getElementById("test-custom-grid");
       fetch("/api/testpatterns").then(function (r) { return r.json(); }).then(function (data) {
+        grid.replaceChildren();
+        custom.replaceChildren();
+        var ov = document.getElementById("testOverlay");
+        ov.checked = !!data.overlay;
+        ov.onchange = function () {
+          fetch("/api/setting/testoverlay", {method: "POST", body: new URLSearchParams({on: ov.checked ? "1" : "0"})});
+        };
+        // The pattern on the output is marked, so the picker shows what's live.
+        function markLive(name) {
+          grid.querySelectorAll("button").forEach(function (x) {
+            var live = x.dataset.pattern === name;
+            x.classList.toggle("btn-danger", live);
+            x.classList.toggle("btn-secondary", !live);
+            x.setAttribute("aria-pressed", live ? "true" : "false");
+          });
+        }
         data.builtin.forEach(function (p) {
           var b = document.createElement("button");
-          b.type = "button"; b.className = "btn ftl-btn-sm ftl-btn-secondary";
+          b.type = "button"; b.className = "btn btn-sm btn-secondary";
           b.textContent = p.label;
+          b.dataset.pattern = p.name;
           b.onclick = function () {
             htmx.ajax("POST", "/api/test/" + encodeURIComponent(p.name), {swap: "none"});
             if (window.setTestPressed) setTestPressed(true);
+            markLive(p.name);
           };
           grid.appendChild(b);
         });
+        markLive(data.showing ? data.current : "");
         (data.custom || []).forEach(function (name) {
           var b = document.createElement("button");
-          b.type = "button"; b.className = "btn ftl-btn-sm ftl-btn-secondary";
+          b.type = "button"; b.className = "btn btn-sm btn-secondary";
           b.textContent = name;
           b.title = "Play this media as a test pattern";
           b.onclick = function () {
@@ -62,7 +85,7 @@
           };
           custom.appendChild(b);
         });
-        if (!(data.custom || []).length) custom.hidden = true;
+        custom.hidden = !(data.custom || []).length;
       });
     }
   });

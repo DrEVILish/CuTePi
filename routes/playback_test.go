@@ -92,12 +92,13 @@ func TestTestToggleAndPatterns(t *testing.T) {
 		t.Fatalf("GET /api/testpatterns = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{`smpte`, `circular`, `solid-color`, `pinwheel`, `checkers-8`, `zone-plate`} {
+	for _, want := range []string{`smpte`, `smpte100`, `snow`, `circular`, `solid-color`, `checkers-8`, `blink`, `bar`} {
 		if !contains(body, `"`+want+`"`) {
 			t.Errorf("testpatterns missing %q", want)
 		}
 	}
-	for _, bad := range []string{`smpte-rp-219`, `"circle"`, `"solid"`} {
+	// Curated set (§12.10): the rest of the videotestsrc enum stays out.
+	for _, bad := range []string{`smpte-rp-219`, `"circle"`, `"solid"`, `"pinwheel"`, `"zone-plate"`, `"smpte75"`} {
 		if contains(body, bad) {
 			t.Errorf("testpatterns still carries invalid nick %s", bad)
 		}
@@ -236,6 +237,48 @@ func TestImageBlankDurationHolds(t *testing.T) {
 	time.Sleep(2500 * time.Millisecond)
 	if got := gsp.CurrentPlaying(); got != "hold-e2e.png" {
 		t.Fatalf("CurrentPlaying = %q after 2.5 s, want the held still", got)
+	}
+}
+
+// Direct play (custom test patterns, tile "Play") of a still holds the frame
+// until Stop, like a blank-duration cue.
+func TestDirectPlayImageHolds(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available; cannot build an image fixture")
+	}
+	if _, err := exec.LookPath("gst-launch-1.0"); err != nil {
+		t.Skip("gst-launch-1.0 not available; skipping live image test")
+	}
+	t.Setenv("CUTEPI_WALL_SINK", "fakesink")
+	r := setupTestServer(t)
+
+	fix := filepath.Join(t.TempDir(), "direct-hold-e2e.png")
+	if err := exec.Command("ffmpeg", "-v", "error",
+		"-f", "lavfi", "-i", "color=c=0x1a3a5c:size=640x360:rate=10",
+		"-frames:v", "1", fix).Run(); err != nil {
+		t.Skipf("ffmpeg fixture failed: %v", err)
+	}
+	raw, err := os.ReadFile(fix)
+	if err != nil {
+		t.Fatalf("ReadFile fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(config.MediaLocation(), "direct-hold-e2e.png"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile media: %v", err)
+	}
+	if err := ctp.RegisterMedia("direct-hold-e2e.png", int64(len(raw)), media.Metadata{
+		Mimetype: "image/png", Resolution: "640x360", Codec: "png",
+	}, "direct-hold-e2e.png"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	defer del(t, r, "/api/media/direct-hold-e2e.png")
+	defer gsp.Stop()
+
+	if w := post(t, r, "/api/play/direct-hold-e2e.png"); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/play = %d: %s", w.Code, w.Body.String())
+	}
+	time.Sleep(2 * time.Second)
+	if got := gsp.CurrentPlaying(); got != "direct-hold-e2e.png" {
+		t.Fatalf("CurrentPlaying = %q after 2 s, want the held still", got)
 	}
 }
 

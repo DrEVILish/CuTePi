@@ -4,16 +4,39 @@ package media
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// Tool timeouts. A malformed or adversarial file can hang ffprobe/ffmpeg;
+// without a bound that pins an upload request forever, or the single
+// background worker (and with it every later thumbnail). Full-file analysis
+// scales with duration, so it gets a generous budget; the rest are short.
+var (
+	ProbeTimeout     = 30 * time.Second
+	VerifyTimeout    = 60 * time.Second
+	ThumbnailTimeout = 60 * time.Second
+	AnalysisTimeout  = 15 * time.Minute // loudness + full waveform
+	WindowTimeout    = 30 * time.Second // one on-demand waveform window (HTTP)
+)
+
+// toolCmd builds a subprocess killed after timeout. WaitDelay bounds Wait
+// even if the killed tool leaves an inherited pipe open. The caller must
+// call cancel once the command has finished.
+func toolCmd(timeout time.Duration, name string, args ...string) (*exec.Cmd, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 2 * time.Second
+	return cmd, cancel
+}
 
 // Kind classifies a media file for thumbnailing/UI purposes.
 type Kind string
@@ -99,6 +122,7 @@ type MediaInfo struct {
 	Duration       float64
 	Video          *MediaVideoInfo
 	Audio          *MediaAudioInfo
+	Reprobed       bool // set once the Media tab re-probed a stream-less entry, so silent files are not probed on every open
 }
 
 // ratio parses a "num/den" or plain number string (0 if unparseable).
@@ -138,10 +162,12 @@ func num(s string) int {
 	return v
 }
 
-// Probe runs ffprobe on path and extracts duration, resolution, and codec.// It returns an error if ffprobe fails or if duration/codec can't be
+// Probe runs ffprobe on path and extracts duration, resolution, and codec.
+// It returns an error if ffprobe fails or if duration/codec can't be
 // determined - callers should treat that as a failed import per spec.
 func Probe(path string) (Metadata, error) {
-	cmd := exec.Command("ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path)
+	cmd, cancel := toolCmd(ProbeTimeout, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path)
+	defer cancel()
 	out, err := cmd.Output()
 	if err != nil {
 		return Metadata{}, fmt.Errorf("media: ffprobe failed for %q: %w", path, err)
@@ -246,8 +272,9 @@ func Probe(path string) (Metadata, error) {
 // MeasureLoudness measures the whole first audio stream using EBU R128.
 // Store a static gain towards -23 LUFS, limited to -1 dBTP headroom.
 func MeasureLoudness(path string) (float64, error) {
-	cmd := exec.Command("ffmpeg", "-hide_banner", "-nostats", "-nostdin", "-i", path,
+	cmd, cancel := toolCmd(AnalysisTimeout, "ffmpeg", "-hide_banner", "-nostats", "-nostdin", "-i", path,
 		"-map", "0:a:0", "-af", "loudnorm=I=-23:TP=-1:LRA=7:print_format=json", "-f", "null", "-")
+	defer cancel()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("media: loudness measurement: %w", err)
@@ -276,7 +303,8 @@ func MeasureLoudness(path string) (float64, error) {
 // decodes just enough data to prove the pipeline could play, without writing
 // output (-f null discards it). Verified only for video/audio.
 func VerifyPlayable(path string) error {
-	cmd := exec.Command("ffmpeg", "-v", "error", "-i", path, "-t", "1", "-f", "null", "-")
+	cmd, cancel := toolCmd(VerifyTimeout, "ffmpeg", "-v", "error", "-nostdin", "-i", path, "-t", "1", "-f", "null", "-")
+	defer cancel()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("media: playability probe failed for %q: %w: %s", path, err, out)
 	}
@@ -316,22 +344,24 @@ func GenerateThumbnail(srcPath string, kind Kind, duration float64, outPath stri
 	// otherwise take directly.
 	const scaleFilter = "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2:color=black,format=yuvj420p"
 
-	var cmd *exec.Cmd
+	var args []string
 	switch kind {
 	case KindVideo:
 		seek := thumbnailSeek(duration)
-		cmd = exec.Command("ffmpeg", "-y", "-ss", fmt.Sprintf("%f", seek), "-i", srcPath, "-frames:v", "1", "-vf", scaleFilter, outPath)
+		args = []string{"-y", "-nostdin", "-ss", fmt.Sprintf("%f", seek), "-i", srcPath, "-frames:v", "1", "-vf", scaleFilter, outPath}
 	case KindImage:
-		cmd = exec.Command("ffmpeg", "-y", "-i", srcPath, "-frames:v", "1", "-vf", scaleFilter, outPath)
+		args = []string{"-y", "-nostdin", "-i", srcPath, "-frames:v", "1", "-vf", scaleFilter, outPath}
 	case KindAudio:
 		// Wave fills the 640px width; silent stretches would otherwise be
 		// indistinguishable from background, so a thin centre line runs the
 		// full width under the envelope.
-		cmd = exec.Command("ffmpeg", "-y", "-i", srcPath, "-filter_complex",
-			"showwavespic=s=640x360:colors=#a855f7,drawbox=y=(ih/2)-1:w=iw:h=2:color=#6b2fa0:t=fill,format=yuvj420p", "-frames:v", "1", outPath)
+		args = []string{"-y", "-nostdin", "-i", srcPath, "-filter_complex",
+			"showwavespic=s=640x360:colors=#a855f7,drawbox=y=(ih/2)-1:w=iw:h=2:color=#6b2fa0:t=fill,format=yuvj420p", "-frames:v", "1", outPath}
 	default:
 		return fmt.Errorf("media: unknown kind %q for %q", kind, srcPath)
 	}
+	cmd, cancel := toolCmd(ThumbnailTimeout, "ffmpeg", args...)
+	defer cancel()
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("media: ffmpeg thumbnail generation failed for %q: %w: %s", srcPath, err, out)
@@ -350,20 +380,12 @@ func GeneratePeaks(srcPath string) ([]float64, error) {
 	// fixed coarse envelope. Long files are capped to keep the stored (and
 	// per-inspector-render) JSON payload small.
 	const peakBucketsCap = MaxWaveformBins
-	cmd := exec.Command("ffmpeg", "-v", "error", "-i", srcPath,
+	cmd, cancel := toolCmd(AnalysisTimeout, "ffmpeg", "-v", "error", "-nostdin", "-i", srcPath,
 		"-vn", "-ac", "1", "-ar", "100", "-f", "f32le", "-")
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("media: opening sample stream for %q: %w", srcPath, err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("media: starting analysis for %q: %w", srcPath, err)
-	}
+	defer cancel()
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, out); err != nil {
-		return nil, fmt.Errorf("media: reading samples for %q: %w", srcPath, err)
-	}
-	if err := cmd.Wait(); err != nil {
+	cmd.Stdout = &buf
+	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("media: waveform analysis failed for %q: %w", srcPath, err)
 	}
 
@@ -403,21 +425,13 @@ func GeneratePeaksWindow(srcPath string, from, to float64, bins int) ([]float64,
 	if rate > 1000 {
 		rate = 1000
 	}
-	cmd := exec.Command("ffmpeg", "-v", "error", "-ss", fmt.Sprintf("%.3f", from),
+	cmd, cancel := toolCmd(WindowTimeout, "ffmpeg", "-v", "error", "-nostdin", "-ss", fmt.Sprintf("%.3f", from),
 		"-i", srcPath, "-t", fmt.Sprintf("%.3f", to-from),
 		"-vn", "-ac", "1", "-ar", strconv.Itoa(rate), "-f", "f32le", "-")
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("media: opening sample stream for %q: %w", srcPath, err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("media: starting window analysis for %q: %w", srcPath, err)
-	}
+	defer cancel()
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, out); err != nil {
-		return nil, fmt.Errorf("media: reading window samples for %q: %w", srcPath, err)
-	}
-	if err := cmd.Wait(); err != nil {
+	cmd.Stdout = &buf
+	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("media: window analysis failed for %q: %w", srcPath, err)
 	}
 	return samplesToPeaks(buf.Bytes(), bins), nil

@@ -48,7 +48,7 @@ body.upload-body {
 }
 
 /* bg-dark's Bootstrap rule is !important and would beat a shared theme's
-   .ftl-app-bar background, so the utility is gone from the topbar markup
+   .app-bar background, so the utility is gone from the topbar markup
    and the identical colour lives here at zero specificity instead. */
 :where(.app-shell) > :where(nav.navbar) {
   background-color: #212529;
@@ -79,7 +79,7 @@ body.upload-body {
 
 /* The bar is theme-painted; its furniture must read in the theme's bar
    foreground, not the app's page-muted token (windows95: grey-on-navy). */
-html[data-theme-id^="ftl:"] .ftl-app-bar :is(.topbar-clock, .ws-status, .text-muted) {
+html[data-theme-id^="ftl:"] .app-bar :is(.topbar-clock, .ws-status, .text-muted) {
   color: inherit;
 }
 /* What GO fires: bordered box so a cue colour can frame it (inline
@@ -194,7 +194,7 @@ html[data-theme-id^="ftl:"] .ftl-app-bar :is(.topbar-clock, .ws-status, .text-mu
   align-self: center;
 }
 
-.app-content > .row {
+.app-content > .app-main-row {
   height: 100%;
 }
 
@@ -393,7 +393,7 @@ tr.cue-drop-indicator.cue-drop-in td {
 .cueinspector-body {
   min-height: 100%;
 }
-.inspector-tabs .ftl-tab {
+.inspector-tabs .tab {
   padding: 0.15rem 0.8rem;
   font-size: 0.85rem;
 }
@@ -709,14 +709,14 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
   flex-direction: column;
 }
 
-/* Hidden by default (empty aside); a shared theme's own .ftl-app-rail rule,
+/* Hidden by default (empty aside); a shared theme's own .app-rail rule,
    which loads later at equal specificity, turns the rail on. */
-.ftl-app-rail {
+.app-rail {
   display: none;
 }
 
 /* The footer's own id-level background/border must not out-rank a shared
-   theme's .ftl-app-status styling: :where() drops it to zero specificity
+   theme's .app-status styling: :where() drops it to zero specificity
    while rendering identically under this app's own themes. */
 :where(#app-footer) {
   flex: 0 0 auto;
@@ -724,14 +724,14 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
   background-color: var(--ctp-surface, #07172a);
   overflow-x: auto;
   /* replaces the px-2/py-1 utilities (those are !important and would beat a
-     shared theme's .ftl-app-status padding) */
+     shared theme's .app-status padding) */
   padding: 0.25rem 0.5rem;
 }
 
-/* Settings modal: the .ftl-field wrappers in the markup give a shared theme
+/* Settings modal: the .field wrappers in the markup give a shared theme
    control of field spacing; under this app's own themes (no ftl stylesheet
    linked) they carry the same 1rem rhythm the old .mt-3 label margins did. */
-:where(.modal-body) :where(.ftl-field) {
+:where(.modal-body) :where(.field) {
   margin-top: 0;
   margin-bottom: 1rem;
 }
@@ -826,11 +826,11 @@ body.show-mode #app-footer #mediapool-toggle {
   .mode-switch .mode-knob::after { transition: none; }
 }
 
-/* ftl-themes icon pack fallback: the glyph styling lives in ftl-core.css
+/* ftl-themes icon pack fallback: the glyph styling lives in core.css
    (linked only under shared themes). Without it — an app: theme — an
-   <svg class="ftl-icon"> would render as invisible bare paths, so own the
+   <svg class="icon"> would render as invisible bare paths, so own the
    same defaults here; the bundle's later rules win under ftl: themes. */
-.ftl-icon {
+.icon {
   width: 1.2em; height: 1.2em;
   fill: none; stroke: currentColor; stroke-width: 2;
   stroke-linecap: round; stroke-linejoin: round;
@@ -840,17 +840,90 @@ body.show-mode #app-footer #mediapool-toggle {
 /* Icons inside buttons sit on the text baseline like the font glyphs they
    replaced — otherwise an svg-only button renders with a stray tall line
    box and the glyph drifts out of the padding box. */
-.btn .ftl-icon, .ftl-btn .ftl-icon {
+.btn .icon, .btn .icon {
   width: 1em; height: 1em; min-width: 1em;
   vertical-align: -0.125em;
 }
 
-/* Settings sheet: the plate the six panes share gets one min-height equal
-   to the tallest pane, so switching tabs never resizes the modal. */
-.settings-panes {
-  min-height: 21rem;
-}
 .settings-tabs {
   font-size: 0.95rem;
-  min-width: 7.5rem;
 }
+
+/* Tests toggle while a pattern is on the output: impossible to miss. */
+#showTestBtn.test-live {
+  font-weight: 700;
+  animation: test-live-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes test-live-pulse {
+  from { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.9); }
+  to { box-shadow: 0 0 0 5px rgba(220, 53, 69, 0.15); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #showTestBtn.test-live { animation: none; outline: 2px solid #fff; }
+}
+
+/* ── Settings window ─────────────────────────────────────────────────────
+   Fixed size whatever the tab: a compact title bar, the tab rail on the left,
+   only the pane scrolls, Cancel / Save always in view. */
+#settingsModal .settings-dialog { max-width: min(820px, calc(100vw - 16px)); }
+#settingsModal .modal-content {
+  height: min(640px, calc(100vh - 32px));
+}
+#settingsModal .settings-form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#settingsModal .settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  padding: 0 !important;
+  overflow: hidden;
+}
+#settingsModal .settings-tabs {
+  flex: 0 0 9.5rem;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 2px;
+  padding: 0.75rem 0.5rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--bs-border-color, rgba(255, 255, 255, 0.12));
+}
+#settingsModal .settings-tabs .tab { text-align: left; white-space: nowrap; }
+#settingsModal .settings-panes { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 0.75rem 1rem 1rem; }
+#settingsModal .settings-heading { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
+#settingsModal .settings-subheading {
+  font-size: 0.9rem; font-weight: 600; margin: 1.25rem 0 0.5rem; padding-top: 0.75rem;
+  border-top: 1px solid var(--bs-border-color, rgba(255, 255, 255, 0.12));
+}
+#settingsModal .field { margin-bottom: 0.9rem; }
+#settingsModal .field-hint { font-size: 0.8rem; margin-top: 0.2rem; }
+#settingsModal .settings-short { max-width: 9rem; }
+#settingsModal .settings-value { font-variant-numeric: tabular-nums; }
+#settingsModal .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); column-gap: 1rem; }
+/* Checkbox rows: box and label on one line, the hint under the label. */
+#settingsModal .settings-check { display: grid; grid-template-columns: auto 1fr; column-gap: 0.5rem; align-items: start; padding-left: 0; }
+#settingsModal .settings-check .checkbox { float: none; margin: 0.2rem 0 0; }
+#settingsModal .settings-check .field-hint { grid-column: 2; }
+#settingsModal .settings-remote-table { margin-bottom: 0.75rem; }
+#settingsModal .settings-remote-table td, #settingsModal .settings-remote-table th { vertical-align: middle; }
+#settingsModal .settings-warning { margin: -0.25rem 0 0.5rem; }
+#settingsModal .settings-footer { flex: 0 0 auto; gap: 0.5rem; }
+#settingsModal .settings-status { margin-right: auto; font-size: 0.85rem; }
+@media (max-width: 600px) {
+  #settingsModal .modal-content { height: calc(100vh - 16px); }
+  #settingsModal .settings-body { flex-direction: column; }
+  #settingsModal .settings-tabs {
+    flex: 0 0 auto; flex-direction: row; overflow-x: auto; overflow-y: hidden;
+    border-right: 0; border-bottom: 1px solid var(--bs-border-color, rgba(255, 255, 255, 0.12));
+  }
+}
+#settingsModal .settings-value { margin-right: 0.5rem; }
+
+/* Group inspector columns (were Bootstrap grid .col). */
+.group-col { flex: 1 1 12rem; min-width: 0; }
+
+/* ftl-themes v4 `.row` is a flex row; Bootstrap (lower layer) still adds its
+   grid gutters and forces every child of a .row to 100% width. CuTePi uses
+   `.row` only as the library's flex row, so the grid parts are switched off. */
+.row { --bs-gutter-x: 0; --bs-gutter-y: 0; margin-left: 0; margin-right: 0; margin-top: 0; }
+.row > * { flex-shrink: 1; width: auto; max-width: none; padding-left: 0; padding-right: 0; margin-top: 0; }
+#settingsModal .settings-about { margin-bottom: 0.75rem; } #settingsModal .settings-about .cutepi-logo { height: 28px; width: auto; }

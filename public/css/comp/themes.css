@@ -1,39 +1,26 @@
-/* Theme system base layer: default --ctp-* tokens plus the shared component
- * styles that read them. Per-theme palettes and flourishes live in
- * public/css/themes/<name>.css (one portable file per theme, discovered by
- * routes.Themes and linked from header.html) — nothing theme-specific
- * belongs in this file. The theme is selected by html[data-theme=...] set
- * in header.html before paint and toggled live by settingsModal / ui.js. */
-
-/* === Future SciFi Blue (default) ======================================= *
- * Deep-space navy with cyan/blue neon accents and a soft glow.
- *
- * ftl-themes bridge: each token reads the shared library's equivalent and
- * falls back to the value it has always had. The app's own theme files
- * (public/css/themes/*.css) set --ctp-* under html[data-theme=...], which
- * outranks this :root block, so they keep exact control and render
- * identically to before. A shared ftl-themes bundle sets only --ftl-*, so
- * these fallbacks resolve to its palette instead and every rule below —
- * plus cuesheet.css, layout.css and mediapool.css — re-colours with no
- * markup change. The "custom" theme still wins over both: it writes
- * --ctp-* under :root[data-theme=custom].                               */
+/* Theme bridge: CuTePi's --ctp-* tokens read the active ftl-themes bundle's
+ * tokens (v4: bare names such as --bg, --text, --accent) and fall back to the
+ * app's own dark palette when no bundle is loaded. Every component rule in
+ * cuesheet.css, layout.css and mediapool.css reads --ctp-*, so any theme
+ * re-colours the whole app with no markup change. Themes come only from
+ * ftl-themes (third_party/ftl-themes); nothing theme-specific belongs here. */
 :root {
-  --ctp-bg: var(--ftl-bg, #020b16);
-  --ctp-surface: var(--ftl-surface, #07172a);
-  --ctp-surface-2: var(--ftl-surface-2, #0d2440);
-  --ctp-border: var(--ftl-border, #176095);
-  --ctp-text: var(--ftl-text, #dff4ff);
-  --ctp-muted: var(--ftl-muted, #7ca6c3);
-  --ctp-accent: var(--ftl-accent, #2fd6ff);
-  --ctp-accent-2: var(--ftl-accent-2, #4d7dff);
-  --ctp-danger: var(--ftl-danger, #ff5f87);
-  --ctp-success: var(--ftl-success, #42ddb2);
-  --ctp-radius: var(--ftl-radius, 0.2rem);
-  --ctp-font: var(--ftl-font, "IBM Plex Mono", "SFMono-Regular", Consolas, monospace);
+  --ctp-bg: var(--bg, #020b16);
+  --ctp-surface: var(--surface, #07172a);
+  --ctp-surface-2: var(--surface-2, #0d2440);
+  --ctp-border: var(--border, #176095);
+  --ctp-text: var(--text, #dff4ff);
+  --ctp-muted: var(--muted, #7ca6c3);
+  --ctp-accent: var(--accent, #2fd6ff);
+  --ctp-accent-2: var(--accent-2, #4d7dff);
+  --ctp-danger: var(--danger, #ff5f87);
+  --ctp-success: var(--success, #42ddb2);
+  --ctp-radius: var(--radius, 0.2rem);
+  --ctp-font: var(--font, "IBM Plex Mono", "SFMono-Regular", Consolas, monospace);
   /* Console hairlines recede; neon accents pop. Themes that don't define
      these fall back to --ctp-border / the flare default below. */
-  --ctp-hairline: var(--ftl-hairline, color-mix(in srgb, var(--ctp-border) 40%, transparent));
-  --ctp-flare: var(--ftl-flare, #d85cff);
+  --ctp-hairline: var(--hairline, color-mix(in srgb, var(--ctp-border) 40%, transparent));
+  --ctp-flare: var(--flare, #d85cff);
 }
 
 body.app-body,
@@ -44,7 +31,7 @@ body.upload-body {
 }
 
 /* No !important: these must stay overridable by a shared theme's
-   .ftl-app-bar when one is linked (Bootstrap's bg-* utility, which these
+   .app-bar when one is linked (Bootstrap's bg-* utility, which these
    !importants used to outrank, is no longer on the topbar markup). */
 .navbar {
   background: var(--ctp-surface);
@@ -368,6 +355,20 @@ html[data-theme] .btn.btn-youtube:hover {
   outline-offset: 1px;
 }
 
+/* Fade-curve glyph beside each curve picker (§12.7), drawn by the
+   inspector script from the same envelope the engine ramps. */
+.fade-curve-preview {
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.fade-curve-preview path {
+  fill: none;
+  stroke: var(--ctp-accent, currentColor);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Colour swatch chips: 12 named palette dots + "none". A radio group keeps
    keyboard/arrow navigation and the form's instant-change save working. */
 .insp-swatches {
@@ -544,28 +545,28 @@ html[data-theme] .btn.btn-youtube:hover {
 /* Button bridge (transitional): the markup carries both the bootstrap class
    and the ftl variant while Bootstrap CSS is still in the cascade. Bootstrap's
    unlayered `.btn` base (transparent bg, hairline border) outranks the
-   library's layered `.ftl-btn` rules, so the ftl token vocabulary never
+   library's layered `.btn` rules, so the ftl token vocabulary never
    reaches the paint. Own the same tokens unlayered here — under a ftl bundle
    these resolve to the theme's palette; under an app: theme they hit the
    achromatic fallbacks. Drop together with the Bootstrap cascade. */
-.btn[class*="ftl-btn"] {
-  background: var(--ftl-btn-bg, var(--ftl-surface-2));
-  color: var(--ftl-btn-fg, var(--ftl-text));
-  border: var(--ftl-btn-border-width, 1px) solid var(--ftl-btn-border, var(--ftl-border));
-  border-radius: var(--ftl-btn-radius, var(--ftl-radius));
-  padding: var(--ftl-btn-padding, calc(0.5em * var(--ftl-density, 1)) calc(1.1em * var(--ftl-density, 1)));
-  font-weight: var(--ftl-btn-weight, 400);
-  letter-spacing: var(--ftl-btn-tracking, normal);
+.btn[class*="btn"] {
+  background: var(--btn-bg, var(--surface-2));
+  color: var(--btn-fg, var(--text));
+  border: var(--btn-border-width, 1px) solid var(--btn-border, var(--border));
+  border-radius: var(--btn-radius, var(--radius));
+  padding: var(--btn-padding, calc(0.5em * var(--density, 1)) calc(1.1em * var(--density, 1)));
+  font-weight: var(--btn-weight, 400);
+  letter-spacing: var(--btn-tracking, normal);
 }
-.btn[class*="ftl-btn"]:hover {
-  background: var(--ftl-btn-bg-hover, color-mix(in srgb, var(--ftl-btn-bg, var(--ftl-surface-2)) 82%, var(--ftl-text)));
+.btn[class*="btn"]:hover {
+  background: var(--btn-bg-hover, color-mix(in srgb, var(--btn-bg, var(--surface-2)) 82%, var(--text)));
 }
-.btn[class*="ftl-btn-primary"] { --ftl-btn-bg: var(--ftl-accent); --ftl-btn-fg: var(--ftl-on-accent, var(--ftl-bg, #000)); --ftl-btn-border: var(--ftl-accent); --ftl-btn-weight: 600; }
-.btn[class*="ftl-btn-secondary"] { --ftl-btn-bg: transparent; --ftl-btn-fg: var(--ftl-accent); }
-.btn[class*="ftl-btn-danger"] { --ftl-btn-bg: var(--ftl-danger); --ftl-btn-fg: var(--ftl-on-danger, #fff); }
-.btn[class*="ftl-btn-success"] { --ftl-btn-bg: var(--ftl-success); --ftl-btn-fg: var(--ftl-on-success, #06231a); }
-.btn[class*="ftl-btn-ghost"] { --ftl-btn-bg: transparent; --ftl-btn-fg: var(--ftl-accent); --ftl-btn-border: transparent; }
-.btn[class*="ftl-btn-sm"] { padding: 0.3em 0.7em; font-size: 0.9em; }
+.btn[class*="btn-primary"] { --btn-bg: var(--accent); --btn-fg: var(--on-accent, var(--bg, #000)); --btn-border: var(--accent); --btn-weight: 600; }
+.btn[class*="btn-secondary"] { --btn-bg: transparent; --btn-fg: var(--accent); }
+.btn[class*="btn-danger"] { --btn-bg: var(--danger); --btn-fg: var(--on-danger, #fff); }
+.btn[class*="btn-success"] { --btn-bg: var(--success); --btn-fg: var(--on-success, #06231a); }
+.btn[class*="btn-ghost"] { --btn-bg: transparent; --btn-fg: var(--accent); --btn-border: transparent; }
+.btn[class*="btn-sm"] { padding: 0.3em 0.7em; font-size: 0.9em; }
 
 /* Same bridge for the alert/table/field hybrids the templates carry until
    the component cutover finishes. */

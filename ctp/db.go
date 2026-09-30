@@ -188,6 +188,15 @@ func InitDB() error {
 		{"schedule_days", "INTEGER NOT NULL DEFAULT 0"},
 		{"schedule_time_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"sheet_index", "REAL NOT NULL DEFAULT 0"},
+		{"opacity", "REAL NOT NULL DEFAULT 100"},
+		{"geom_x", "TEXT NOT NULL DEFAULT ''"},
+		{"geom_y", "TEXT NOT NULL DEFAULT ''"},
+		{"geom_w", "TEXT NOT NULL DEFAULT ''"},
+		{"geom_h", "TEXT NOT NULL DEFAULT ''"},
+		{"crop_l", "TEXT NOT NULL DEFAULT ''"},
+		{"crop_r", "TEXT NOT NULL DEFAULT ''"},
+		{"crop_t", "TEXT NOT NULL DEFAULT ''"},
+		{"crop_b", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, nc := range newCols {
 		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE cuesheet ADD COLUMN %s %s;`, nc.name, nc.ddl))

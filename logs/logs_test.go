@@ -15,7 +15,7 @@ func allCodes() []string {
 		RTEClear, RTEStop, RTETest, RTEDirect, RTELoad,
 		RTEAddCue, RTEDelete, RTEDeleteBusy, RTECueNext, RTECuePrev, RTECuePlay,
 		RTEUp, RTEDown, RTEUse, RTEEdit, RTEUpdate, RTERemove,
-		RTERestart, RTEShutdown,
+		RTERestart, RTEShutdown, RTEHostRefused,
 		YDLRequest, YDLResolve, YDLDownload, YDLProbe, YDLRegister, YDLRender, YDLFailed,
 		NETListErr,
 		AUDAudit,

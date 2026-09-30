@@ -1,13 +1,13 @@
 /* =====================================================================
    CUESHEET STYLESHEET — one component file, labelled sections:
      1 STRUCTURE  table, columns, sticky header, filler
-     2 ROW BASE   .row — everything cue rows and group headers share
+     2 ROW BASE   .sheet-row — everything cue rows and group headers share
      3 KINDS      .cue / .cuegroup — how the two row kinds differ
      4 FOLDER BOX span outlines drawn per open group
      5 STATES     selection, playing, drag-and-drop
      6 WIDGETS    GO bar, glyphs, pills, overlays, context menu
-   Contract: .row owns what both kinds share; kind rules may not restyle
-   what .row already owns. States sit on .row so both kinds pick them up.
+   Contract: .sheet-row owns what both kinds share; kind rules may not restyle
+   what .sheet-row already owns. States sit on .sheet-row so both kinds pick them up.
    Colour: theme custom properties only, with hard fallbacks.
    ===================================================================== */
 
@@ -121,21 +121,22 @@
 /* ------------------------------------------------------------------ */
 /* 2 ROW BASE — shared by .cue and .cuegroup                          */
 /* ------------------------------------------------------------------ */
-/* `.row` collides with Bootstrap's grid class (display:flex on the tr):
-   neutralize it back to a table row before styling the shared bits. */
-#cuesheet tr.row {
+/* Keep the sheet rows plain table rows whatever a framework or theme does
+   to generic row classes (the class used to be `.row`, which Bootstrap and
+   ftl-themes v4 both style as a flex container). */
+#cuesheet tr.sheet-row {
   display: table-row;
   margin-left: 0;
   margin-right: 0;
   --bs-gutter-x: 0;
 }
-#cuesheet tr.row td,
-#cuesheet tr.row th {
+#cuesheet tr.sheet-row td,
+#cuesheet tr.sheet-row th {
   padding-top: 0.1rem;
   padding-bottom: 0.1rem;
   font-size: 0.85rem;
 }
-#cuesheet tr.row td:hover {
+#cuesheet tr.sheet-row td:hover {
   cursor: default;
 }
 /* Per-row colour accent: a left bar + a soft tint in the row's colour.
@@ -143,15 +144,15 @@
    must stay UNDEFINED (not "transparent") on plain rows, or the var()
    fallbacks below would be dead. Beats Bootstrap's table-dark/tinted
    accent box-shadow (which paints OVER our tint on odd rows). */
-#cuesheet tr.row {
+#cuesheet tr.sheet-row {
   border-left: 3px solid var(--cue-accent, transparent);
 }
-#cuesheet tr.row td {
+#cuesheet tr.sheet-row td {
   --bs-table-accent-bg: transparent;
   background-color: color-mix(in srgb, var(--cue-accent, transparent) 30%, transparent) !important;
   box-shadow: inset 0 0 0 9999px transparent !important;
 }
-#cuesheet tr.row .cue-name {
+#cuesheet tr.sheet-row .cue-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -164,7 +165,7 @@
    at the same base for top-level cues AND top-level group headers, and
    each nesting level steps in uniformly. A group's chevron hangs LEFT
    of its name text (absolute, inside the box), so names stay flush. */
-#cuesheet tr.row > td.cue-name {
+#cuesheet tr.sheet-row > td.cue-name {
   padding-left: calc(1.5rem + var(--depth, 0) * 1.1rem);
 }
 .cue-group-header > td.cue-name {
@@ -253,7 +254,7 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* 5 STATES (on .row — both kinds pick them up)                       */
+/* 5 STATES (on .sheet-row — both kinds pick them up)                       */
 /* ------------------------------------------------------------------ */
 /* Selected row (anchor or multi-selection member): tinted with the
    PRIMARY theme accent, not the row's own colour accent — selection is
@@ -261,7 +262,7 @@
    ring is painted as per-cell inset box-shadows IN THE SAME declaration
    as the 9999px stripe-kill shadow (an outline on the <tr> renders as
    random partial segments in Chromium). */
-#cuesheet tr.row.table-warning > td {
+#cuesheet tr.sheet-row.table-warning > td {
   --bs-table-accent-bg: transparent;
   background-color: color-mix(in srgb, var(--ctp-accent, #2fd6ff) 55%, var(--ctp-surface, #3c3c50)) !important;
   box-shadow:
@@ -270,13 +271,13 @@
     inset 0 0 0 9999px transparent !important;
   color: var(--ctp-text, #fff) !important;
 }
-#cuesheet tr.row.table-warning > td:first-child {
+#cuesheet tr.sheet-row.table-warning > td:first-child {
   box-shadow:
     inset 2px 2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
     inset 0 -2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
     inset 0 0 0 9999px transparent !important;
 }
-#cuesheet tr.row.table-warning > td:last-child {
+#cuesheet tr.sheet-row.table-warning > td:last-child {
   box-shadow:
     inset 0 2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
     inset -2px -2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
@@ -297,7 +298,7 @@
 }
 
 /* Drag-and-drop feedback (§5.4). */
-#cuesheet tr.row.dragging {
+#cuesheet tr.sheet-row.dragging {
   opacity: 0.4;
   outline: 2px dashed var(--ctp-accent-2, #d85cff);
   outline-offset: -2px;
@@ -334,7 +335,7 @@
 }
 .btn-go {
   /* Layout shell only: the paint (background, border, colour, shadow,
-     type) comes from the ftl-btn-go token vocabulary, so the GO button
+     type) comes from the btn-go token vocabulary, so the GO button
      takes each theme's primary look (e.g. winxp-luna's Start-button
      green). Do not re-add paint here or themes stop owning GO. */
   display: inline-flex;
@@ -390,8 +391,26 @@
 
 /* Progress overlay lives INSIDE the playing cue's Duration cell: a film
    over the top of the time text, seekable (ui.js wiring is unchanged). */
-#cuesheet td.cue-dur {
+#cuesheet td.cue-dur,
+#cuesheet td.cue-wait-cell {
   position: relative;
+}
+/* Live progress sits BEHIND the numerals (§5.4): the time text stacks
+   above the fill so it stays readable while a wait or the clip runs. */
+#cuesheet td.cue-dur > .cue-inline-edit,
+#cuesheet td.cue-wait-cell > .cue-inline-edit {
+  position: relative;
+  z-index: 1;
+}
+.cue-wait-progress {
+  position: absolute;
+  left: 0.2rem;
+  right: 0.2rem;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
 }
 .cue-progress-bar {
   position: absolute;
@@ -408,7 +427,7 @@
   height: 100%;
   border-radius: 3px;
   background: linear-gradient(90deg, color-mix(in srgb, var(--ctp-flare, #d85cff) 55%, transparent), color-mix(in srgb, #e879f9 55%, transparent));
-  transition: width 0.4s linear;
+  transition: width 0.1s linear; /* paced by the 100 ms playback clock tick */
 }
 
 /* Inline edit forms replace a span inside a table cell: keep them on the
@@ -490,4 +509,11 @@
   width: 1.6em;
   height: 1.6em;
   border-radius: 4px;
+}
+
+/* A blank number or name still needs a target to double-click. */
+.cue-inline-edit:empty {
+  display: inline-block;
+  min-width: 2em;
+  min-height: 1em;
 }

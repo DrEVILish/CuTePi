@@ -1,6 +1,6 @@
 package routes
 
-// QLab remote control over OSC: QLab's standard UDP port 53000. The paths
+// QLab remote control over OSC: QLab's standard port 53000. The paths
 // are the ones QLab documents in its OSC dictionary and the ones Bitfocus's
 // QLab Companion modules actually send — workspace-scoped or rootless, so
 // both forms land on exactly the same actions the buttons do.
@@ -11,17 +11,19 @@ package routes
 
 import (
 	"encoding/binary"
+	"io"
 	"math"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	"CuTePi/ctp"
 	"CuTePi/gsp"
 	"CuTePi/logs"
 )
 
-// ListenOSC serves OSC datagrams until the process exits. No-op replies
+// ListenOSC serves OSC datagrams until the socket closes. No-op replies
 // are the norm here: controllers fire-and-forget UDP actions.
 func ListenOSC(addr string) {
 	pc, err := net.ListenPacket("udp", addr)
@@ -29,6 +31,21 @@ func ListenOSC(addr string) {
 		logs.Printf(logs.RTEDeckErr, "osc listener: %v", err)
 		return
 	}
+	serveOSC(pc)
+}
+
+// startOSC binds synchronously and serves in the background; closing the
+// returned socket stops it.
+func startOSC(addr string) (io.Closer, error) {
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+	go serveOSC(pc)
+	return pc, nil
+}
+
+func serveOSC(pc net.PacketConn) {
 	buf := make([]byte, 8192)
 	for {
 		n, from, err := pc.ReadFrom(buf)
@@ -41,38 +58,90 @@ func ListenOSC(addr string) {
 	}
 }
 
-// ListenOSCTCP serves the same OSC dictionary over TCP for controllers
-// that don't speak UDP — notably QLab Remote, which connects to TCP 53000
-// and frames packets with SLIP (RFC 1055 END-delimited). Shares the port
-// with the UDP listener (different protocol, no conflict). Replies stay
-// no-ops like the UDP half; full Remote handshake emulation (workspace /
-// cue-list replies) is a separate, larger piece of work.
+// ListenOSCTCP serves the OSC dictionary over TCP, SLIP-framed (RFC 1055
+// END-delimited) as QLab 5 does, for the controllers that want replies —
+// Companion's QLab module and QLab Remote. Every message is answered with
+// QLab's reply envelope (qlabws.go). Shares the port number with the UDP
+// listener (different protocol, no conflict).
 func ListenOSCTCP(addr string) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		logs.Printf(logs.RTEDeckErr, "osc/tcp listener: %v", err)
 		return
 	}
+	serveOSCListener(ln)
+}
+
+// startOSCTCP binds synchronously and serves in the background; closing the
+// returned closer stops the listener AND hangs up every connected client
+// (switching the listener off in Settings must actually cut control).
+func startOSCTCP(addr string) (io.Closer, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	srv := &oscTCPServer{ln: ln, conns: map[net.Conn]bool{}}
+	go srv.serve()
+	return srv, nil
+}
+
+// oscTCPServer is a running OSC/TCP listener plus its live connections.
+type oscTCPServer struct {
+	ln    net.Listener
+	mu    sync.Mutex
+	conns map[net.Conn]bool
+}
+
+func (s *oscTCPServer) serve() {
 	for {
-		conn, err := ln.Accept()
+		conn, err := s.ln.Accept()
 		if err != nil {
 			return
 		}
-		go serveOSCTCP(conn)
+		s.mu.Lock()
+		s.conns[conn] = true
+		s.mu.Unlock()
+		go func() {
+			serveOSCTCP(conn)
+			s.mu.Lock()
+			delete(s.conns, conn)
+			s.mu.Unlock()
+		}()
 	}
+}
+
+// Close stops accepting and disconnects every client.
+func (s *oscTCPServer) Close() error {
+	err := s.ln.Close()
+	s.mu.Lock()
+	for c := range s.conns {
+		_ = c.Close()
+	}
+	s.mu.Unlock()
+	return err
+}
+
+func serveOSCListener(ln net.Listener) {
+	(&oscTCPServer{ln: ln, conns: map[net.Conn]bool{}}).serve()
 }
 
 func serveOSCTCP(conn net.Conn) {
 	defer conn.Close()
+	c := &qlabClient{conn: conn}
+	qlabRegister(c)
+	defer qlabUnregister(c)
 	dec := &slipDecoder{}
 	buf := make([]byte, 8192)
 	for {
 		n, err := conn.Read(buf)
 		if n > 0 {
 			for _, pkt := range dec.feed(buf[:n]) {
-				if err := handleOSCDgram(pkt); err != nil {
-					logs.Printf(logs.RTEDeckErr, "osc/tcp %s: %v", conn.RemoteAddr(), err)
+				addr, args, derr := oscDecode(pkt)
+				if derr != nil || addr == "" {
+					logs.Printf(logs.RTEDeckErr, "osc/tcp %s: undecodable packet", conn.RemoteAddr())
+					continue
 				}
+				handleQLab(c, addr, args)
 			}
 		}
 		if err != nil {
@@ -91,9 +160,28 @@ const (
 	slipESCEsc = 0xDD
 )
 
+// slipMaxPacket caps one decoded packet. OSC commands are tiny; a peer
+// streaming bytes without ever sending END would otherwise grow buf forever.
+// An oversized packet is discarded up to its closing END.
+const slipMaxPacket = 64 << 10
+
 type slipDecoder struct {
-	buf []byte
-	esc bool
+	buf      []byte
+	esc      bool
+	overflow bool // current packet exceeded slipMaxPacket: drop until END
+}
+
+// put appends one decoded byte, tripping overflow past the cap.
+func (d *slipDecoder) put(b byte) {
+	if d.overflow {
+		return
+	}
+	if len(d.buf) >= slipMaxPacket {
+		d.overflow = true
+		d.buf = nil
+		return
+	}
+	d.buf = append(d.buf, b)
 }
 
 func (d *slipDecoder) feed(chunk []byte) [][]byte {
@@ -103,32 +191,37 @@ func (d *slipDecoder) feed(chunk []byte) [][]byte {
 		case d.esc:
 			d.esc = false
 			if b == slipESCEnd {
-				d.buf = append(d.buf, slipEND)
+				d.put(slipEND)
 			} else if b == slipESCEsc {
-				d.buf = append(d.buf, slipESC)
+				d.put(slipESC)
 			} else {
-				d.buf = append(d.buf, b)
+				d.put(b)
 			}
 		case b == slipESC:
 			d.esc = true
 		case b == slipEND:
-			if len(d.buf) > 0 {
+			if len(d.buf) > 0 && !d.overflow {
 				out = append(out, d.buf)
-				d.buf = nil
 			}
+			d.buf = nil
+			d.overflow = false
 		default:
-			d.buf = append(d.buf, b)
+			d.put(b)
 		}
 	}
 	return out
 }
 
+// handleOSCDgram runs one UDP message. UDP senders get no replies (QLab's
+// UDP mode is fire-and-forget), but the dictionary is the TCP one.
 func handleOSCDgram(data []byte) error {
 	addr, args, err := oscDecode(data)
 	if err != nil || addr == "" {
 		return err
 	}
-	command(addr, args)
+	if _, err := qlabRequest(nil, addr, args); err != nil && err != errQlabUnknown {
+		return err
+	}
 	return nil
 }
 
@@ -154,7 +247,7 @@ func oscDecode(data []byte) (string, []any, error) {
 				return "", nil, nil
 			}
 			if tags[i] == 'i' {
-				args = append(args, int(binary.BigEndian.Uint32(data)))
+				args = append(args, int(int32(binary.BigEndian.Uint32(data)))) // OSC 'i' is signed
 			} else if tags[i] == 'f' {
 				args = append(args, float64(math.Float32frombits(binary.BigEndian.Uint32(data))))
 			} else {
@@ -194,8 +287,10 @@ func oscString(b []byte) (string, int) {
 
 // command routes one rootless OSC message (workspace or cue level).
 func command(addr string, args []any) {
-	if strings.HasPrefix(addr, "/cue/") {
-		cueAction(addr, args)
+	if p := qlabPath(addr); strings.HasPrefix(p, "/cue/") || strings.HasPrefix(p, "/cue_id/") {
+		if _, err := qlabCueRequest(p, args); err != nil {
+			logs.Printf(logs.RTEDeckErr, "osc %s: %v", addr, err)
+		}
 		return
 	}
 	switch qlabPath(addr) {
@@ -203,7 +298,7 @@ func command(addr string, args []any) {
 		logs.Printf(logs.RTEDeck, "osc GO")
 		// /go {cue_number}: jump playhead to that cue, then GO.
 		if n, ok := argFloat(args, 0); ok {
-			if cue, found := cueByNum(strconv.Itoa(int(n))); found {
+			if cue, found := qlabResolve(strconv.FormatFloat(n, 'f', -1, 64)); found {
 				_ = ctp.SetCue(strconv.Itoa(cue.CuePos))
 			}
 		}
@@ -243,50 +338,6 @@ func qlabPath(addr string) string {
 		return "/" + parts[3]
 	}
 	return addr
-}
-
-// cueAction: /cue/{number}/{command}. {number} is the cue's human number as
-// operators put it on buttons (CueNum), with row position as a fallback.
-func cueAction(addr string, args []any) {
-	segments := strings.Split(strings.TrimPrefix(qlabPath(addr), "/cue/"), "/")
-	if len(segments) < 2 || segments[0] == "" {
-		return
-	}
-	num := segments[0]
-	if num == "*" || strings.Contains(num, "*") || num == "selected" || num == "playhead" {
-		return // wildcards/multi-target are not mappable onto a transport
-	}
-	cue, ok := cueByNum(num)
-	if !ok {
-		return
-	}
-	switch segments[1] {
-	case "start", "go", "load":
-		logs.Printf(logs.RTEDeck, "osc start cue %s", num)
-		if err := FireCue(strconv.Itoa(cue.CuePos)); err != nil {
-			logs.Printf(logs.RTEDeckErr, "osc start cue %s: %v", num, err)
-		}
-	case "panic", "stop":
-		// QLab's /cue/{x}/panic kills only that cue; matching CuTePi, if
-		// that specific cue is the one on the board, stop it — with a mild
-		// fade when the cue carries a fadeOut to do it with.
-		if gsp.CurrentCuePos() != cue.CuePos {
-			return
-		}
-		logs.Printf(logs.RTEDeck, "osc stop cue %s", num)
-		if cue.FadeOut > 0 {
-			gsp.FadeAndStop(cue.FadeOut)
-		} else {
-			gsp.Stop()
-		}
-	case "select":
-		logs.Printf(logs.RTEDeck, "osc select cue %s", num)
-		if err := ctp.SetCue(strconv.Itoa(cue.CuePos)); err != nil {
-			logs.Printf(logs.RTEDeckErr, "osc select cue %s: %v", num, err)
-		}
-	default:
-		// /cue/{x}/load, /formik styles and everything unspoken: ignore.
-	}
 }
 
 func argFloat(args []any, i int) (float64, bool) {

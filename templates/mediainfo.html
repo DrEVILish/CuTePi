@@ -2,12 +2,12 @@
 
 <!-- Merged header status (§5.2): GO cluster + Now Playing in one
      version-guarded partial — every render keeps both truthful. -->
-<div id="mediainfo" class="header-status">
-  <div class="go-cluster ftl-row is-items-center is-gap-xs">
-    <button type="button" id="go-btn" class="btn btn-go ftl-btn-go"
+<div id="mediainfo" class="header-status" data-test-showing="{{ if .TestShowing }}1{{ else }}0{{ end }}">
+  <div class="go-cluster row is-items-center is-gap-xs">
+    <button type="button" id="go-btn" class="btn btn-go btn-go"
       hx-post="/api/cue/selected/play" hx-target="#cuesheet" hx-swap="outerHTML"
-      title="Fire the selected cue (Space / Enter)" aria-label="GO">
-      GO<svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
+      title="Fire the selected cue (Space)" aria-label="GO">
+      GO<svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
     </button>
     <div class="go-now" {{ if not .GoHasSel }}hidden{{ end }}{{ if .GoColor }} style="border-color: {{ .GoColor }}"{{ end }}>
       <span class="go-num">{{ if .GoNum }}{{ .GoNum }}{{ else }}&mdash;{{ end }}</span>
@@ -19,14 +19,14 @@
   <div class="now-cluster text-center mx-auto">
     {{ if .Filename }}
     <div class="now-title">
-      <span class="ftl-text-muted small">NOW&nbsp;</span>
+      <span class="text-muted small">NOW&nbsp;</span>
       {{ if .PlayingCueNum }}<span class="go-num">{{ .PlayingCueNum }}</span>{{ end }}
-      <span title="{{ .PlayingCueTitle }}">{{ .PlayingCueTitle }}</span>
+      {{ $t := or .PlayingCueTitle .Filename }}<span title="{{ $t }}">{{ $t }}</span>
     </div>
-    <div class="ftl-row is-items-center is-gap-xs mt-1">
-      <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" hx-post="/api/togglePause" hx-swap="none"
-        title="Pause / resume" aria-label="Pause or resume">
-        <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-pause"/></svg>
+    <div class="row is-items-center is-gap-xs mt-1">
+      <button type="button" class="btn btn-sm {{ if .Paused }}ftl-btn-warning{{ else }}btn-secondary{{ end }}" id="pause-btn" hx-post="/api/togglePause" hx-swap="none"
+        title="{{ if .Paused }}Paused — click to resume{{ else }}Pause{{ end }}" aria-label="{{ if .Paused }}Resume{{ else }}Pause{{ end }}" aria-pressed="{{ if .Paused }}true{{ else }}false{{ end }}">
+        <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ if .Paused }}play{{ else }}pause{{ end }}"/></svg>{{ if .Paused }}&nbsp;PAUSED{{ end }}
       </button>
       <input type="range" class="ctp-slider ctp-scrubber flex-grow-1"
         id="nowplaying-scrubber" value="{{ .PositionRaw }}" min="0" max="{{ .DurationRaw }}" step="0.05"
@@ -40,78 +40,5 @@
   </div>
 </div>
 
-<script>
-  (function () {
-    var root = document.getElementById("nowplaying-scrubber");
-    if (!root) return;
-
-    var remEl = document.getElementById("now-remaining");
-    var timeEl = document.getElementById("now-time");
-    var duration = parseFloat(root.max) || 0;
-
-    function post(url, data) {
-      fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", "HX-Request": "true" },
-        body: data,
-      });
-    }
-
-    // Dead reckoning: advance the displayed clock from the last server
-    // position while playing, so the timer tracks real time instead of
-    // lagging a server round trip behind. The next server render resets
-    // the base. Skipped while scrubbing, while paused, and when the
-    // duration is unknown (held stills stay frozen, correctly).
-    var basePos = parseFloat(root.value) || 0;
-    var baseMs = Date.now();
-    var playing = root.getAttribute("data-playing") === "1";
-    function fmtClock(sec) {
-      sec = Math.max(0, sec);
-      var m = Math.floor(sec / 60), s = Math.floor(sec % 60);
-      return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
-    }
-    // Pulse the remaining time indicator based on time left.
-    var pulseTimer = setInterval(function () {
-      if (!remEl || !timeEl) return;
-      if (playing && duration > 0 && document.activeElement !== root) {
-        var live = Math.min(duration, basePos + (Date.now() - baseMs) / 1000);
-        root.value = live;
-        if (timeEl.firstChild) timeEl.firstChild.textContent = fmtClock(live) + " / -";
-      }
-      var pos = parseFloat(root.value) || 0;
-      var remSec = Math.max(0, duration - pos);
-      // Update the text (mm:ss)
-      var m = Math.floor(remSec / 60);
-      var s = Math.floor(remSec % 60);
-      remEl.textContent = (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
-      // Pulse classes
-      if (remSec <= 10 && remSec > 0) {
-        remEl.classList.add("remaining-fast");
-        remEl.classList.remove("remaining-slow");
-      } else if (remSec <= 30 && remSec > 0) {
-        remEl.classList.add("remaining-slow");
-        remEl.classList.remove("remaining-fast");
-      } else {
-        remEl.classList.remove("remaining-slow", "remaining-fast");
-      }
-    }, 500);
-
-    var scrubTimer = null;
-    root.addEventListener("input", function () {
-      var pos = parseFloat(root.value) || 0;
-      clearTimeout(scrubTimer);
-      scrubTimer = setTimeout(function () {
-        post("/api/seek", "position=" + pos);
-      }, 120);
-    });
-
-    // Cleanup on htmx swap
-    document.body.addEventListener("htmx:beforeSwap", function (e) {
-      if (e.detail.target?.id === "mediainfo") {
-        clearInterval(pulseTimer);
-      }
-    });
-  })();
-</script>
 
 {{ end }}

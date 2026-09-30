@@ -1,16 +1,16 @@
 {{ define "logsModal.html" }}
-<div class="modal fade" id="logsModal" tabindex="-1" aria-labelledby="logsModalLabel" aria-hidden="true">
+<div class="app-modal fade" id="logsModal" tabindex="-1" aria-labelledby="logsModalLabel" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
-    <div class="modal-content">
+    <div class="modal-content modal">
       <div class="modal-header">
-        <h1 class="modal-title fs-5" id="logsModalLabel">Logs</h1>
-        <div class="ftl-row is-gap-xs btn-group-sm ms-3">
-          <button type="button" class="btn ftl-btn-secondary logs-level" data-level="debug">Debug</button>
-          <button type="button" class="btn ftl-btn-secondary logs-level" data-level="info">Info</button>
-          <button type="button" class="btn ftl-btn-secondary logs-level" data-level="warn">Warning</button>
+        <span class="modal-title" id="logsModalLabel">Logs</span>
+        <div class="row is-gap-xs btn-group-sm ms-3">
+          <button type="button" class="btn btn-secondary logs-level" data-level="debug">Debug</button>
+          <button type="button" class="btn btn-secondary logs-level" data-level="info">Info</button>
+          <button type="button" class="btn btn-secondary logs-level" data-level="warn">Warning</button>
         </div>
-        <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" id="logs-clear" title="Clear the buffered log viewer records" aria-label="Clear buffered logs"><svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg></button>
-        <button type="button" class="btn ftl-btn-sm ftl-btn-secondary" id="logs-refresh" title="Refresh logs" aria-label="Refresh logs"><svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-refresh"/></svg></button>
+        <button type="button" class="btn btn-sm btn-secondary" id="logs-clear" title="Clear the buffered log viewer records" aria-label="Clear buffered logs"><svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg></button>
+        <button type="button" class="btn btn-sm btn-secondary" id="logs-refresh" title="Refresh logs" aria-label="Refresh logs"><svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-refresh"/></svg></button>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">

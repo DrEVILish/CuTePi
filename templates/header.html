@@ -9,20 +9,23 @@
     <!-- Bootstrap loads FIRST as a utility fallback: every app layer below
       wins its conflicts, so themes never depend on Bootstrap specifics and
       it can keep shrinking toward removal. Icons stay last (font only). -->
-    <link rel="stylesheet" href="/css/bootstrap@5.3.3.css?v={{ assetStamp }}">
+    <!-- Cascade order (ftl-themes v4): Bootstrap < theme (@layer ui) < this
+      app's unlayered CSS. Bootstrap shares 35 class names with the library
+      (.btn, .modal, .row, .table…); in the lower layer it only supplies what
+      the theme leaves unset. -->
+    <style>
+      @layer bootstrap, ui;
+      @import url("/css/bootstrap@5.3.3.css?v={{ assetStamp }}") layer(bootstrap);
+    </style>
     <link rel="stylesheet" href="/css/index.css?v={{ assetStamp }}">
     <link rel="stylesheet" href="/css/comp/dropzone.css?v={{ assetStamp }}">
     <link rel="stylesheet" href="/css/comp/cuesheet.css?v={{ assetStamp }}">
     <link rel="stylesheet" href="/css/comp/mediapool.css?v={{ assetStamp }}">
     <link rel="stylesheet" href="/css/comp/layout.css?v={{ assetStamp }}">
+    <link rel="stylesheet" href="/css/comp/modal.css?v={{ assetStamp }}">
     <link rel="stylesheet" href="/css/comp/themes.css?v={{ assetStamp }}">
-    <!-- Exactly ONE theme stylesheet is linked, chosen before first paint by
-      the script below. Previously every theme file was linked at once and
-      html[data-theme] picked the winner; that cannot work now that an app
-      theme and a shared ftl-themes theme can have the same data-theme name
-      (both have "blue-future"), and loading one file at a time is what the
-      ftl-themes contract requires in any case. Dropping a name.css into
-      public/css/themes still auto-discovers it (routes.Themes). -->
+    <!-- Exactly ONE ftl-themes bundle is linked (CuTePi ships no themes of
+      its own), chosen before first paint by the script below. -->
     <link id="cutepi-theme-css" rel="stylesheet">
     <!-- Icons: the ftl-themes pack serves every glyph (per-theme override
       sprites swap in under shared themes). No font file loaded. -->
@@ -39,12 +42,9 @@
           var qs = new URLSearchParams(location.search).get("theme");
           if (qs && THEMES[qs]) id = qs;
         } catch (_) {}
-        // Preferences saved before themes were shared hold a bare name
-        // ("lcars"); those have always meant an app-owned file with that name,
-        // so they
-        // migrate to the app: namespace rather than silently switching the
-        // user to the shared theme of the same name.
-        if (id.indexOf(":") === -1) id = "app:" + id;
+        // Older saved values ("lcars", "app:blue-future") map to the
+        // ftl-themes theme of the same name, or the default.
+        id = "ftl:" + String(id).split(":").pop();
         if (!THEMES[id]) id = DEFAULT_ID;
         var theme = THEMES[id].name;
         // Bootstrap's dark/light variables must follow the theme: a light

@@ -9,10 +9,11 @@
 >
   <input
     autofocus
-    class="ftl-input"
-    onblur="htmx.trigger('#updateValue', 'updateValue')"
-    onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }"
+    class="input"
+    onblur="if (window.cutepiFieldOK && !cutepiFieldOK(this)) { this.onblur = null; htmx.ajax('GET', '/api/cuesheet', {target: '#cuesheet', swap: 'outerHTML'}); return; } htmx.trigger('#updateValue', 'updateValue')"
+    onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.onblur = null; htmx.ajax('GET', '/api/cuesheet', {target: '#cuesheet', swap: 'outerHTML'}); }"
     name="val"
+    {{ with .validate }}data-validate="{{ . }}" inputmode="decimal" autocomplete="off"{{ end }}
     value="{{ .val }}"
   />
 </form>

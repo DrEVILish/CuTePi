@@ -191,3 +191,30 @@
   box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.8);
   pointer-events: none;
 }
+
+/* Floating upload progress (pool drag-and-drop, §5.7): bottom-left so it
+   never covers the transport; turns green/red on completion. */
+.upload-progress-card {
+  position: fixed;
+  left: 1rem;
+  bottom: 3.5rem;
+  z-index: 1090;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: 0.5rem 0.7rem;
+  color: var(--ctp-text, #dff4ff);
+  background: color-mix(in srgb, var(--ctp-surface-2, #0d2440) 95%, transparent);
+  border: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  border-radius: var(--ctp-radius, 0.2rem);
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.8);
+}
+.upload-progress-card progress {
+  display: block;
+  width: 100%;
+  margin-top: 0.3rem;
+}
+.upload-progress-card.is-ok { border-color: var(--ctp-success, #3ccf7a); }
+.upload-progress-card.is-error { border-color: var(--ctp-danger, #ff4d5e); }
+
+/* Header controls wrap onto a second row in a narrow pane instead of being clipped. */
+#mediapool > .row:first-child { flex-wrap: wrap; row-gap: var(--space-xs, 4px); }
+#mediapool > .row:first-child > .d-flex { flex-wrap: wrap; row-gap: var(--space-xs, 4px); }

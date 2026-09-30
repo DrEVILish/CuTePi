@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -19,6 +20,29 @@ import (
 	"CuTePi/routes"
 	"CuTePi/worker"
 )
+
+// prepareTmpDir creates <working dir>/tmp, empties it of scratch files a
+// crash left behind (half uploads, show-import extracts, yt-dlp dirs), and
+// points TMPDIR at it so Go's multipart spooling and os.CreateTemp use the
+// data disk rather than /tmp — a RAM-backed tmpfs on current Raspberry Pi
+// OS, where a multi-GB upload or show import would exhaust memory.
+func prepareTmpDir() {
+	dir := config.TmpDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("CuTePi: creating %s: %v (falling back to system temp)", dir, err)
+		return
+	}
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+				log.Printf("CuTePi: clearing stale temp %s: %v", e.Name(), err)
+			}
+		}
+	}
+	if err := os.Setenv("TMPDIR", dir); err != nil {
+		log.Printf("CuTePi: setting TMPDIR: %v", err)
+	}
+}
 
 func main() {
 	// A child spawned by /api/restart must not bind the port until the
@@ -36,6 +60,9 @@ func main() {
 	// path, etc). ctp.InitDB must run after this, not via package init(),
 	// so a config-file-specified DB path is actually honored.
 	config.LoadConfig()
+	prepareTmpDir()
+	releaseConsole := gsp.ClaimWallConsole()
+	gsp.OpenWall()
 
 	if err := ctp.InitDB(); err != nil {
 		log.Fatalf("CuTePi: failed to initialize database: %v", err)
@@ -54,11 +81,15 @@ func main() {
 
 	go worker.RunThumbnailWorker(2 * time.Second)
 	go routes.RunScheduler()
-	// Remote control: HyperDeck (TCP 9993) + QLab OSC (UDP 53000).
-	go routes.StartRemote()
+	// Remote control (§12.8): HyperDeck / OSC UDP / OSC TCP listeners, each
+	// only when enabled in Settings > Network (all off by default).
+	routes.StartRemote()
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)
+	// Cross-site guard (CSRF + DNS rebinding): runs before auth so a hostile
+	// page never gets a Basic-auth prompt or a response to read.
+	r.Use(routes.SameOrigin())
 	// Optional operator password (config.json auth_password / Settings).
 	// Applies to every route group below, including the WebSocket handshake.
 	r.Use(routes.AuthMiddleware())
@@ -110,6 +141,7 @@ func main() {
 			log.Printf("CuTePi: HTTP shutdown: %v", err)
 		}
 		gsp.Panic() // tear down the playback pipeline (stops the show cleanly)
+		releaseConsole()
 		ctp.CloseDB()
 		os.Exit(0)
 	}()

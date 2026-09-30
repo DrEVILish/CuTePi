@@ -276,4 +276,12 @@ func TestSaveConfigAtomic(t *testing.T) {
 	if len(leftovers) != 0 {
 		t.Fatalf("temp sidecars left behind: %v", leftovers)
 	}
+	// The plain-text passwords in the file must not be world-readable.
+	info, err := os.Stat(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("config.json mode %o, want 600", perm)
+	}
 }

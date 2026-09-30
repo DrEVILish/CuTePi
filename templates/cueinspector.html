@@ -1,26 +1,26 @@
 {{ define "cueinspector.html" }}
 <div id="cueinspector-body" class="cueinspector-body"{{ if hasPrefix .Cue.Mimetype "image/" }} data-no-audio-tab{{ end }}>
   {{ if not .Selected }}
-  <p class="ftl-text-muted small mb-0">Select a cue to edit its time, video, audio and colour settings.</p>
+  <p class="text-muted small mb-0">Select a cue to edit its time, video, audio and colour settings.</p>
   {{ else }}
   {{ $dur := .MediaDuration }}
   {{ if .Cue.Missing }}
-  <div class="alert alert-warning py-2 px-3 ftl-row is-items-center is-gap-xs is-wrap">
-    <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
+  <div class="alert alert-warning py-2 px-3 row is-items-center is-gap-xs is-wrap">
+    <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
     <span class="me-2">Source file missing from disk. Re-link to another media item or delete this cue.</span>
     <form class="d-inline-flex is-items-center is-gap-xs"
       hx-put="/api/cue/{{ .Cue.CuePos }}/replace" hx-target="#cueinspector-body" hx-swap="outerHTML">
-      <select name="filename" class="ftl-select w-auto" aria-label="Replacement media">
+      <select name="filename" class="select w-auto" aria-label="Replacement media">
         <option value="" selected>Replace with&hellip;</option>
         {{ range .Pool }}
         <option value="{{ .Filename }}">{{ .Filename }}</option>
         {{ end }}
       </select>
-      <button class="btn ftl-btn-sm ftl-btn-ghost" type="submit">Re-link</button>
+      <button class="btn btn-sm btn-ghost" type="submit">Re-link</button>
     </form>
     <form class="d-inline-flex"
       hx-delete="/api/cue/{{ .Cue.CuePos }}" hx-target="#cuesheet" hx-swap="outerHTML">
-      <button class="btn ftl-btn-sm ftl-btn-ghost" type="submit" title="Delete this cue">Delete cue</button>
+      <button class="btn btn-sm btn-ghost" type="submit" title="Delete this cue">Delete cue</button>
     </form>
   </div>
   {{ end }}
@@ -31,31 +31,31 @@
     hx-trigger="change delay:200ms from:'findAll input', change delay:200ms from:'findAll select', submit, ctp-save">
     <div class="inspector-tabpanes d-flex flex-column" data-active-tab="time">
       <div class="inspector-tabpane" data-tabpane="time">
-        {{ if gt $dur 0.0 }}
-        <div class="insp-time-row ftl-mt-xs">
+        {{ if not (hasPrefix .Cue.Mimetype "image/") }}
+        <div class="insp-time-row mt-xs">
           <div class="insp-time-fields">
             <div class="insp-time-field">
               <label class="insp-field-label" for="insp-in">Trim In</label>
-              <input id="insp-in" name="posStart" class="form-control form-control-sm" value="{{ formatTime .Cue.PosStart }}" placeholder="hh:mm:ss.ms">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-in" name="posStart" class="form-control form-control-sm" value="{{ formatTime .Cue.PosStart }}" placeholder="1:05, 1m5s or 65">
             </div>
             <div class="insp-time-field">
               <label class="insp-field-label" for="insp-out">Trim Out</label>
-              <input id="insp-out" name="posEnd" class="form-control form-control-sm" value="{{ formatTime .Cue.PosEnd }}" placeholder="hh:mm:ss.ms">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-out" name="posEnd" class="form-control form-control-sm" value="{{ formatTime .Cue.PosEnd }}" placeholder="1:05, 1m5s or 65">
             </div>
             <div class="insp-time-field">
               <label class="insp-field-label" for="insp-prewait">PreWait</label>
-              <input id="insp-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="hh:mm:ss.ms" title="Wait this long before the cue starts">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the cue starts">
             </div>
             <div class="insp-time-field">
               <label class="insp-field-label" for="insp-postwait">PostWait</label>
-              <input id="insp-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="hh:mm:ss.ms" title="Wait this long after the cue ends">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the cue ends">
              </div>
              <div class="insp-time-field">
                <div class="d-flex is-items-center">
                  <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
                  <label class="small" for="insp-loop">Loop</label>
-                 <input id="insp-loopcount" name="loopCount" type="number" min="0" step="1"
-                   class="ftl-input" style="width:5em"
+                 <input id="insp-loopcount" name="loopCount" type="text" inputmode="numeric" data-validate="int" data-min="0"
+                   class="input" style="width:5em"
                    value="{{ .Cue.LoopCount }}"
                    title="Loop count: 0 = infinite, N = play N times"
                    aria-label="Loop count">
@@ -70,10 +70,10 @@
               <div class="insp-time-field insp-schedule">
                 <!-- checkbox - time - day picker (bottom left) -->
                <input type="hidden" name="schedule_block" value="1">
-               <div class="ftl-row is-items-center is-gap-xs">
+               <div class="row is-items-center is-gap-xs">
                  <input class="form-check-input" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
                  <label class="small" for="insp-schedule">Schedule</label>
-                 <input id="insp-schedule-time" name="schedule_time" type="time" class="ftl-input" step="1"
+                 <input id="insp-schedule-time" name="schedule_time" type="time" class="input" step="1"
                    value="{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}"
                    aria-label="Time of day, to the second" title="Time of day, to the second">
                  <details class="day-picker" id="insp-schedule-days">
@@ -88,7 +88,8 @@
              </div>
             </div>
             <div class="insp-time-right">
-             <span class="small ftl-text-muted">For Cue Fades see the Video or Audio tab.</span>
+             <span class="small text-muted">For Cue Fades see the Video or Audio tab.</span>
+             {{ if gt $dur 0.0 }}
              <div class="trim-timeline" id="trim-timeline"
               data-filename="{{ .Cue.Filename }}"
               data-pos-start="{{ .Cue.PosStart }}"
@@ -106,25 +107,33 @@
               <span class="trim-time" id="trim-time-out"></span>
               <span class="trim-length" id="trim-length"></span>
             </div>
+            {{ else }}
+            <p class="small text-muted mb-0 insp-no-timeline">Duration unknown &mdash; the trim timeline needs a probed duration (re-run Analyse from the media pool). Trim In/Out can still be typed.</p>
+            {{ end }}
             <div class="insp-time-buttons">
-              <button class="btn ftl-btn-sm ftl-btn-secondary" type="button" id="trim-clear" title="Clear trim window">
+              {{ if gt $dur 0.0 }}
+              <button class="btn btn-sm btn-secondary" type="button" id="trim-clear" title="Clear trim window">
                 Clear trim
               </button>
-              <button class="btn ftl-btn-sm ftl-btn-secondary" type="button" id="trim-zoom" aria-pressed="false" title="Click to arm, then drag a box over the waveform to zoom into it">
+              <button class="btn btn-sm btn-secondary" type="button" id="trim-zoom" aria-pressed="false" title="Click to arm, then drag a box over the waveform to zoom into it">
                 Zoom
               </button>
-              <button class="btn ftl-btn-sm ftl-btn-secondary" type="button" id="trim-zoom-in" aria-label="Zoom in" title="Zoom in">
+              <button class="btn btn-sm btn-secondary" type="button" id="trim-zoom-in" aria-label="Zoom in" title="Zoom in">
                 +
               </button>
-              <button class="btn ftl-btn-sm ftl-btn-secondary" type="button" id="trim-zoom-out" aria-label="Zoom out" title="Zoom out">
+              <button class="btn btn-sm btn-secondary" type="button" id="trim-zoom-out" aria-label="Zoom out" title="Zoom out">
                 &minus;
               </button>
-              <button class="btn ftl-btn-sm ftl-btn-secondary" type="button" id="trim-zoom-reset" title="Show the full length">
+              <button class="btn btn-sm btn-secondary" type="button" id="trim-zoom-reset" title="Show the full length">
                 Zoom reset
               </button>
+              {{ end }}
               <div class="insp-rate">
                 <label class="insp-field-label" for="insp-rate">Rate <output id="insp-rate-value">{{ .Cue.Rate }}×</output></label>
-                <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" data-default="1" title="Playback speed (pitch preserved). Double-click to reset to 1×">
+                <div class="row is-items-center is-gap-2xs">
+                  <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" data-default="1" title="Playback speed (pitch preserved). Double-click to reset to 1×">
+                  <button class="btn btn-sm btn-secondary" type="button" data-reset-slider="insp-rate" title="Reset the playback rate to 1×" aria-label="Reset rate to 1×">1×</button>
+                </div>
               </div>
              </div>
                <div class="insp-time-checks">
@@ -132,46 +141,46 @@
                   <input class="form-check-input me-1" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
                   <label class="small" for="insp-hold">Hold last frame</label>
                 </div>
-                <div class="ftl-row is-items-center is-gap-xs">
+                <div class="row is-items-center is-gap-xs">
                   <input class="form-check-input" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
                   <label class="small" for="insp-fadestop">Fade-stop others</label>
-                  <select id="insp-fadeaction" name="fadeAction" class="ftl-select" style="width:auto" title="Which other cues fade out when this one starts">
+                  <select id="insp-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                     <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                     <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
                     <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
                   </select>
-                  <input id="insp-fadeout" name="fadeOut" class="ftl-input" style="width:4.5em"
+                  <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-fadeout" name="fadeOut" class="input" style="width:4.5em"
                     value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
-                  <select id="insp-fadecurve" name="fadeCurve" class="ftl-select" style="width:auto"
+                  <select id="insp-fadecurve" name="fadeCurve" class="select" style="width:auto"
                     title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential">
                     <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
                     <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
                     <option value="log" {{ if eq .Cue.FadeCurve "log" }}selected{{ end }}>Log</option>
                     <option value="exp" {{ if eq .Cue.FadeCurve "exp" }}selected{{ end }}>Exp</option>
                   </select>
+                  <svg class="fade-curve-preview" data-curve-for="insp-fadecurve" viewBox="0 0 40 16" width="40" height="16" aria-hidden="true"><path d="M1 15 L39 1"/></svg>
                 </div>
                </div>
             </div>
         </div>
-           </div>
-       {{ else if hasPrefix .Cue.Mimetype "image/" }}
-        <div class="insp-time-row ftl-mt-xs">
+       {{ else }}
+        <div class="insp-time-row mt-xs">
           <div class="insp-time-fields">
             <div class="insp-time-field">
               <label class="insp-field-label" for="insp-img-duration">Display duration</label>
-              <input id="insp-img-duration" name="cueDuration" class="form-control form-control-sm" value="{{ if .Cue.CueDuration }}{{ formatTime .Cue.CueDuration }}{{ end }}" placeholder="hh:mm:ss.ms" title="How long the image stays on screen (blank = indefinitely)">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-duration" name="cueDuration" class="form-control form-control-sm" value="{{ if .Cue.CueDuration }}{{ formatTime .Cue.CueDuration }}{{ end }}" placeholder="1:05, 1m5s or 65" title="How long the image stays on screen (blank = indefinitely)">
             </div>
             <div class="insp-time-field">
               <label class="insp-field-label" for="insp-img-fadein">Fade In</label>
-              <input id="insp-img-fadein" name="fadeIn" data-fade-in class="form-control form-control-sm" value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade the image in from black (seconds)">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-fadein" name="fadeIn" data-fade-in class="form-control form-control-sm" value="{{ formatTime .Cue.FadeIn }}" placeholder="1:05, 1m5s or 65" title="Fade the image in from black (seconds)">
             </div>
             <div class="insp-time-field">
               <label class="insp-field-label" for="insp-img-prewait">PreWait</label>
-              <input id="insp-img-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="hh:mm:ss.ms" title="Wait this long before the image shows">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the image shows">
             </div>
             <div class="insp-time-field">
               <label class="insp-field-label" for="insp-img-postwait">PostWait</label>
-              <input id="insp-img-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="hh:mm:ss.ms" title="Wait this long after the image ends">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the image ends">
             </div>
           </div>
           <div class="insp-time-right">
@@ -181,54 +190,63 @@
                 <label class="small" for="insp-img-autocontinue">Auto-continue</label>
               </div>
             </div>
-            <div class="ftl-row is-items-center is-gap-xs">
+            <div class="row is-items-center is-gap-xs">
               <label class="insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
-              <select id="insp-img-fadeaction" name="fadeAction" class="ftl-select" style="width:auto" title="Which other cues fade out when this one starts">
+              <select id="insp-img-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                 <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                 <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
                 <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
               </select>
-              <input id="insp-img-fadeout" name="fadeOut" class="ftl-input" style="width:4.5em"
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-fadeout" name="fadeOut" class="input" style="width:4.5em"
                 value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
-              <select id="insp-img-fadecurve" name="fadeCurve" class="ftl-select" style="width:auto"
+              <select id="insp-img-fadecurve" name="fadeCurve" class="select" style="width:auto"
                 title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential">
                 <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
                 <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
                 <option value="log" {{ if eq .Cue.FadeCurve "log" }}selected{{ end }}>Log</option>
                 <option value="exp" {{ if eq .Cue.FadeCurve "exp" }}selected{{ end }}>Exp</option>
               </select>
+              <svg class="fade-curve-preview" data-curve-for="insp-img-fadecurve" viewBox="0 0 40 16" width="40" height="16" aria-hidden="true"><path d="M1 15 L39 1"/></svg>
             </div>
             <div class="text-muted small mt-1">Still images don't trim — duration ends the display{{ if .Cue.AutoContinue }} and continues{{ end }}.</div>
           </div>
         </div>
       {{ end }}
+      </div>
       {{ if not (hasPrefix .Cue.Mimetype "image/") }}
       <div class="inspector-tabpane" data-tabpane="audio">
         <div class="insp-audio-wrap">
           <div class="insp-volume">
-            <label class="ftl-label small mb-1" for="insp-volume">Volume</label>
+            <label class="label small mb-1" for="insp-volume">Volume</label>
             <input id="insp-volume" name="volume" type="range" min="-60" max="12" step="1"
               value="{{ .Cue.Volume }}" class="insp-volume-slider"
               title="Per-cue master gain (dB); 0dB is the default. Double-click to reset to 0 dB"
               data-default="0" data-volume-inspector aria-label="Volume (dB)">
-            <div class="ftl-row is-items-center is-gap-2xs">
-              <input id="insp-volume-db" type="number" class="ftl-input insp-volume-db"
-                value="{{ .Cue.Volume }}" min="-60" max="12" step="1" aria-label="Volume dB value">
+            <div class="row is-items-center is-gap-2xs">
+              <input id="insp-volume-db" type="text" inputmode="decimal" data-validate="number" data-min="-60" data-max="12" class="input insp-volume-db"
+                value="{{ .Cue.Volume }}" aria-label="Volume dB value">
             </div>
           </div>
           <div class="insp-audio-settings">
+            <div class="insp-time-field insp-audio-device">
+              <label class="insp-field-label" for="insp-audio-device">Output device</label>
+              <select id="insp-audio-device" class="select" style="width:auto" data-audio-device="{{ .AudioDevice }}"
+                title="System-wide output, the same setting as Settings › Audio; applies from the next firing">
+                <option value="{{ .AudioDevice }}" selected>{{ if .AudioDevice }}{{ .AudioDevice }}{{ else }}HDMI embedded (default){{ end }}</option>
+              </select>
+            </div>
             <div class="insp-time-field insp-fadein">
               <label class="insp-field-label" for="insp-audio-fadein">Fade In</label>
-              <input id="insp-audio-fadein" name="fadeIn" data-fade-in class="ftl-input"
-                value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade audio and video in (seconds)">
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-audio-fadein" name="fadeIn" data-fade-in class="input"
+                value="{{ formatTime .Cue.FadeIn }}" placeholder="1:05, 1m5s or 65" title="Fade audio and video in (seconds)">
             </div>
             <div class="insp-time-field insp-fadeout">
               <label class="insp-field-label" for="insp-audio-fadeout">Fade Out</label>
-              <input id="insp-audio-fadeout" data-fade-out class="ftl-input"
+              <input id="insp-audio-fadeout" data-fade-out class="input"
                 value="{{ formatTime .Cue.FadeOut }}" placeholder="hh:mm:ss.ms" title="Fade audio and video out after playback (seconds)">
             </div>
             <label class="insp-field-label" for="insp-balance">Balance / Pan <output id="insp-balance-value">{{ .Cue.Balance }}</output></label>
-            <div class="ftl-row is-items-center is-gap-xs">
+            <div class="row is-items-center is-gap-xs">
               <span class="small">L</span>
               <input id="insp-balance" name="balance" type="range" min="-1" max="1" step="0.05" value="{{ .Cue.Balance }}"
                 class="ctp-slider ctp-slider-pan" data-default="0"
@@ -245,28 +263,31 @@
       {{ end }}
       <div class="inspector-tabpane" data-tabpane="video">
         {{ if not (hasPrefix .Cue.Mimetype "image/") }}
-        <div class="insp-time-field insp-fadein ftl-mt-xs">
+        <div class="insp-time-field insp-fadein mt-xs">
           <label class="insp-field-label" for="insp-video-fadein">Fade In</label>
-          <input id="insp-video-fadein" data-fade-in class="ftl-input"
+          <input id="insp-video-fadein" data-fade-in data-validate="time" inputmode="decimal" autocomplete="off" class="input"
             value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade audio and video in from silence and black (seconds)">
         </div>
-        <div class="insp-time-field insp-fadeout ftl-mt-xs">
+        <div class="insp-time-field insp-fadeout mt-xs">
           <label class="insp-field-label" for="insp-video-fadeout">Fade Out</label>
-          <input id="insp-video-fadeout" data-fade-out class="ftl-input"
+          <input id="insp-video-fadeout" data-fade-out data-validate="time" inputmode="decimal" autocomplete="off" class="input"
             value="{{ formatTime .Cue.FadeOut }}" placeholder="hh:mm:ss.ms" title="Fade audio and video out after playback (seconds)">
         </div>
         {{ end }}
-        <div class="d-flex is-items-end is-gap-xs is-wrap ftl-mt-xs">
+        <div class="d-flex is-items-end is-gap-xs is-wrap mt-xs">
           <div class="insp-time-field">
             <label class="insp-field-label" for="insp-fit">Frame fit</label>
-            <select id="insp-fit" name="fit_mode" class="ftl-select" style="width:auto" title="Fit: letterbox preserving aspect; Stretch: fill the screen, distorting aspect">
-              <option value="fit" {{ if ne .Cue.FitMode "stretch" }}selected{{ end }}>Fit</option>
-              <option value="stretch" {{ if eq .Cue.FitMode "stretch" }}selected{{ end }}>Stretch</option>
+            <select id="insp-fit" name="fit_mode" class="select" style="width:auto" title="How the picture fills its box (the whole display unless Position & size is set)">
+              <option value="fit" {{ if or (eq .Cue.FitMode "fit") (eq .Cue.FitMode "") }}selected{{ end }} title="Whole picture visible, aspect kept (letterbox)">Fit</option>
+              <option value="fill-width" {{ if eq .Cue.FitMode "fill-width" }}selected{{ end }} title="As wide as the box; top and bottom overflow is cropped">Fill width</option>
+              <option value="fill-height" {{ if eq .Cue.FitMode "fill-height" }}selected{{ end }} title="As tall as the box; left and right overflow is cropped">Fill height</option>
+              <option value="fill" {{ if eq .Cue.FitMode "fill" }}selected{{ end }} title="Covers the box; the overflowing sides are cropped, aspect kept">Fill (crop to cover)</option>
+              <option value="stretch" {{ if eq .Cue.FitMode "stretch" }}selected{{ end }} title="Fills the box exactly, distorting the aspect">Stretch</option>
             </select>
           </div>
           <div class="insp-time-field">
             <label class="insp-field-label" for="insp-rotation">Rotate</label>
-            <select id="insp-rotation" name="rotation" class="ftl-select" style="width:auto" title="Rotate the frame clockwise">
+            <select id="insp-rotation" name="rotation" class="select" style="width:auto" title="Rotate the frame clockwise">
               <option value="0" {{ if eq .Cue.Rotation 0 }}selected{{ end }}>0&deg;</option>
               <option value="90" {{ if eq .Cue.Rotation 90 }}selected{{ end }}>90&deg;</option>
               <option value="180" {{ if eq .Cue.Rotation 180 }}selected{{ end }}>180&deg;</option>
@@ -275,28 +296,76 @@
           </div>
           <div class="insp-time-field">
             <label class="insp-field-label" for="insp-flip">Flip / Mirror</label>
-            <select id="insp-flip" name="flip" class="ftl-select" style="width:auto" title="Mirror the frame">
+            <select id="insp-flip" name="flip" class="select" style="width:auto" title="Mirror the frame">
               <option value="none" {{ if ne .Cue.Flip "h" }}{{ if ne .Cue.Flip "v" }}selected{{ end }}{{ end }}>None</option>
               <option value="h" {{ if eq .Cue.Flip "h" }}selected{{ end }}>Mirror &#8596;</option>
               <option value="v" {{ if eq .Cue.Flip "v" }}selected{{ end }}>Flip &#8597;</option>
             </select>
           </div>
+          <div class="insp-time-field">
+            <label class="insp-field-label" for="insp-opacity">Opacity</label>
+            <input id="insp-opacity" name="opacity" class="input" style="width:5em" type="text" inputmode="decimal"
+              data-validate="number" data-min="0" data-max="100" autocomplete="off"
+              value="{{ .Cue.Opacity }}" title="How solid the picture is on the wall: 100 = opaque, 0 = invisible (%)">
+          </div>
         </div>
+        <fieldset class="insp-geometry mt-xs" title="Where the picture sits on the wall. Blank = fill the display. Pixels (960) or a percentage of the display (50%).">
+          <legend class="insp-field-label">Position &amp; size <span class="text-muted small">(px or %; blank = full screen)</span></legend>
+          <div class="d-flex is-items-end is-gap-xs is-wrap">
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-geom-x">X</label>
+              <input id="insp-geom-x" name="geom_x" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.GeomX }}" placeholder="0">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-geom-y">Y</label>
+              <input id="insp-geom-y" name="geom_y" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.GeomY }}" placeholder="0">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-geom-w">Width</label>
+              <input id="insp-geom-w" name="geom_w" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.GeomW }}" placeholder="100%">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-geom-h">Height</label>
+              <input id="insp-geom-h" name="geom_h" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.GeomH }}" placeholder="100%">
+            </div>
+          </div>
+        </fieldset>
+        <fieldset class="insp-geometry mt-xs" title="Trim the source picture's edges before it is fitted. Pixels of the source (120) or a percentage of its width/height (10%).">
+          <legend class="insp-field-label">Crop <span class="text-muted small">(source px or %)</span></legend>
+          <div class="d-flex is-items-end is-gap-xs is-wrap">
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-crop-l">Left</label>
+              <input id="insp-crop-l" name="crop_l" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.CropL }}" placeholder="0">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-crop-r">Right</label>
+              <input id="insp-crop-r" name="crop_r" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.CropR }}" placeholder="0">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-crop-t">Top</label>
+              <input id="insp-crop-t" name="crop_t" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.CropT }}" placeholder="0">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-crop-b">Bottom</label>
+              <input id="insp-crop-b" name="crop_b" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.CropB }}" placeholder="0">
+            </div>
+          </div>
+        </fieldset>
       </div>
       <div class="inspector-tabpane" data-tabpane="media">
         {{ if .MediaRows }}
-        <div class="media-info-grid ftl-mt-xs" aria-label="Media information">
+        <div class="media-info-grid mt-xs" aria-label="Media information">
           {{ range .MediaRows }}
           <span class="media-info-label small text-muted">{{ .Label }}</span>
           <span class="media-info-value small font-monospace">{{ .Value }}</span>
           {{ end }}
         </div>
         {{ else }}
-        <p class="ftl-text-muted small mb-0">No media information available - re-run analysis from the media pool.</p>
+        <p class="text-muted small mb-0">No media information available - re-run analysis from the media pool.</p>
         {{ end }}
       </div>
       <div class="inspector-tabpane" data-tabpane="advanced">
-        <label class="ftl-label small mb-1 d-block" for="insp-swatches">Colour</label>
+        <label class="label small mb-1 d-block" for="insp-swatches">Colour</label>
         <div class="insp-swatches" id="insp-swatches" role="radiogroup" aria-label="Cue colour">
           <label class="insp-swatch insp-swatch-none" title="None">
             <input type="radio" name="color" value="" aria-label="No colour" {{ if not $.Cue.Color }}checked{{ end }}>
@@ -324,6 +393,7 @@
     // Idempotent wiring: the drag/click handlers are document-level delegates,
     // re-running the script must not add a second set.
     if (document.__trimTimelineWired) {
+      paintCurvePreviews();
       drawTarget(document.getElementById("trim-timeline"));
       if (window.__fitMediaGrid) window.__fitMediaGrid();
       return;
@@ -337,17 +407,14 @@
       var ss = sec < 10 ? "0" + sec.toFixed(2) : sec.toFixed(2);
       return (h > 0 ? h + ":" : "") + mm + ":" + ss;
     }
-    // Drop-drag safe time string matching the hh:mm:ss.mmm format ParseTime
-    // expects. Falls back to mm:ss.mss when there are no hours.
+    // hh:mm:ss.mmm, the same format the server renders and ParseTime reads;
+    // anything coarser would truncate trim points on the next autosave.
     function fmtClock(ms) {
       ms = Math.max(0, Math.round(ms));
-      var h = Math.floor(ms / 3600000);
-      var m = Math.floor((ms % 3600000) / 60000);
-      var s = (ms % 60000) / 1000;
-      var hh = h > 0 ? h + ":" : "";
-      var mm = (h > 0 && m < 10 ? "0" : "") + m;
-      var ss = (s < 10 ? "0" : "") + s.toFixed(2);
-      return hh + mm + ":" + ss;
+      var p2 = function (n) { return (n < 10 ? "0" : "") + n; };
+      var p3 = function (n) { return (n < 100 ? (n < 10 ? "00" : "0") : "") + n; };
+      return p2(Math.floor(ms / 3600000)) + ":" + p2(Math.floor((ms % 3600000) / 60000)) + ":" +
+        p2(Math.floor((ms % 60000) / 1000)) + "." + p3(ms % 1000);
     }
 
     // Resolution-aware waveform painting. The stored envelope is coarse
@@ -531,6 +598,22 @@
       if (curve === "log") return Math.log10(1 + 9 * t);
       if (curve === "exp") { var k = 3; return (Math.exp(k * t) - 1) / (Math.exp(k) - 1); }
       return t;
+    }
+    // Small fade-in glyph beside each curve picker (§12.7): the same
+    // fadeShapeJS the overlay and engine use, so the preview is the ramp.
+    function paintCurvePreviews() {
+      document.querySelectorAll("svg.fade-curve-preview").forEach(function (svg) {
+        var sel = document.getElementById(svg.dataset.curveFor);
+        var path = svg.querySelector("path");
+        if (!sel || !path) return;
+        var d = "";
+        for (var i = 0; i <= 24; i++) {
+          var t = i / 24;
+          d += (i ? " L" : "M") + (1 + t * 38).toFixed(1) + " " + (15 - fadeShapeJS(sel.value, t) * 14).toFixed(1);
+        }
+        path.setAttribute("d", d);
+        svg.setAttribute("title", sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : "");
+      });
     }
     function drawFades(timeline) {
       var canvas = timeline.querySelector("#trim-waveform");
@@ -889,10 +972,12 @@
     // The ui.js mirror-sync keeps every [data-fade-*] copy identical.
     document.querySelectorAll("[data-fade-in],[data-fade-out],#insp-fadecurve,#insp-img-fadecurve").forEach(function (el) {
       el.addEventListener("input", function () {
+        paintCurvePreviews();
         var tl = document.querySelector(".trim-timeline");
         if (tl) drawTarget(tl);
       });
     });
+    paintCurvePreviews();
 
     // Inspector swaps may replace the timeline AFTER the inline script ran
     // (htm4 evaluates fragments' scripts around the swap), so repaint from
@@ -901,6 +986,7 @@
       const t = e.detail && e.detail.ctx && e.detail.ctx.target;
       if (!t || (t.id !== "cueinspector-body" && t.id !== "cueinspector-collapse")) return;
       Promise.resolve().then(function () {
+        paintCurvePreviews();
         drawTarget(document.getElementById("trim-timeline"));
         fitMediaGrid();
       });
