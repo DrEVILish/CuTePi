@@ -190,6 +190,35 @@ func showLayer(p *gst.Pipeline, level float64) {
 	setLayerLevel(p, level)
 }
 
+// raiseLayer puts p's layer on screen ABOVE every other layer at full
+// opacity, written directly (not through the paced writer) so it lands on
+// the next refreshes: the panic cut.
+func raiseLayer(p *gst.Pipeline) {
+	w := kmsWall()
+	l := layerOf(p)
+	if w == nil || l == nil {
+		return
+	}
+	layersMu.Lock()
+	if l.visible {
+		for i, s := range stack {
+			if s == l {
+				stack = append(stack[:i], stack[i+1:]...)
+				break
+			}
+		}
+	}
+	l.visible = true
+	stack = append(stack, l)
+	z := len(stack)
+	layersMu.Unlock()
+	if err := w.set(l.plane, "zpos", uint64(z)); err != nil {
+		logs.Printf(logs.GSPPipeDebug, "gsp: plane zpos: %v", err)
+	}
+	_ = w.setAlpha(l.plane, l.opacity)
+	l.post(l.opacity) // keep the writer's view in step
+}
+
 // restackLocked writes zpos bottom->top for the visible stack. Overlay zpos
 // starts at 1 (0 is the primary console plane). Caller holds layersMu.
 func restackLocked(w *KMSWall) {

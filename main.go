@@ -81,6 +81,9 @@ func main() {
 
 	go worker.RunThumbnailWorker(2 * time.Second)
 	go routes.RunScheduler()
+	// Panic holding image kept armed on the wall, so a panic cuts to it at
+	// once (§12.9).
+	go routes.RunPanicStandby()
 	// Remote control (§12.8): HyperDeck / OSC UDP / OSC TCP listeners, each
 	// only when enabled in Settings > Network (all off by default).
 	routes.StartRemote()

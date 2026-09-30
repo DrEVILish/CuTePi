@@ -902,6 +902,7 @@ func Api(rg *gin.RouterGroup) {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
 		}
+		kickPanicArm()
 		c.Status(http.StatusNoContent)
 	})
 	rg.GET("/settings", func(c *gin.Context) {

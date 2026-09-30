@@ -29,7 +29,7 @@
 | Space in the control UI | GO fires the selected cue; the progress clock advances via WebSocket. |
 | Enter | Does not fire GO. |
 | ESC once | Audio and video fade over `escFadeMs`. The framebuffer shows black at about 600ms with a 500ms setting (after fix D19). |
-| ESC twice | Immediate cut to the holding image, about 420ms after the second press (image load latency; see open item O7). |
+| ESC twice | Immediate cut to the holding image, about 420ms after the second press (image load latency; see O7, since fixed: 54–80ms). |
 | Panic | Confirm dialog appears. Cancel keeps playing; accept cuts to the holding image. |
 | Stop, Panic (no holding image), natural end of stream | Framebuffer goes to 0 (black) (after fix D17). |
 | Menu > Fade out | Same fade as a single ESC (after fix D16). |
@@ -396,7 +396,22 @@ A harmless 404 appears in the console, and the page corrects itself.
 
 ### O7 — Panic cut to the holding image takes 300–400ms (image load)
 
-During that time a partial dip from a running fade is visible. Fix: keep the holding image prerolled.
+Resolved (2026-09-30), target under 100 ms. The holding image is kept armed on
+its own display plane at alpha 0; a panic raises it to the top at full alpha,
+mutes the audio, then tears the rest down underneath (DESIGN §12.9).
+
+| Measure (Pi 4, 1080p60, 10 ms plane poll) | Before | After |
+|---|---|---|
+| Panic request → holding image on top | 326–359 ms | **54–80 ms** (8 runs) |
+| Inside the service (panic call → plane shown) | — | 22–33 ms |
+| Panic request → HDMI audio stream closed | — | 69–93 ms (mute is applied just before) |
+
+Checked:
+- Two panics 0.5 s apart both used the armed image (re-arm about 230 ms).
+- A cue started after a panic replaces the image.
+- A cleared setting panics to black.
+- A new image is armed within a second of the setting changing.
+- A file modified on disk falls back to the cold load (477 ms) and re-arms.
 
 ### O8 — Flaky gsp test
 

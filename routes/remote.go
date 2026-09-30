@@ -100,6 +100,13 @@ func FireCue(cuePos string) error {
 // (QLab's /panic is the same gesture).
 func remotePanic() error {
 	if hold := ctp.GetPanicHoldImage(); hold != "" {
+		// Armed on its own display layer, the image is up within a couple
+		// of refreshes; the cold load below takes ~330 ms (panichold.go).
+		armed := gsp.PanicToHold(hold)
+		kickPanicArm() // re-arm for the next panic
+		if armed {
+			return nil
+		}
 		if err := gsp.LoadWithOpts(hold, gsp.LoadOpts{Hold: true}); err == nil {
 			return nil
 		}
