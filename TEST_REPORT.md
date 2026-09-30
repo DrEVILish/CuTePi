@@ -337,35 +337,108 @@ burst; the new "Nothing uploaded" wording), not behaviour. Go: every package pas
 
 ## Open findings (not fixed; need a decision)
 
-### O1 — 1080p video plays at about half frame rate; video fades are choppy (major)
+### O1 — Frame rate: 1080p60 plays at 60 fps; fades, two layers and HEVC do not (major)
 
-1. **Causes:**
-   - (a) The video stem does colour conversion, scaling and flips **in software**. On a Pi 4, 1080p runs at about 16 fps on HDMI. In an isolated `gst-launch` run, the same chain manages 23.8 fps even to a fake sink, while hardware `v4l2convert → RGB16` alone does 59.6 fps. The clip is 30 fps.
-   - (b) `videobalance` out of passthrough modifies frames in place in uncached DMA memory from `v4l2convert`. Throughput falls to about 2 fps during a fade, so a fade shows 1–3 steps.
-   - (c) The `fbdevsink` copy cost.
-2. **Verification:**
-   - The framebuffer frame-count sampler checks out: the synthetic 30 fps clip reads 30.3.
-   - bbb 1080p30 via the service: 16.6 fps. A replica of the software chain: 15.9. Hardware-only chain: more than twice that (a is confirmed).
-   - `videobalance brightness=-0.3`: system-memory frames lose about 10% (21 → 19 fps); hardware-decoder frames lose about 90% (9–24 → 1.8–2.2 fps) (b is confirmed).
-   - `v4l2convert` has no cached I/O mode on this driver: `rw` isn't supported and `userptr` fails its pool.
-   - **Round 2 — `kmssink` measurement:** the display runs 1920×1080 at **60 Hz**. The hardware decoder feeding `kmssink` directly played the same 1080p30 clip at **29.8 fps average with 0 dropped frames**, against about 16 today, including with a plane `alpha` property set. The display controller scales, converts and presents in step with the display's refresh, with no CPU copy. Whether the plane alpha really dims the picture was not confirmed: the kernel's display state didn't show it, and there is no HDMI capture here.
-3. **Proposed fix (not applied; changes the pipeline architecture). Preferred: switch the wall from `fbdevsink` to `kmssink`:**
-   - hardware-decoded video goes to `kmssink` without software conversion;
-   - fades use the plane's `alpha` over black instead of `videobalance`;
-   - rotation and flips use the plane `rotation` property where the driver supports it;
-   - the framebuffer stays black underneath (blank it once at start).
-   - This needs rework of the warm-slot relink and the blanking code, plus a check of the alpha fade on the monitor.
-   - Fallback plan if `kmssink` can't be used:
-   - On hardware-decoded files, let `v4l2convert` do format conversion and scaling straight to the wall format (RGB16, 1920×1080). Keep the software stages only when rotation or flip is set.
-   - For the fade to black, do not run `videobalance` on DMA buffers. Options:
-     - Blank-fade through the framebuffer.
-     - A cheap copy into system memory only while a fade runs (about 13 fps during the fade).
-     - Accept a short cross-dissolve to black at the sink.
-   - Needs care with the warm-slot relink (`warm-vf-tail`).
-4. **Related:**
-   - DESIGN.md sets no frame-rate target. See question Q1.
-   - 1080p60 content would be worse.
-   - The fade-in path has the same `videobalance` cost.
+**Status (2026-09-30, round 6):** the KMS wall (one display plane per cue, Round 3) fixed steady playback. A 1080p30
+film plays at 30.0 fps and a 1080p60 H.264 clip plays at **60.0 fps with no missed refresh**. The §2 requirement is
+still not met in three cases, each with a measured cause:
+- a fade on a 60 fps clip;
+- two video layers on screen at once;
+- HEVC files.
+
+No code was changed in this round. The one fix attempted (below) cannot work with this GStreamer version, and it was
+reverted.
+
+History: on `fbdevsink` a 1080p30 film played at ~16 fps. The causes were a software colour convert/scale/flip chain,
+`videobalance` on uncached DMA buffers (~2 fps during fades) and the framebuffer copy. The plane-per-cue `kmssink`
+wall removed all three (Round 3).
+
+#### Results
+
+The test clips were generated on the Pi with `ffmpeg testsrc2` plus a frame counter and a tone, and uploaded through
+`/upload`. They were played as cues through the real service (`POST /api/cue/N/play`, inspector for opacity, fade and
+rate). The display ran 1920×1080 at 60 Hz. "fps" means new frames that reached the screen per second, measured per
+plane (method below).
+
+| Clip (H.264 High unless noted) | Planes | Case | fps per plane | Refreshes without a new frame |
+|---|---|---|---|---|
+| bbb 1080p30 (Round 3, fbdev → kms) | 1 | steady | ~16 → **30.0** | — |
+| 1080p60 | 1 | steady, 3 × 10 s | **60.0 / 60.0 / 60.0** | 0 of 599 each |
+| 720p60 | 1 | steady | **60.0** | 0 of 599 |
+| 1080p60 | 1 | 8 s fade-in | **42.2** | 146 of 492 (147 alpha writes) |
+| 1080p60 | 1 | 6 s ESC fade | **43.5** | 102 of 372 (103 alpha writes) |
+| 720p60 A + 720p60 B, both 50 % | 2 | 30 s crossfade, first 10 s | **26.9 + 26.8** | 64 alpha writes; 268 + 266 + 64 = 598 commits in 600 refreshes |
+| same, both cues muted | 2 | same | 26.9 + 26.8 | same (audio is not the cause) |
+| 1080p60 A + B at rate 0.5 (30 fps each), 50 % | 2 | 30 s crossfade | **26.7 + 26.9** | 266 + 268 + 63 = 597 commits |
+| 1080p60 A + 1080p60 B, both 50 % | 2 | 30 s crossfade, muted or not | **0.3–0.4 each** (picture frozen) | decoder-bound, see (b) |
+| 1080p60 A → B, 100 % | 2 | 2 s crossfade | A: last frame 0.5 s into the fade; B: 7 frames in 3.25 s, then 60 | both pictures frozen ~3 s |
+| 1080p60 **HEVC** (Main) | 1 | steady | **1.0** | streaming thread 100 % CPU, see (c) |
+
+**Two simultaneous full-screen 1080p60 layers at 50 % opacity do not play.** Both pictures freeze (0.3–0.4 fps). The
+closest working case is two 720p60 layers scaled to full screen by the display, at about 27 fps each. The display
+hardware blends two 50 % planes without trouble; the limits are the decoder and the commit rate.
+
+Hardware decoder capacity, measured with `gst-launch-1.0 filesrc ! qtdemux ! parse ! decoder ! fakesink sync=false`
+on the same clips:
+
+| Decoder | One stream | Two streams at once |
+|---|---|---|
+| H.264 (`v4l2h264dec`, bcm2835-codec) 1080p60 | 70.6 fps | 38.6 + 38.6 |
+| H.264 720p60 | — | 66.0 + 66.0 |
+| HEVC (`v4l2slh265dec`, rpi-hevc-dec) 1080p60 | 122.4 fps | 90.8 + 90.7 |
+| H.264 1080p60 + HEVC 1080p60 | — | 58.6 + 48.8 |
+
+#### Causes (verified)
+
+- **(a) One display commit per refresh, shared by every plane and every alpha write.**
+  - `kmssink` shows each frame with a legacy `SetPlane`, which is a blocking commit. The traced call returns at the
+    flip: median 16.3 ms, p95 16.5 ms.
+  - Each alpha write from `wall.go` is also a commit (`OBJ_SETPROPERTY`) on the same CRTC. The vc4 driver serialises
+    commits per CRTC, so the wall gets 60 commits a second in total.
+  - One 60 fps plane uses all 60. Every alpha write then costs one video frame: in the fade-in, 147 writes gave 146
+    refreshes without a new frame. The writer posts at most one write per two refreshes (Round 3), which keeps a
+    30 fps clip whole but leaves a 60 fps clip at about 42 fps during the fade.
+  - Two planes split the 60 commits. The traces add up exactly: frames on plane 1 + frames on plane 2 + alpha
+    writes = 597–598 commits in 600 refreshes.
+- **(b) The H.264 decoder does about 70 fps of 1080p in total.** Two 1080p60 streams get about 38.6 fps each. Every
+  frame then arrives late, the sink drops late frames (QoS), and the picture freezes instead of degrading. The same
+  happens in a normal 2 s crossfade between two 1080p60 H.264 cues: both pictures stall for about 3 s.
+- **(c) HEVC frames are untiled on the CPU.**
+  - The Pi HEVC decoder only outputs the Broadcom column format `NV12_128C8` (SAND128).
+  - The display planes can scan that out directly: plane `IN_FORMATS` lists NV12/NV21 with modifier
+    `0x0700000000000004`.
+  - But GStreamer 1.26.2 `v4l2codecs` has no DRM mapping for it: the debug log shows
+    `Selected format NV12_128C8 DRM ....:0x00ffffffffffffff`. So it offers the frames only in system memory, and
+    `videoconvert` untiles them in software from uncached memory, at about 1 fps.
+  - Tried: linking SAND pads straight to `kmssink` (no converter). Preroll fails (not negotiated). Reverted.
+
+#### Method
+
+The measurements come from the kernel's ftrace, outside the service, without opening `/dev/dri`.
+- **Probes:**
+  - kprobes on `drm_mode_setplane` (plane, fb) and `drm_mode_obj_set_property_ioctl` (object, property, value), each
+    with a matching kretprobe;
+  - the `drm:drm_vblank_event` tracepoint, whose (sequence, timestamp) pairs give the refresh grid;
+  - `trace_clock=mono`, the same clock as the vblank timestamps.
+- **Counting:** a blocking `SetPlane` returns when its frame is latched. Each return is therefore one new frame on
+  screen, and it is assigned to the refresh at its return time. For each plane the counts are frames per second,
+  refreshes without a new frame, and the gaps between new frames.
+- **Why not the 10 ms `FB_ID` poll:** it agrees for one plane (59.7 against 60.0). With two planes, reading a plane
+  waits for that plane's lock, which each blocking commit holds. The poll then samples only every ~60 ms and
+  under-reads (15.9 against 27). A 10 ms poll of a 16.7 ms signal only counts correctly while every sample interval
+  stays under the frame interval, and it does not here.
+
+#### Proposed fix (needs a decision; not a small change)
+
+A **wall compositor in the service** replaces `kmssink`:
+- An appsink per cue hands its DMABuf frames to one Go goroutine.
+- Once per refresh, that goroutine makes **one** non-blocking atomic commit that carries every plane's latest
+  `FB_ID` together with its alpha, zpos and rectangle.
+- Frames are imported with an explicit format and modifier, which covers HEVC SAND128 without GStreamer's mapping.
+- This removes (a) and (c): fades and several layers at the full rate, HEVC in hardware.
+- (b) is hardware. The mitigations are HEVC for layered or overlapping 1080p60 material (the separate HEVC block has
+  headroom), or freezing the outgoing cue's picture during a crossfade.
+- Details and estimate: DESIGN.md §6.1 "Frame-rate limits".
 
 ### O2 — Background refresh traffic during playback
 

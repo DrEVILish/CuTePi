@@ -375,6 +375,22 @@ assets (`gsp` test; skips when absent).
     is a display commit taking a vblank, as is each video frame, so a 30 fps clip keeps every frame through a fade
     (measured 30 fps during a 1 s ESC fade). A 60 fps clip loses frames only while it fades. Alpha is blended over the
     black primary plane, so colours scale evenly (no hue shift, no grey wash).
+  - **Frame-rate limits (measured on the Pi 4 at 1080p60; TEST_REPORT O1).** Each `kmssink` frame is a blocking
+    `SetPlane` commit and each alpha write is another commit on the same CRTC. The driver serialises them, so the
+    whole wall gets **60 commits a second**, shared by every plane and every alpha write. Results:
+    - one 1080p60 or 720p60 H.264 clip: 60 fps;
+    - a 60 fps clip while it fades: about 42 fps (each alpha write costs one frame);
+    - two layers at once (crossfade, opacity): about 27 fps each, even for 30 fps clips.
+  - **Decoder limits.**
+    - The H.264 decoder manages about 70 fps of 1080p in total. Two 1080p60 H.264 layers at once freeze (late
+      frames are dropped), including during a crossfade between two such cues.
+    - HEVC decodes in hardware but reaches the plane only through a software untile (about 1 fps at 1080p60).
+      GStreamer 1.26 cannot hand the decoder's SAND128 frames to `kmssink`, although the planes support them.
+  - **Proposed (not decided): a wall compositor** that replaces `kmssink`.
+    - One goroutine takes each cue's DMABuf frames from an appsink.
+    - Once per refresh it makes one non-blocking atomic commit that carries every plane's frame, alpha and zpos.
+    - It imports frames with an explicit DRM format and modifier, which covers SAND128.
+    - This removes the commit and HEVC limits. The decoder limit stays.
   - The primary plane underneath is the console framebuffer, kept black: at startup the service switches the active
     virtual terminal to graphics mode (`KDSETMODE KD_GRAPHICS`), so no console text, login prompt, kernel message or
     cursor reaches HDMI while it runs; text mode returns on a clean shutdown.
