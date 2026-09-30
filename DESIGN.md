@@ -452,6 +452,27 @@ wall pipeline (always running)                                    ▼
   the Broadcom SAND128 modifier, which Mesa's V3D driver samples directly (this is what makes hardware HEVC usable).
   Software-decoded frames (VP9, AV1, ProRes, MPEG-2, …), stills and test patterns are uploaded from system memory by
   `glupload`. There is one path for all of them.
+- **Bridge rules (proven by the spike, 2026-10-01).**
+  - *Attach a layer only once its format is known.* The video mixer waits for every input's caps before it produces
+    anything, so an input created ahead of its first frame freezes the whole wall. A cue prerolls first; its first
+    sample's caps configure the layer's `appsrc`, and only then is the mixer pad requested and linked.
+  - *The timing source is generated on the GPU.* The wall's always-on black input is `gltestsrc is-live=true`, not a
+    CPU-uploaded `videotestsrc` (a 1080p CPU black source alone cost half the frame rate).
+  - *Answer the decoder's allocation query at the bridge.* Hardware decoders that output DMABuf/`DMA_DRM` refuse to
+    negotiate unless downstream supports `GstVideoMeta`, and they size their buffer pools from downstream's answer.
+    The `appsink` answers neither, so a pad probe on it adds the video-meta API (registered through
+    `GST_VIDEO_META_API_TYPE`, not looked up by name: the type does not exist until the video library first uses it)
+    and a pool-size hint (no pool of our own) covering the frames held past the bridge: the appsrc queue, the upload,
+    the mixer and the display flip. Without the hint the decoder stalls after a dozen frames.
+  - *Move frames in C, never through Go objects.* go-gst releases samples and buffers in Go finalizers, so a Go
+    per-frame loop holds decoder buffers until an unpredictable garbage collection and starves the decoder. The
+    per-frame loop is a cgo function: pull the sample, shallow-copy the buffer (memory shared, no pixel copy),
+    re-stamp it, push it (the push takes the copy), release the sample. It runs on its own OS thread per layer.
+  - Spike results on HDMI at 1080p60 through the full bridge: HEVC ×1 59.9 fps, HEVC + HEVC at 50 % 59.8 fps
+    (cues decoding 60 fps each), 3–4 frames dropped at start-up only. **Open:** H.264 layers import as three-plane
+    YU12 (the H.264 decoder's default DMABuf layout): H.264 ×1 57.9 fps (13 dropped), and H.264 + HEVC only 29 fps.
+    Next: get the H.264 decoder to hand over NV12 (it offers it) and measure; the direct pipeline without the bridge
+    reached 60 fps for H.264 + HEVC once running.
 - **Cue → wall bridge (timestamps).** Each cue stays its own pipeline, so trim, seek, pause, rate, loop and warm
   preroll keep working per cue. All pipelines use the same system clock. A frame's running time in its cue pipeline
   maps to the wall pipeline exactly: `wall_rt = cue_rt + (cue_base_time − wall_base_time)`, re-read on every frame
