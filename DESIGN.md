@@ -32,12 +32,18 @@ selection, settings).
   audio producer). The operator may pick a different output device in the
   Settings Audio tab (enumerated from `aplay -L`); the engine routes through
   `alsasink` when a device is set.
+- **Frame rate**: video output **always matches the frame rate the display
+  is set to** (a 1080p60 wall shows 60 frames a second, whatever the clip's
+  own rate): no dropped or stalled frames during playback or during fades.
+  Clips at a lower rate repeat frames evenly to fill the display rate.
 - **Codecs**: any video, image or audio file (within reason); decode
   **hardware-first (v4l2 h264/hevc) with software fallback** via GStreamer
   autoplugging.
 - **Undecodable sources**: fail **immediately with an error surfaced to the user** at cue time; an **import-time probe** (`ffmpeg -v error -t 1`) rejects bad files early.
-- **Cue trigger**: **SPACE = GO** (control UI focused, not in an editable
-  field) plays the selected cue; with nothing selected, GO resumes transport.
+- **Cue trigger**: **SPACE = GO** and **ESC = fade out** (twice = panic) work from anywhere in the control UI —
+  focused buttons, checkboxes, selects, sliders and open dialogs included — except while typing into a text field.
+  Space never presses the focused control instead, and holding a key does not repeat GO or panic. (An open
+  right-click menu takes the ESC to close itself, §5.4.) With nothing selected, GO resumes transport.
   Media-pool tiles are never selectable — they join the sheet via
   double-click, Enter, or the tile menu.
 - **Playback end**: a cue **stops** after playback — cues are a list, not a playlist; there is no implicit advance. Auto-continue is explicit and per-cue.
@@ -117,20 +123,32 @@ Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
   anchor + set), `escFadeMs`, `goAdvance`, `showMode`, `autoNumberCues`,
   `panicHoldImage`, `testPatterns` (pinned custom patterns).
 - `config.json`: port, `loop` (direct-load default), `auth_password`,
-  working-dir paths, audio device/channels/rate, remote enable flags + ports
-  (see §12.8).
+  `allowed_hosts`, working-dir paths, audio device/channels/rate, hotspot
+  SSID/password, remote enable flags + ports (see §12.8). Written atomically
+  (temp file + rename) with file mode `0600`.
+- `<working dir>/tmp`: scratch space for uploads, `.CTP` imports and yt-dlp
+  downloads (see §7). Emptied at startup; `TMPDIR` points here.
 
 ## 5. UX / UI design (per panel)
 
 ### 5.1 Overall shell and themes
 
 Exactly 100vh: topbar (natural height) + content row (media pool | cuesheet panes) with no page-level scroll; only the panes scroll internally (`scrollbar-gutter: stable`).
-Themes come from **ftl-themes, imported as a submodule** (`third_party/ftl-themes`):
-the picker merges the app theme with the ftl manifest (`ftl:<slug>`, default
-`ftl:xbmc`); app CSS always wins via `@layer`. The theme id is browser-local
-presentation state. Fonts, icons and theme packs are vendored by ftl-themes
-— nothing is fetched from a CDN.
+Themes come **only** from **ftl-themes** (git submodule `third_party/ftl-themes`, contract v4, tracking `main`);
+CuTePi ships no themes of its own. The picker lists the submodule's `dist/themes.json` (32 themes, default `ftl:xbmc`);
+each theme links its bundle `/ftl/themes/<slug>.css`, sets `html[data-theme=<slug>]`, and its icon sprite
+`dist/icons/<slug>.svg`. The choice is browser-local (`localStorage` `cutepi.theme`); older saved values (`lcars`,
+`app:blue-future`) map to the ftl theme of the same name.
+- **Cascade**: Bootstrap (kept for its JavaScript and a few utilities) < ftl-themes (`@layer ui`) < CuTePi's own
+  unlayered CSS. Bootstrap is imported into `@layer bootstrap` because v4 dropped the `ftl-` class prefix and 35 class
+  names now match Bootstrap's.
+- **Library markup**: components use the ftl-themes v4 class names (`.btn`, `.input`, `.field`, `.tab`, `.modal`, …).
+  Dialogs follow the library's window pattern: the themed window is `.modal-content.modal` with the title and a `.btn-close`
+  in `.modal-header` (the theme draws the title bar, frame and close box); Bootstrap's modal JavaScript still drives
+  them, but its full-screen overlay carries `.app-modal` so no theme ever styles it. App CSS lays out only what is inside
+  a window. The cue sheet's rows are `tr.sheet-row` (not `.row`, which the library defines as a flex row).
 A theme change restyles the shared pane chrome (pool, inspector) together.
+Each theme draws its own dialog windows (e.g. Windows 95/XP/7 title bars and close boxes, LCARS elbow frames).
 
 ### 5.2 Top bar
 
@@ -140,7 +158,11 @@ One row, left to right:
 - Wall clock (locale `HH:MM:SS`, tabular numerals).
 - The GO button (the loudest control on screen)
 - *selected* cue it fires
-- playing cue number - cue name, progress indicator, time, remaining time.
+- playing cue number - cue name, progress indicator, time, remaining time, and a **Pause / resume** button. While
+  paused it turns amber and reads **PAUSED** (a paused still looks unchanged on the wall, so the button carries the state).
+  The bar's clock updates in place; its buttons are never re-rendered under the pointer, and a press held across a refresh
+  still counts. The clock, the scrubber and the playing cue's row progress bar run from one client-side playback clock
+  (100 ms steps, re-anchored by each server sample, never stepping backwards), so they glide instead of jumping.
 - full screen button
 - menu dropdown, Panic (confirm), Stop, Fade out, Export / Import / Logs / Restart / Shutdown.
 
@@ -153,6 +175,9 @@ One row, left to right:
 - Filters: filename text + type dropdown (video/image/audio/all). Sort: newest first (`date_added DESC, media_id DESC`).
 - 3-dot menu per tile (bottom-right, opens downward next to the button):
   **Add** (as cue), **Delete** (confirm modal), **Refresh thumbnail**, **Analyse** (waveform rebuild).
+  Deleting a media file also removes it from the custom test patterns (§12.10) and, if it was the panic holding image
+  (§12.9), clears that setting.
+- Double-clicking a tile adds it to the cuesheet as a new cue (same as **Add**).
 - Drag-and-drop upload onto the pool (multi-file); items are draggable into the cuesheet (drop on a group header assigns membership).
 - Panel collapsible to a sliver / drag-resized; width + collapsed state persisted. Scrollbars always visible. Empty pool shows info drag to upload placeholder.
 - Missing source: warning-triangle icon on tiles whose file is absent from disk (startup scan only).
@@ -163,7 +188,15 @@ One row, left to right:
 - Live Progress bar shown as background behind numerals of PreWait, Duration, PostWait if one of those items is in progress.
 - Sticky header, scrollable body. Columns: **icon** (media type / missing warning), **Number**, **Name**, **PreWait**, **Duration**, **PostWait**.
   per-cue actions live in the Inspector and the row context menu.
-- All cells editable by double-click; save on blur/enter. Time parser: `hh:mm:ss.ms` or a bare number = seconds.
+- All cells editable by double-click; save on blur/enter. **Escape cancels** the edit: the editor closes, the old value
+  stays and nothing is saved (the Escape does not reach the transport, so it never fades out the show).
+  Time parser: `hh:mm:ss.ms` or a bare number = seconds. Times (PreWait, Duration, PostWait) have **no upper limit**.
+- **Cue numbers are unique** across cues and group headers. A blank number is allowed on any number of rows, and
+  `12` and `12.0` count as the same number. Editing a number to one already in use (inline, or `cue_num` in the Group
+  Inspector) is refused: the field goes back to its previous value and a tooltip on it reads "Cue number N is already
+  used" for a few seconds. This is an operator mistake, not a fault, so nothing is logged and no error toast appears.
+  A show imported in append mode keeps each cue's and group's number when it is free; a clashing number is replaced by
+  the next whole number above the highest in the sheet.
 - **Groups** are first-class rows: numbered (editable `cue_num`, maxlength 24), coloured, selectable and nestable — cue and subgroup headers render indented inside their parent's block**
   **An open group's block is enclosed by a fine hairline border** — the header draws the top edge, the last member the bottom, every row the sides so membership reads at a glance; collapsed groups draws the top edge, sides and bottom. Members' names indent same as subgroup headers; a collapsed group skips its whole subtree in keyboard nav. Right-click group rows: Delete group; group headers are draggable to move the whole subtree block.
 - **One drop model** (single cue, multi-selection block, or group block) — the hovered row band computes exactly one intent and draws exactly one indicator for it; the **indicator's indent shows where the drop lands**: indented to the member name (in-group, `cue-drop-in`) or plain (top-level, `cue-drop-top`):
@@ -179,8 +212,20 @@ One row, left to right:
   - Move buttons swap two cues and give each the owner of its new slot, so crossing a header changes membership. Full-order replaces keep stored parents and then release only cues left with no adjacent belonging row (a lone member never leaves). The renderer treats a cue parked directly above its own header as outside the folder.
 - **Groups are draggable**: their position is **stored** (`cue_group.sheet_index`) like cue position, set by the drag and drop; a group block (header + whole span, nested included) moves as one.
 - Row-state visuals (QLab style): colour full-row tint per cue, selected-row highlight.
+- **Sort and renumber** (right-click a cue, a group header or blank sheet space, and the top-bar menu):
+  - **Sort by cue number** reorders the sheet by number: numeric numbers by value, then text numbers alphabetically,
+    blanks last. Sorting happens within each group and at top level, so members stay in their group and a group's
+    block moves as one; a group header without a number sorts by the lowest number inside it.
+  - **Renumber cues** (confirm) rewrites every number in sheet order as step, 2×step, 3×step… — 1, 2, 3… at the default
+    step of 1 (Settings → General → Cue number step). Group headers that have a number take the next one in the same
+    sequence; blank headers stay blank.
+- **Number and time fields are text fields** everywhere (inspectors, sheet cells, settings), validated as you leave them:
+  - Times accept `1:05.000`, `1:05`, `1m5s`, `1m 5.5s`, `65` (bare number = seconds), `500ms`, `1h2m3s` — all mean the
+    same thing server-side (`ctp.ParseTime`) and in the browser.
+  - Whole numbers and decimals are checked against their range.
+  - An invalid entry is put back to its previous value with a tooltip saying what is accepted; nothing is sent.
 - Selection: single-select, arrow-key navigable (Up/Down walk cues + group  headers; Right/Left open/close a selected group). Persisted in the DB; `POST /api/cue/:pos` selects. Space (or transport Play) acts on it.
-- **Context menu** (cue rows): colour, delete
+- **Context menu** (cue rows): colour, delete. Escape closes an open context menu (and does nothing else: no fade-out).
 - **Missing source** cues: warning badge + the Inspector shows a Re-link / Delete cue banner.
 - **Scheduled** cues (schedule enabled, any time including midnight) show a clock icon after media icon.
 
@@ -193,7 +238,20 @@ One row, left to right:
     Trim In/Out fields, Pre-Wait, Post-Wait, Loop + loop-count, Hold-last-frame, Auto-continue, fade-stop scope/time, playback-rate slider with 1× reset.
     Renders even where duration is unknown (timeline duration-gated). The timeline shades the shared audio+video
     fade-in/out envelope over the trim window (same curve the engine ramps).
-  - **Video** — video Fade In / Fade Out (times).
+  - **Video** — video Fade In / Fade Out (times), then how the picture sits on the wall:
+    - **Frame fit** (inside the picture's box — the display unless Position & size is set):
+      **Fit** (whole picture, aspect kept, letterboxed), **Fill width** (as wide as the box; top/bottom overflow
+      cropped), **Fill height** (as tall as the box; left/right overflow cropped), **Fill** (covers the box; the
+      overflowing sides cropped, aspect kept), **Stretch** (fills the box exactly, aspect not kept). Overflow crops are
+      centred.
+    - **Crop**: Left, Right, Top, Bottom of the source picture, each in source pixels (`120`) or a percentage of its
+      width/height (`10%`), applied before the fit. The display hardware crops (the plane reads only that part of the
+      frame): no CPU, full frame rate. A crop that would leave under 16 px is ignored.
+    - **Rotate** 0/90/180/270° and **Flip / Mirror** (none, mirror ↔, flip ↕). The display hardware does 0°/180° and
+      mirroring; 90°/270° are turned in software after the frame is scaled to its on-screen size (full frame rate at 1080p).
+    - **Opacity** 0–100 %: how solid the picture is over whatever is underneath (100 = opaque).
+    - **Position & size**: X, Y, Width, Height, each blank (fill the display), pixels (`960`) or a percentage of the
+      display (`50%`). The picture is fitted into that box.
   - **Audio** — output device picker (Settings Audio tab source; default
     HDMI embedded), volume (dB slider −60..+12, double-click resets to 0 dB), Fade In / Fade Out, Balance/Pan
     (double-click centres), Mute toggle button (danger-red while muted), EBU R128 loudness-gain readout.
@@ -212,16 +270,24 @@ One row, left to right:
 
 ### 5.6 Settings modal
 
-- **General** — instance name (renaming changes the machine hostname and
-  refreshes mDNS, so the crew reaches it at the new `.local` address);
-  single-ESC fade time (default 1000 ms, video + audio to black/silence).
-- **Audio** — output device picker (default HDMI embedded ALSA) +
-  channels/rate, persisted to `config.json`.
-- **Network** — one enable/disable toggle per remote item (HyperDeck,
-  OSC UDP, OSC TCP/SLIP), all **off by default**; ports + OSC bind address
-  configurable; the tab lists each server with its live on/off state.
-  HyperDeck clip listing source is selectable here: Cuesheet (default) or
-  MediaPool.
+A fixed-size window (820 × 640, smaller screens: full height) with a compact title bar, the tab rail on the left
+(a swipeable row on phones), one scrolling pane and **Cancel / Save always in view**; switching tabs never resizes it.
+Tabs, grouped by purpose:
+
+- **Appearance** — theme (saved in this browser).
+- **Playback** — ESC fade-out time (default 1000 ms, any time format), panic holding image (Clear), Advance selection
+  after GO, Loop directly played clips.
+- **Cue sheet** — Auto-number new cues, cue number step (default 1).
+- **Display** — the HDMI output's current mode (read-only, e.g. `1920 × 1080 @ 60 Hz`), use the display's own mode
+  (EDID), manual resolution and refresh rate.
+- **Audio** — output device picker (default HDMI embedded ALSA; Custom for an ALSA name) + channels/rate, persisted to
+  `config.json`.
+- **Network** — instance name (renaming changes the machine hostname and refreshes mDNS, so the crew reaches it at the
+  new `.local` address), web port (restart), remote control: one on/off toggle per protocol (HyperDeck, OSC UDP,
+  OSC TCP/SLIP), all **off by default**, with ports, live status, listen address and the HyperDeck clip-list source
+  (Cue sheet by default, or Media pool); Wi-Fi hotspot (SSID, password, join QR code).
+- **Security** — operator password (plain text; see §7), remove password.
+- **Keyboard** — the shortcut list.
 
 ### 5.7 Upload
 
@@ -233,6 +299,18 @@ One row, left to right:
   YouTube/URL via yt-dlp with stage logging.
   Uploads, deletions, and thumbnail changes broadcast a targeted WebSocket refresh.
 - Ensure acurate and live updating progress bars for all upload / media import tasks.
+- **Name clashes**: before any bytes are sent, the browser asks the server (`POST /upload/check`) which chosen files
+  share a name with a file already in the pool, or with another file in the same batch. If any do, a dialog lists
+  them and the operator picks one answer for the batch:
+  - **Replace** — the upload overwrites the pool file of the same name (cues using it keep working);
+  - **Keep both** — the upload is renamed `name (2).ext` (then `(3)`, …);
+  - **Skip** — the pool file stays and those uploads are not sent into the pool;
+  - **Cancel** — nothing is uploaded.
+  The choice travels as the form field `onConflict` (`replace` | `rename` | `skip`); an upload that clashes without
+  one is refused with 409 and nothing is changed. The finished upload reports what happened ("Uploaded clip.mp4",
+  "Uploaded 2, skipped 1 already in the pool").
+- **Every upload gives feedback** on every client, phones included: the chosen file names, then progress, then a
+  success line or a failure line with the server's reason. Tapping "Choose a file" opens the picker exactly once.
 
 ### 5.8 Show export / import (`.CTP`)
 
@@ -249,6 +327,30 @@ One row, left to right:
 - Audit trail (`cue_start`/`cue_end` events with pos/title/wall-clock) is an
   append-only ring; clearing the log never clears the audit.
 
+### 5.10 Show / Edit mode
+
+The top-bar toggle switches between **EDIT** and **SHOW**; the mode is stored on the server (`showMode`), so it
+survives a reload and is the same on every client.
+
+- **SHOW** hides the media pool, the Cue Inspector and the Tests button. Editing gestures (double-click to edit,
+  drag and drop, delete) are refused with the toast "Switch to EDIT mode to change the sheet", and the test
+  pattern API answers 403.
+- The **transport stays live** in Show mode: arrow keys move the selection, Space fires GO, Escape fades out,
+  and the menu's Stop / Fade out / Panic all work.
+- Scheduled cues arm only in Show mode (§6.8b), and live Seek is disabled (§6.2).
+
+### 5.11 Feedback: toasts and tooltips
+
+Errors from the server appear as a red toast with the server's reason. Success toasts are few and confirm
+actions whose effect is not otherwise visible:
+
+- "Holding image set — PANIC now cuts to *file*" (tile menu, §12.9);
+- "Added to test patterns" / "Removed from test patterns" (tile menu, §12.10);
+- the upload summary from the Upload modal ("Uploaded *file*", "Uploaded 2, skipped 1 already in the pool").
+
+Operator mistakes on a single field (a duplicate cue number) are shown as a short tooltip on that field, not as a
+toast, and are not logged.
+
 ## 6. Playback & features
 
 ### 6.1 Pipeline manager (`gsp`)
@@ -260,19 +362,38 @@ position (`CurrentCuePos`), a generation counter (`Generation`, bumped on
 every load), and playing-file (`CurrentPlaying`) are tracked for guards.
 GStreamer runtime is smoke-tested against real `gst-launch-1.0`
 assets (`gsp` test; skips when absent).
-- **Video stem**: `queue [+ v4l2convert on DMABuf pads] → videoconvert →
-  videobalance → videoscale → videoflip → videoflip → videoconvert`
-  (fit/rotate/flip wiring).
+- **Wall: one display layer per cue (KMS)**. With `CUTEPI_WALL_SINK=kmssink` (the Pi default, set in the unit's
+  `playback-env.conf`) every pipeline that shows video gets its own hardware overlay plane on the HDMI output
+  (`gsp/kms.go`, `gsp/wall.go`). All `kmssink`s share one DRM file descriptor, which the service opens at startup and
+  holds as DRM master. The display controller does the compositing: per-plane alpha (fades, crossfades, opacity), zpos
+  (stacking), position/size (render rectangle) and 0°/180°/mirror rotation — no CPU, at the display's refresh rate.
+  - Video chain: `queue → kmssink` for hardware-decoded frames (DMABuf straight to the plane, no copy); `queue →
+    videoconvert → kmssink` for system-memory frames (software decode, stills, test patterns); 90°/270° add
+    `v4l2convert → capsfilter(I420, on-screen size) → identity drop-allocation → videoflip`; Stretch adds a
+    `capssetter` pixel-aspect rewrite.
+  - Fades write the plane's alpha from elapsed time on a per-layer writer, one write per two refreshes: each alpha write
+    is a display commit taking a vblank, as is each video frame, so a 30 fps clip keeps every frame through a fade
+    (measured 30 fps during a 1 s ESC fade). A 60 fps clip loses frames only while it fades. Alpha is blended over the
+    black primary plane, so colours scale evenly (no hue shift, no grey wash).
+  - The primary plane underneath is the console framebuffer, kept black: at startup the service switches the active
+    virtual terminal to graphics mode (`KDSETMODE KD_GRAPHICS`), so no console text, login prompt, kernel message or
+    cursor reaches HDMI while it runs; text mode returns on a clean shutdown.
+  - Fallback (`fbdevsink`): the older single-picture chain (`videoconvert → videobalance → videoscale → videoflip ×2 →
+    videoconvert → fbdevsink`) without layers, crossfades, opacity or geometry.
+- **Extra streams**: only the first audio and first video stream play; further ones (a second language, an AC3
+  track) drain into a real-time (`sync=true`) fakesink. Unsynced they ran ahead and made the pipeline's position — the
+  furthest sink — leap (~20 s on the test film), which misreported the clock and trim-out.
 - **Audio chain**: `queue → audioconvert → audioresample → volume →
   audiopanorama → scaletempo → sink` (`alsasink` when an Audio device is
   set — see §5.6 — else the default sink).
 - **Wall sink**: the pipeline drives the HDMI connector directly, not a
   windowed sink; decode is hardware-first (v4l2 h264/hevc) with software
   fallback via GStreamer autoplugging.
-- **Warm slot**: the next cue can be prerolled into a `fakesink` slot
-  (`Warm`) and relinked to the wall on GO (`InstallWarm`) for ~0-latency
-  starts; a 400 ms prewarm budget falls back to a cold build. Images are
-  exempt from warm.
+- **Warm slot**: the next cue can be prerolled (`Warm`) and activated on GO (`InstallWarm`) for ~0-latency starts; a
+  400 ms prewarm budget falls back to a cold build. Images are exempt from warm. On the KMS wall the warm cue prerolls
+  on its own plane at alpha 0 (invisible) — nothing to relink; on fbdev it prerolls into a `fakesink` and the wall sink
+  is relinked at activation. Geometry, rotation and mirror come from the cue's own options at build time, so a
+  prewarmed cue is framed exactly like a cold one.
 - **Soundtrack**: slideshow audio cues become a background-music playlist on
   their own `playbin` pipeline (`gsp.BackgroundPlaylist`) under the slides
   for the whole run. The soundtrack plays **only as part of a slideshow** —
@@ -310,18 +431,28 @@ chain — any operator playback during the wait disarms it (even replaying the *
   (`ctp.HealSheet`, alongside the missing-file scan) repairs only dangling
   state from older builds — parents pointing at deleted groups go to 0 and
   missing indices are backfilled — never membership judgement calls.
-- Slideshow: a per-group goroutine cycles member images with shuffle/loop, `duration_ms` hold (default fallback if unset), and `fade_ms` fade;
-  `POST /api/group/:id/play`. A **generation guard** aborts the run when the operator plays anything else, and after the fade completes, so a stale
-  loop can't clobber a newer choice.
+- Slideshow (`POST /api/group/:id/play`): one runner at a time — starting a slideshow cancels any earlier run.
+  - **The group owns the timing**: every image holds for the group's hold time (`duration_ms`, default 5 s); the member
+    cues' own durations and hold settings do not apply inside a slideshow. Video slides play their own (trimmed,
+    rate-corrected) length.
+  - **Crossfades**: the next slide starts on a layer under the current one and the current one fades out over it for the
+    group's fade time — no fade to black, no gap. Slide changes keep a steady cadence (counted from each load).
+  - **Shuffle** reshuffles on every loop pass and never shows the same slide twice in a row. **Loop** off: the last slide
+    stays on screen until the operator acts.
+  - Any other playback decision (GO, Stop, Panic, ESC) ends the slideshow.
 - **Slideshow soundtrack**: audio cues inside a slideshow group do not slide — they become the background-music playlist (`gsp.BackgroundPlaylist`, its
   own audio pipeline, shuffled when the group shuffles) played underneath the slides for the whole run. The soundtrack exists only inside the slideshow run: any main-pipeline decision — Stop, Panic, a new
   load — kills the soundtrack with it.
 
-### 6.5 Queued fade-then-play
+### 6.5 Crossfade: fade and stop others
 
-`POST /api/play`/cue-play with a running pipeline and a `fadeOut > 0` runs `FadeAndStop(fadeOut)` in a background goroutine, then loads the target cue —
-guarded by the generation check: if the generation moved past the target's during the fade, the queued load bails (an operator's newer cue/stop
-wins). Errors are logged, not swallowed.
+A cue with a **fade-stop others** time (`fadeOut` > 0, right-click menu and Time tab) starts **at once** when fired — by
+GO, the cue's play button, auto-continue, remote protocols or the scheduler — on a display layer **under** whatever is on
+screen. Everything playing above it then fades out (picture and sound) over that time and stops. New cues always start
+on a lower layer, so the outgoing picture fades away to reveal the new one. The fade starts when the new cue is actually
+on screen, never while it is still loading, so the old picture never fades over black.
+- **Dissolve**: give the new cue a Fade In as well and it fades up while the old one fades out.
+- Without display layers (fbdev fallback) the old cue fades out first and the new one starts after it.
 
 ### 6.6 Cue trigger
 
@@ -338,7 +469,9 @@ from socket pushes. The topbar shows the socket state as a status dot.
 Per-cue recurring trigger: `schedule_enabled` + `schedule_days` bitmask (bit0=Mon) + `schedule_time_ms` (ms since midnight, set to whole seconds).
 Second precision end to end (inspector `step=1` time input, `HH:MM[:SS]` API): minute-rounded times can never hit an exact-second sync-fire.
 The scheduler ticks every 200ms and fires cues due within the last 1s (one missed tick + jitter); anything older is stale and never fires, so
-enabling Show mode late never replays the day's past cues. Each cue fires once per day; schedules arm only in Show mode.
+enabling Show mode late never replays the day's past cues. Each cue fires once per day (tracked by `cue_id`, so reordering the sheet
+mid-day neither re-fires nor blocks a cue); schedules arm only in Show mode. An armed fire re-checks at its second that Show mode is still
+on and the cue's schedule is unchanged, and records the cue's result and playing position on both the warm and cold paths.
 Multi-node sync-fire (several Pis firing the same second) assumes NTP-synced clocks and identical shows — each node fires on its own clock
 crossing. Decision-accurate, not output-accurate: pipeline build takes ~100s of ms, so frame-exact joint output needs timed pre-roll (v2).
 
@@ -355,6 +488,17 @@ moves the generation. Keep them consistent.
   General), then stops.
 - **Double ESC** (second press within ~1 s) cuts everything immediately:
   video and audio stop at once, the screen goes black, no sound plays.
+  With a panic holding image configured (§12.9) the wall shows that image
+  instead of black.
+- **Menu > Fade out** is the same action as a single ESC (same fade time).
+  **Menu > Stop** and **Panic** are immediate cuts.
+- **Black means black.** On the KMS wall a stopped cue's plane is removed, revealing the black primary plane; nothing
+  else (console text, cursor) is ever drawn there while the service runs. On the fbdev wall sink the last frame would
+  otherwise stay in the framebuffer after the pipeline is torn down, so Stop,
+  Panic (without a holding image), the end of ESC/Fade out, and a clip that
+  ends naturally without a follow-up (nothing new loaded within ~150 ms)
+  all clear the framebuffer. A held clip (§6.2) and the holding image are
+  deliberate exceptions and keep their frame.
 
 ## 7. Error handling & logging
 
@@ -365,6 +509,33 @@ moves the generation. Keep them consistent.
   validation 400/422.
 - Optional auth: `AuthMiddleware` (config `auth_password`, editable in Settings) applies to all routes including static assets; browser basic-auth
   prompt; 401 wrong password; 200 once accepted. `GET /api/settings` reports `authEnabled` but never the password.
+- **Operator password is stored in plain text.** `auth_password` is kept
+  unhashed in `config.json` (HTTP Basic needs nothing more, and the operator
+  may need to read it back off the SD card). The file is created mode `0600`,
+  but anyone with read access to the data directory — shell access as the
+  service user or root, or physical access to the SD card — can read it.
+  Basic auth also sends it on every request in cleartext over plain HTTP, so
+  it guards against casual access on the show LAN, not a hostile network.
+  Don't reuse a valuable password here. The Wi-Fi hotspot password is
+  stored the same way, and is also visible in the process list while
+  `nmcli` runs.
+- **Cross-site guard** (`SameOrigin`, before auth): state-changing requests
+  (anything but GET/HEAD/OPTIONS) whose `Origin`/`Referer` names another
+  host get 403 — browsers attach cached Basic credentials to cross-site
+  form posts, so the password alone does not stop CSRF. Requests with
+  neither header (curl, Companion) pass. The `Host` header must be an IP
+  literal, `localhost`, a dotless name, a name under a local-only suffix
+  (`.local`, `.lan`, `.home.arpa`, `.internal`), the machine hostname, or be
+  listed in config `allowed_hosts` (e.g. a reverse-proxy domain); anything
+  else gets 421 (DNS-rebinding guard: public DNS can't serve those names). The WebSocket handshake checks
+  `Origin` the same way.
+- **Resource bounds**: request bodies cap at 2 GiB; a `.CTP` import is
+  refused (507) when its declared media size plus 256 MiB headroom exceeds
+  the media volume's free space. Scratch files live in `<working dir>/tmp`
+  rather than `/tmp`, which is RAM-backed tmpfs on current Raspberry Pi OS.
+  ffprobe/ffmpeg calls have timeouts (probe 30 s, verify/thumbnail 60 s,
+  full-file analysis 15 min, waveform window 30 s), as do system tools run
+  from requests (20 s).
 
 ## 8. Testing & verification
 
@@ -401,7 +572,9 @@ moves the generation. Keep them consistent.
   an insert *between* numbered cues takes a fractional number (12.5), kept as
   text — no schema change (`cueNum` is TEXT; existing CAST-INTEGER MAX for
   next-number computation still works).
-- **Renumber ×5** action recomputes the visible sequence to clean integers;
+- Appends take the next multiple of the **cue number step** (Settings → General, default 1) above the highest number
+  in the sheet (cue or group header).
+- **Renumber cues** recomputes the visible sequence as step, 2×step… (see §5.4); **Sort by cue number** reorders it;
 
 ### 12.6 Topbar clock
 
@@ -425,26 +598,120 @@ moves the generation. Keep them consistent.
   Slideshow groups may set a group-level curve used for their inter-slide fades.
 
 ### 12.8 Remote control protocols (OSC + HyperDeck)
-- **QLab Remote** iOS app and the **Companion QLab module** are the
-  reference clients: QLab protocol on TCP port 53000 (SLIP-framed) plus
-  UDP 53000, speaking the QLab address dictionary (`/go`, `/stop`,
-  `/pause`, `/resume`, `/panic`, `/reset`, `/next`, `/previous`,
-  `/cue/{n}/start|go|load|panic|stop|select`). Unknown addresses are
-  ignored (logged at debug).
-- **HyperDeck Remote Control Protocol** (TCP, default port 9993): Blackmagic
-  text-command subset — `play`, `stop`, `record` (ignored/unsupported
-  response), `load: <clip>` (select + load the cue whose title/number
-  matches), `clips count` / `clips get`, `goto: <tc>`, `transport info`,
-  `notify` — enough for HyperDeck controllers. Connection handling follows
-  [hyperdeck-server-connection](https://github.com/mint-dewit/hyperdeck-server-connection):
-  at most one client at a time by default (like a real deck), and transport
-  notifications are broadcast to every connected client. Transport state is
-  reported from the gsp state machine.
-- **Trust boundary**: neither protocol authenticates (protocol limitation) —
-  they are **off by default** and documented as control-room-LAN features.
+Reference clients are Bitfocus Companion's **HyperDeck** module
+(bmd-hyperdeck 3.1, library hyperdeck-connection 3.1) and **QLab** module
+(figure53-qlab-advance 2.14, osc.js). Both must reach status OK, and their
+actions, feedbacks and variables must work without changes on the
+Companion side.
+
+- **HyperDeck** (TCP, default port 9993; `routes/hyperdeck.go`). CuTePi
+  presents itself as a **HyperDeck Studio Mini**, protocol 1.11, in the
+  greeting and in `device info`. The module selects that model from the
+  model string.
+  - *Framing.* Commands are single-line (`play: speed: 100`) or multi-line
+    (`notify:` plus one `param: value` line each, then a blank line).
+    Replies are `{code} {name}` or `{code} {name}:` plus lines and a blank
+    line. Errors use the protocol's codes (100 syntax, 101 unsupported
+    parameter, 102 invalid value, 103 unsupported, 105 no disk,
+    107 timeline empty, 109 out of range, 111 remote disabled,
+    120 connection rejected).
+  - *Session.* `watchdog: period: N` closes a client that stays silent past
+    N seconds (plus a 2 s grace). The client's `ping` keeps it alive. At
+    most one client at a time, like a real deck; the watchdog frees the
+    slot of a controller that vanished.
+  - *State the module reads at connect.* Every one of these must answer, or
+    the module drops the connection:
+    - `notify` (209, or set: 200);
+    - `device info` (204, with `slot count: 2`);
+    - `slot info` (202: slot 1 mounted with the clip list, slot 2 empty);
+    - `transport info` (208);
+    - `configuration` (211: SDI, embedded audio, H.264; settable, kept in
+      memory);
+    - `remote` (210: enabled). `remote: enable: false` makes transport
+      commands answer 111, as on a deck.
+  - *Clips.* The cue sheet in play order is the clip list (or the media
+    pool, per Settings). Clip ids are 1…N in that order, as on a deck's
+    timeline: the module sorts clips by id. `clips get` answers versions 1
+    and 2; `clips count` answers 214. `disk list` gives the files.
+  - *Transport.*
+    - `play [clip id|timecode|speed|loop]`, `stop`, `jog` and `shuttle`.
+    - `goto` by clip id, `clip: start|end|±n`, `timeline: start|end|n|±n`
+      or `timecode` (absolute or `±`). `goto` moves the playhead (the
+      selected cue) without starting it; the next bare `play` starts that
+      clip.
+    - A bare `play` with nothing loaded plays from the playhead, or from
+      the first clip when nothing is selected.
+    - Speed is a percentage of the cue's own programmed rate (100 = as
+      designed): controllers send `speed: 100` with every play. A negative
+      speed answers 103, because there is no reverse playback.
+    - `loop: true` loops the running clip only; `loop: false` doesn't
+      override a cue that loops by design.
+    - `stop` stops the cue (the show-controller meaning). A paused cue, or
+      a clip held on its last frame (a still), reports `status: stopped`
+      with its clip id, like a stopped deck holding a frame.
+  - *Notifications* go to clients that subscribed with `notify:`:
+    - 508 transport (debounced one 100 ms tick, so a half-loaded state is
+      never sent);
+    - 502 slot, when the clip list changes, which makes the module re-read
+      the clips;
+    - 510 remote, 511 configuration and 513 display timecode.
+    - A command's reply always precedes the notifications it triggers.
+  - *Playback-only.* `record`, `format` and `clips add/remove/clear` answer
+    103. `playrange set` answers 103, and `playrange` reports none.
+- **QLab** (OSC; `routes/qlab.go` and `routes/qlabws.go`). CuTePi presents
+  itself as **QLab 5** (`/version` → 5.4.0), with one workspace (named
+  after the host) holding one cue list, the cue sheet.
+  - *Transports.* TCP 53000, SLIP-framed (END before and after each
+    packet), answers every message with `/reply{address}` and QLab's JSON
+    envelope `{workspace_id, address, status, data}`. Unknown addresses
+    answer `status: error`, as QLab does. UDP 53000 runs the same
+    dictionary without replies (QLab's UDP mode is fire-and-forget).
+  - *Handshake.* `/connect` grants `ok:view|edit|control` (there is no
+    passcode; see the trust boundary). `/workspaces`, `/updates 1`,
+    `/cueLists`, `/selectedCues`, `/playheadID`, the audition, override,
+    show-mode and min-GO queries, and `/overrides/*` all answer, so the
+    module reaches OK.
+  - *Cues.* Every sheet row is a cue: unique ID from its database id,
+    number from its cue number (else its sheet position), type Video or
+    Audio. The palette colour maps to QLab's colour names.
+    `valuesForKeys` returns the full dictionary the module requests:
+    running/paused, duration, elapsed and percent through the trimmed
+    span, pre/post wait, continue mode, loop, hold, broken. A clip held on
+    its last frame is running; only an operator pause is `isPaused`. Cue
+    lists never carry `isPaused`: the module (2.14) throws on a paused cue
+    it hasn't stored yet, and its follow-up `/cue/active/valuesForKeys`
+    carries the pause.
+  - *Addresses.*
+    - Rootless or `/workspace/{id}`-scoped.
+    - Transport: `/go`, `/stop`, `/pause`, `/resume`, `/panic`,
+      `/panicInTime` (a fade-out), `/reset`, `/togglePause`.
+    - Playhead: `/playhead/next|previous[Sequence]`,
+      `/playhead/{number}`, `/playheadID/{id}`.
+    - Per cue: `/cue/{number|selected|playhead|active}/…` and
+      `/cue_id/{id}/…` with `start`, `go` (playhead there, then GO),
+      `stop`, `panic`, `panicInTime`, `pause`, `resume`, `togglePause`,
+      `select`, and property reads. `load`, `preview` and `audition` are
+      accepted and do nothing.
+    - Cue-list commands on `/cue_id/{list}/…`.
+  - *Updates.* After `/updates 1`, a client gets
+    `/update/workspace/{id}/cue_id/{cue}` when a cue's state (the one that
+    was, and the one now on the board) or its shown content changes. It
+    gets `…/cueList/{list}/playbackPosition {cue}` when the playhead
+    moves, and the list's own update when cues are added, removed or
+    reordered.
+- **Trust boundary**: neither protocol authenticates (protocol limitation),
+  and the operator password does **not** cover them: anyone who can reach
+  an enabled port can drive playback. They are **off by default** and
+  documented as control-room-LAN features. The bind address applies to all
+  three listeners, so they can be pinned to one interface. DoS bounds:
+  HyperDeck lines cap at 4 KiB and a multi-line command at 32 parameter
+  lines, SLIP packets cap at 64 KiB, and control writes time out after 2 s.
+  Each HyperDeck client has a 64-frame notification queue: frames beyond it
+  are dropped, and a client that stops reading is cut by the write
+  timeout.
 - **Configuration lives in the Settings modal Network tab**: one
   enable/disable toggle per remote item (HyperDeck, OSC UDP, OSC TCP/SLIP)
-  + port per protocol (and OSC bind address), persisted in `config.json`;
+  + port per protocol (and one bind address for all listeners), persisted in `config.json`;
   the tab lists every server with its live on/off state. The HyperDeck clip
   listing source is selectable: Cuesheet (default — cue rows in play order)
   or MediaPool.
@@ -465,6 +732,14 @@ moves the generation. Keep them consistent.
   the existing `ShowTest` path (no cue created; ESC/Stop ends). Test
   patterns are **not available in Show mode** (the Tests entry is locked;
   the API refuses with 403).
+- **Full screen at the display's own mode**: patterns are generated at the display resolution and fill it edge to
+  edge. Generation rate: static patterns a few frames a second (the display scans the layer out at its own refresh
+  anyway), Snow 30 fps (generated at a third of the resolution and scaled up by the display), **Blink at the display
+  refresh rate** — it alternates every refresh, the frame-rate check.
+- **Resolution & frame-rate label** (checkbox in the Tests picker, remembered): prints `1920 × 1080 @ 60 Hz` (the
+  display's current mode) on the pattern. Changing it while a pattern is showing re-shows it at once.
+- **Tests button state**: off = a quiet grey "Tests"; on = red, pulsing **TEST ON** on every connected client. The
+  picker highlights the pattern currently on the output.
 - **Custom patterns**: the operator can flag any media-pool item as a test
   pattern (media context menu → *Add to test patterns*), which pins it into
   the same Tests menu; selecting one Loads it directly (images hold their
@@ -491,6 +766,12 @@ moves the generation. Keep them consistent.
 - A joining Client B should instantly be able to follow or lead current actions.
 - If Server A disconnects, Client A must still function correctly and talk to Server B. A error warning must be displayed but UI functionality must not be interupted.
   
+
+### 12.11 A/V sync test signal (later phase)
+
+A test signal for checking audio/video sync end to end: a full-screen flash on the wall exactly when a short tone plays
+on the audio output (e.g. once a second), with an optional on-screen sweep/counter, so the delay between picture and
+sound can be measured at the venue (camera + microphone, or a sync meter). Planned for a later phase; not implemented.
 
 ### 12.13 Awards Mode (group playback toggle)
 

@@ -11,7 +11,7 @@ WorkingDirectory=/opt/cutepi
 # User data (config/, ctp.db, media/, thumbnails/) defaults to ~/cutepi:
 # WORKING_DIR is unset and the app falls back to $HOME/cutepi. Set this var
 # to relocate the data tree.
-Environment=PORT=3001
+Environment=PORT=80
 # So the UI's Restart button runs `systemctl restart cutepi` under this unit.
 Environment=CUTEPI_SERVICE=cutepi
 

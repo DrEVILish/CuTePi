@@ -178,11 +178,10 @@ func TestWarmVideoPrewarmAndRelink(t *testing.T) {
 	config.SetDirsForTesting(dir)
 	out := filepath.Join(dir, "warm-video.mp4")
 	// Video-only MJPEG: no audio branch (this CI box has no audio device —
-	// audio preroll fails for env reasons). On Pi hardware decodebin picks
-	// v4l2jpegdec, whose firmware path is unreliable (buffer-pool
-	// activation fails / stalls silently) — run Pi suites with
-	// GST_PLUGIN_FEATURE_RANK=v4l2jpegdec:0 (the production service carries
-	// the same override) to route JPEG through software jpegdec.
+	// audio preroll fails for env reasons). On Pi hardware decodebin would
+	// pick v4l2jpegdec, whose firmware path is unreliable; gstInit demotes
+	// it (jpegRankOverride) so JPEG goes through software jpegdec here and
+	// in production alike.
 	if err := runCmd("ffmpeg", "-v", "error",
 		"-f", "lavfi", "-i", "color=c=gray:size=64x64:rate=10:duration=2",
 		"-c:v", "mjpeg", out); err != nil {

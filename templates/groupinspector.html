@@ -5,13 +5,13 @@
 <div id="cueinspector-body" class="groupinspector-body" data-group-id="{{ .Group.GroupID }}">
   {{ if .Group.Slideshow }}
   <div class="alert alert-info py-2 px-3 small">
-    <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
+    <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
     Slideshow: its cues cycle automatically with the settings below. Press <em>Play</em> on the sheet to start it.
   </div>
   {{ end }}
   {{ if .Group.AwardsMode }}
   <div class="alert alert-info py-2 px-3 small">
-    <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
+    <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
     Awards mode: GO plays one member, GO again fades it out — the selection stays on this group.
   </div>
   {{ end }}
@@ -19,24 +19,24 @@
   <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML"
     hx-trigger="change delay:200ms, submit"
     class="gi-form vstack is-gap-xs" style="max-width: 42rem;">
-    <div class="small ftl-text-muted" aria-label="Group runtime">
-      <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-hourglass"/></svg>
+    <div class="small text-muted" aria-label="Group runtime">
+      <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-hourglass"/></svg>
       Runtime {{ .DurationTotal }}{{ if ne .Remaining "00:00" }} · remaining {{ .Remaining }}{{ end }}
     </div>
     <div class="d-flex is-gap-xs">
       <div class="flex-grow-1">
-        <label class="ftl-label small mb-0" for="group-name">Name</label>
+        <label class="label small mb-0" for="group-name">Name</label>
         <input id="group-name" name="name" class="form-control form-control-sm" value="{{ .Group.Name }}">
       </div>
       <div>
-        <label class="ftl-label small mb-0" for="group-cuenum">Number</label>
-        <input id="group-cuenum" name="cueNum" class="ftl-input" style="width:6em" maxlength="24"
+        <label class="label small mb-0" for="group-cuenum">Number</label>
+        <input id="group-cuenum" name="cueNum" class="input" style="width:6em" maxlength="24"
           value="{{ .Group.CueNum }}">
       </div>
     </div>
-    <div class="row g-2">
-      <div class="col">
-        <label class="ftl-label small mb-1" for="group-swatches">Colour</label>
+    <div class="row is-gap-s is-wrap">
+      <div class="group-col">
+        <label class="label small mb-1" for="group-swatches">Colour</label>
         <div class="insp-swatches" id="group-swatches" role="radiogroup" aria-label="Group colour">
           <label class="insp-swatch insp-swatch-none" title="None">
             <input type="radio" name="color" value="" aria-label="No colour" {{ if not $.Group.Color }}checked{{ end }}>
@@ -69,16 +69,16 @@
         <label class="small" for="group-loop">Loop</label>
       </div>
     </div>
-    <div class="ftl-row is-gap-xs {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
+    <div class="row is-gap-xs {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
       <div id="group-duration-wrap">
-        <label class="ftl-label small mb-0" for="group-duration">Hold each image (s)</label>
-        <input id="group-duration" name="durationSecs" type="number" min="0" step="1" class="ftl-input" style="width:8em"
-          value="{{ if .Group.DurationMS }}{{ div .Group.DurationMS 1000 }}{{ end }}" placeholder="5">
+        <label class="label small mb-0" for="group-duration">Hold each image</label>
+        <input id="group-duration" name="durationSecs" type="text" inputmode="decimal" data-validate="time" autocomplete="off" class="input" style="width:8em"
+          value="{{ if .Group.DurationMS }}{{ formatTime .Group.DurationMS }}{{ end }}" placeholder="5s">
       </div>
       <div>
-        <label class="ftl-label small mb-0" for="group-fade" id="group-fade-label">{{ if .Group.AwardsMode }}Fade out on stop (s){{ else }}Fade between (s){{ end }}</label>
-        <input id="group-fade" name="fadeSecs" type="number" min="0" step="1" class="ftl-input" style="width:8em"
-          value="{{ if .Group.FadeMS }}{{ div .Group.FadeMS 1000 }}{{ end }}" placeholder="0">
+        <label class="label small mb-0" for="group-fade" id="group-fade-label">{{ if .Group.AwardsMode }}Fade out on stop{{ else }}Fade between{{ end }}</label>
+        <input id="group-fade" name="fadeSecs" type="text" inputmode="decimal" data-validate="time" autocomplete="off" class="input" style="width:8em"
+          value="{{ if .Group.FadeMS }}{{ formatTime .Group.FadeMS }}{{ end }}" placeholder="0s">
       </div>
     </div>
   </form>

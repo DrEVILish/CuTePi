@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -17,56 +16,32 @@ import (
 	"CuTePi/ctp"
 )
 
-// Theme is one selectable UI theme. Two kinds exist:
-//
-//   - "app" themes: a single portable CSS file in public/css/themes/<name>.css.
-//     Dropping a new name.css into that folder is enough — it is served as a
-//     static file, listed by Themes(), and offered in the settings UI with no
-//     code changes.
-//   - "ftl" themes: a bundle from the pinned ftl-themes submodule, shared with
-//     the other apps in the family. Those carry a layout as well as a palette,
-//     so selecting one also re-arranges the page shell.
-//
-// Both kinds set the same html[data-theme=<Name>] attribute, so an app theme
-// and an ftl theme can share a Name (both have "lcars"). They are told apart
-// by ID ("app:lcars" vs "ftl:lcars"), and exactly one stylesheet is linked at
-// a time — which is what the ftl-themes contract requires anyway.
+// Theme is one selectable UI theme. Every theme comes from the pinned
+// ftl-themes submodule (third_party/ftl-themes, contract v4): a bundle that
+// carries a layout as well as a palette, keyed on html[data-theme=<Name>].
+// CuTePi ships no themes of its own.
 type Theme struct {
-	// ID is the stable, unambiguous identifier stored in localStorage and
-	// used by the settings picker: "app:<name>" or "ftl:<slug>".
+	// ID is the stable identifier stored in localStorage and used by the
+	// settings picker: "ftl:<slug>".
 	ID string `json:"id"`
-	// Name is the html[data-theme] value the stylesheet is keyed on.
+	// Name is the html[data-theme] value the bundle is keyed on (the slug).
 	Name string `json:"name"`
 	// Label is the human-readable name shown in Settings.
 	Label string `json:"label"`
-	// File is the basename for app themes; empty for ftl themes.
-	File string `json:"file"`
-	// Href is the stylesheet URL to link for this theme.
+	// Href is the bundle URL to link for this theme.
 	Href string `json:"href"`
-	// Source is "app" or "ftl".
-	Source string `json:"source"`
-	// Scheme is "light" or "dark": how Bootstrap's data-bs-theme should be
-	// set while this theme is active (shared themes only; app themes are
-	// always dark).
+	// Scheme is "light" or "dark": how Bootstrap's data-bs-theme is set while
+	// the theme is active.
 	Scheme string `json:"scheme"`
 }
 
-// themeNameRe reads the display label from an app theme file's header comment:
-// "Theme-Name: Human Readable". Files without it fall back to the filename.
-var themeNameRe = regexp.MustCompile(`(?m)^\s*\*?\s*Theme-Name:\s*(.+?)\s*$`)
-
-// DefaultThemeID is what an unset or unrecognised preference resolves to.
-// The theme source is the ftl-themes submodule (app: files still exist as
-// options), and xbmc — near-black home-theatre shell, glowing blue underline
-// selection — is the closest living kin of the retired app:blue-future look.
+// DefaultThemeID is what an unset or unrecognised preference resolves to:
+// xbmc — near-black home-theatre shell, glowing blue underline selection.
 const DefaultThemeID = "ftl:xbmc"
 
-// themesDir locates the app themes folder whether the process runs from the
-// repo root (server, smoke tests) or from routes/ (go test).
-func themesDir() string { return findRepoDir("public/css/themes") }
-
-// ftlDistDir locates the pinned ftl-themes bundles the same way.
-func ftlDistDir() string { return findRepoDir("third_party/ftl-themes/dist") }
+// themeDistDir locates the pinned ftl-themes bundles whether the process runs
+// from the repo root (server) or from routes/ (go test).
+func themeDistDir() string { return findRepoDir("third_party/ftl-themes/dist") }
 
 func findRepoDir(rel string) string {
 	for _, prefix := range []string{"./", "../"} {
@@ -78,47 +53,11 @@ func findRepoDir(rel string) string {
 	return "./" + rel
 }
 
-// Themes scans both sources on every call — a handful of small files, so the
-// settings UI and the header link are always current without a restart.
+// Themes reads the submodule's generated manifest on every call (one small
+// file), so the picker is always current without a restart. A missing
+// submodule means no themes: the page then renders with the app's base CSS.
 func Themes() []Theme {
-	return append(appThemes(), ftlThemes()...)
-}
-
-func appThemes() []Theme {
-	entries, err := os.ReadDir(themesDir())
-	if err != nil {
-		return nil
-	}
-	var out []Theme
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".css") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".css")
-		label := name
-		if data, err := os.ReadFile(filepath.Join(themesDir(), e.Name())); err == nil {
-			if m := themeNameRe.FindSubmatch(data); m != nil {
-				label = string(m[1])
-			}
-		}
-		out = append(out, Theme{
-			ID:     "app:" + name,
-			Name:   name,
-			Label:  label,
-			File:   e.Name(),
-			Href:   "/css/themes/" + e.Name(),
-			Source: "app",
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
-}
-
-// ftlThemes reads the submodule's generated manifest. Its absence (submodule
-// not initialised) simply means no shared themes are offered — the app themes
-// above still work, so a missing submodule degrades rather than breaks.
-func ftlThemes() []Theme {
-	data, err := os.ReadFile(filepath.Join(ftlDistDir(), "themes.json"))
+	data, err := os.ReadFile(filepath.Join(themeDistDir(), "themes.json"))
 	if err != nil {
 		return nil
 	}
@@ -135,9 +74,6 @@ func ftlThemes() []Theme {
 		if m.Slug == "" {
 			continue
 		}
-		// Scheme comes stamped from the manifest (build_manifest.py derives
-		// it from the theme's surface/background tokens). Older manifests
-		// without the field read as dark — the historical default.
 		scheme := m.Scheme
 		if scheme == "" {
 			scheme = "dark"
@@ -145,22 +81,18 @@ func ftlThemes() []Theme {
 		out = append(out, Theme{
 			ID:    "ftl:" + m.Slug,
 			Name:  m.Slug,
-			Label: m.Label + " (shared)",
-			// Served through the layered wrapper: the bundle sits in one
-			// low-priority @layer so CuTePi's own (unlayered) CSS always
-			// beats the library regardless of load order — the upstream
-			// prebuilt .layered.css files were dropped in favour of this.
-			Href:   "/api/theme/" + m.Slug + ".css",
-			Source: "ftl",
+			Label: m.Label,
+			// v4 bundles wrap themselves in @layer ui; header.html orders
+			// the layers so the app's unlayered CSS always wins.
+			Href:   "/ftl/themes/" + m.Slug + ".css",
 			Scheme: scheme,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
 	return out
 }
 
-// ThemeNames reports the valid data-theme values reaching the inspector
-// and cuesheet constraints ("app:<name>", "ftl:<slug>", or the bare app name).
+// ThemeNames reports the valid data-theme values.
 func ThemeNames() []string {
 	names := []string{}
 	for _, t := range Themes() {
@@ -169,8 +101,8 @@ func ThemeNames() []string {
 	return names
 }
 
-// ThemeMap is the id -> {name, href} map the pre-paint boot script in
-// header.html uses to pick a stylesheet before the first render, and that
+// ThemeMap is the id -> {name, href, scheme} map the pre-paint boot script
+// in header.html uses to pick a stylesheet before the first render, and that
 // ui.js reuses when the picker changes.
 func ThemeMap() template.JS {
 	m := map[string]map[string]string{}
@@ -222,27 +154,9 @@ func TemplateFuncs() map[string]any {
 	}
 }
 
-// registerThemeRoutes serves the discovered theme list for the settings UI
-// and the boot-time theme allowlist (public/src/ui.js).
+// registerThemeRoutes serves the theme list for the settings UI.
 func registerThemeRoutes(rg *gin.RouterGroup) {
 	rg.GET("/themes", func(c *gin.Context) {
 		c.JSON(http.StatusOK, Themes())
-	})
-	// The layered bundle: one @import turnstiles the whole dist bundle into
-	// a single cascade layer, so unlayered app CSS always wins the ties —
-	// the prebuilt dist/<slug>.layered.css files upstream removed did the
-	// same thing server-side. The @import resolves nested url() references
-	// relative to the bundle, so asset paths stay right.
-	rg.GET("/theme/*slugCSS", func(c *gin.Context) {
-		slug := strings.TrimSuffix(strings.Trim(c.Param("slugCSS"), "/"), ".css")
-		for _, t := range ftlThemes() {
-			if t.Name == slug {
-				c.Header("Content-Type", "text/css; charset=utf-8")
-				c.Data(http.StatusOK, "text/css; charset=utf-8",
-					[]byte("@layer ftl;\n@import url(\"/ftl/themes/"+slug+".css\") layer(ftl);\n"))
-				return
-			}
-		}
-		c.String(http.StatusNotFound, "unknown theme")
 	})
 }

@@ -1,12 +1,12 @@
 {{ define "uploadModal.html" }}
 
-<div class="modal fade" id="uploadModal" tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true">
+<div class="app-modal fade" id="uploadModal" tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true">
   <div class="modal-dialog modal-xl">
-    <div class="modal-content">
+    <div class="modal-content modal">
       <div class="modal-header">
-        <h1 class="modal-title fs-5" id="uploadModalLabel">Upload</h1>
+        <span class="modal-title" id="uploadModalLabel">Upload</span>
         <a class="btn btn-lg" href="/upload">
-          <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-logout"/></svg>
+          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-logout"/></svg>
         </a>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
@@ -30,7 +30,7 @@
           <div id="upload-status" class="small" role="status" aria-live="polite"></div>
         </div>
         <div class="modal-footer">
-          <button id="upload" class="btn ftl-btn-primary" type="submit">Upload</button>
+          <button id="upload" class="btn btn-primary" type="submit">Upload</button>
         </div>
       </form>
     </div>

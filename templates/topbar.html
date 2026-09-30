@@ -1,17 +1,17 @@
 {{ define "topbar.html" }}
 
-<nav class="navbar navbar-dark ftl-app-bar">
+<nav class="navbar navbar-dark app-bar">
   <div class="container-fluid d-flex is-justify-between is-items-center">
     <span id="ws-status" class="ws-status" role="status" aria-live="polite"
       aria-label="Live updates offline">
-      <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-broadcast"/></svg>
+      <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-broadcast"/></svg>
     </span>
     <span id="topbar-clock" class="topbar-clock" role="img" title="Current time"
       aria-label="Current time">--:--:--</span>
     {{ template "mediainfo.html" }}
     <div class="btn-group">
-      <button class="btn ftl-btn-secondary" id="fullscreen-btn" data-fullscreen-state="off" title="Enter fullscreen" aria-label="Enter fullscreen">
-        <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-maximize"/></svg>
+      <button class="btn btn-secondary" id="fullscreen-btn" data-fullscreen-state="off" title="Enter fullscreen" aria-label="Enter fullscreen">
+        <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-maximize"/></svg>
       </button>
     </div>
     

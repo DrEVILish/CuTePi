@@ -1,10 +1,12 @@
 package ctp
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -450,6 +452,22 @@ func TestParseTime(t *testing.T) {
 		{"0", 0, false},
 		{"1.5", 1_500, false},
 
+		// Unit forms: the operator's "1:05.000", "1m5s" and "65" all mean 65 s
+		{"1:05.000", 65_000, false},
+		{"1m5s", 65_000, false},
+		{"65", 65_000, false},
+		{"1m 5.5s", 65_500, false},
+		{"10s", 10_000, false},
+		{"500ms", 500, false},
+		{"1h2m3s", 3_723_000, false},
+		{"2min", 120_000, false},
+		{"1M5S", 65_000, false},
+		{"5s1m", 0, true},
+		{"1m1m", 0, true},
+		{"1x", 0, true},
+		{"m5", 0, true},
+		{"-1s", 0, true},
+
 		// mm:ss
 		{"1:30", 90_000, false},
 		{"1:30.5", 90_500, false},
@@ -665,6 +683,42 @@ func TestDeleteMediaRemovesFromMediapool(t *testing.T) {
 	}
 }
 
+// Deleting media must not leave it pinned as a test pattern or set as the
+// panic holding image.
+func TestDeleteMediaClearsPinAndHoldingImage(t *testing.T) {
+	mustRegisterMedia(t, "del-pin.png")
+	mustRegisterMedia(t, "del-keep.png")
+	if err := AddTestPattern("del-pin.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddTestPattern("del-keep.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPanicHoldImage("del-pin.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete("del-pin.png"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	for _, p := range TestPatterns() {
+		if p == "del-pin.png" {
+			t.Fatalf("deleted media still pinned as a test pattern: %v", TestPatterns())
+		}
+	}
+	found := false
+	for _, p := range TestPatterns() {
+		found = found || p == "del-keep.png"
+	}
+	if !found {
+		t.Fatalf("unrelated pin was removed: %v", TestPatterns())
+	}
+	if got := GetPanicHoldImage(); got != "" {
+		t.Fatalf("holding image still %q after its media was deleted", got)
+	}
+	_ = SetPanicHoldImage("")
+	_ = RemoveTestPattern("del-keep.png")
+}
+
 // Regression test: deleting a media item referenced by a cue must remove
 // that cue too (the cuesheet table's ON DELETE CASCADE foreign key), per
 // spec ("If a media file is deleted... those cues should be deleted").
@@ -687,6 +741,34 @@ func TestDeleteMediaCascadesToCues(t *testing.T) {
 	}
 	if len(sheet.Cues) != 0 {
 		t.Fatalf("expected the cue referencing the deleted media to be gone, got %+v", sheet.Cues)
+	}
+}
+
+// After a drag the visual (sheet_index) order differs from cuePos order;
+// removing a cue re-indexes to 1..N and used to trip UNIQUE(cuePos).
+func TestRemoveCueAfterReorderKeepsUniquePositions(t *testing.T) {
+	if err := ClearCueSheet(); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"ro-a.mp4", "ro-b.mp4", "ro-c.mp4", "ro-d.mp4"} {
+		mustRegisterMedia(t, n)
+		if err := AddCue(n, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Visual order becomes c, a, b, d while cuePos stays a=1 b=2 c=3 d=4.
+	if _, err := db.Exec(`UPDATE cuesheet SET sheet_index = CASE cuePos WHEN 3 THEN 1000 WHEN 1 THEN 2000 WHEN 2 THEN 3000 ELSE 4000 END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveCue("4"); err != nil {
+		t.Fatalf("RemoveCue after reorder: %v", err)
+	}
+	var names []string
+	if err := db.Select(&names, `SELECT m.filename FROM cuesheet c JOIN mediapool m ON m.media_id = c.media_id ORDER BY c.cuePos`); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 3 || names[0] != "ro-c.mp4" || names[1] != "ro-a.mp4" || names[2] != "ro-b.mp4" {
+		t.Fatalf("expected positions to follow visual order c,a,b; got %v", names)
 	}
 }
 
@@ -937,6 +1019,7 @@ func TestNewCueColumnsRoundTrip(t *testing.T) {
 		"fadeAction":   {"all", "all"},
 		"fadeOut":      {"2.5", "2.5"}, // 2.5 s stored as ms
 		"volume":       {"0.6", "0.6"}, // per-cue master gain in dB; 0 = 0dB default
+		"fadeCurve":    {"log", "log"}, // column is fade_curve; the API name must map
 	}
 	for col, vals := range cases {
 		if err := UpdateCue(pos, col, vals[0]); err != nil {
@@ -971,7 +1054,14 @@ func TestNewCueColumnsRoundTrip(t *testing.T) {
 			if c.Volume != 0.6 {
 				t.Fatalf("volume = %v, want 0.6", c.Volume)
 			}
+		case "fadeCurve":
+			if c.FadeCurve != vals[1] {
+				t.Fatalf("fadeCurve = %q, want %q", c.FadeCurve, vals[1])
+			}
 		}
+	}
+	if err := UpdateCue(pos, "fadeCurve", "bogus"); err == nil {
+		t.Fatalf("unknown fade curve accepted")
 	}
 }
 
@@ -1094,5 +1184,152 @@ func TestReorderCuesBeyondThousand(t *testing.T) {
 	}
 	if got.Cues[n-1].CuePos != n {
 		t.Fatalf("last cuePos = %d, want %d (1..N reindex)", got.Cues[n-1].CuePos, n)
+	}
+}
+
+// §12.5: auto-numbering appends 1, 2, 3…, an insert between numbered cues
+// takes the midpoint, and the next append returns to a whole number.
+func TestAutoNumberAppendsIntegers(t *testing.T) {
+	if err := ClearCueSheet(); err != nil {
+		t.Fatalf("ClearCueSheet: %v", err)
+	}
+	if err := SetAutoNumber(true); err != nil {
+		t.Fatalf("SetAutoNumber: %v", err)
+	}
+	mustRegisterMedia(t, "autonum.mp4")
+	for i := 0; i < 3; i++ {
+		if err := AddCue("autonum.mp4", ""); err != nil {
+			t.Fatalf("AddCue: %v", err)
+		}
+	}
+	nums := func() []string {
+		sheet, err := GetCuesheet()
+		if err != nil {
+			t.Fatalf("GetCuesheet: %v", err)
+		}
+		var out []string
+		for _, c := range sheet.Cues {
+			out = append(out, c.CueNum)
+		}
+		return out
+	}
+	if got := strings.Join(nums(), ","); got != "1,2,3" {
+		t.Fatalf("appended numbers = %s, want 1,2,3", got)
+	}
+	if err := AddCue("autonum.mp4", "2"); err != nil {
+		t.Fatalf("insert AddCue: %v", err)
+	}
+	if got := strings.Join(nums(), ","); got != "1,1.5,2,3" {
+		t.Fatalf("after insert = %s, want 1,1.5,2,3", got)
+	}
+	if err := AddCue("autonum.mp4", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	if got := strings.Join(nums(), ","); got != "1,1.5,2,3,4" {
+		t.Fatalf("after append = %s, want …,4", got)
+	}
+	// Renumber rewrites the whole sequence 1, 2, 3… (default step 1).
+	if err := RenumberSheet(); err != nil {
+		t.Fatalf("RenumberSheet: %v", err)
+	}
+	if got := strings.Join(nums(), ","); got != "1,2,3,4,5" {
+		t.Fatalf("after renumber = %s, want 1,2,3,4,5", got)
+	}
+	// A configured step applies to renumbering and to the next append.
+	if err := SetCueNumStep(10); err != nil {
+		t.Fatal(err)
+	}
+	defer SetCueNumStep(DefaultCueNumStep)
+	if err := RenumberSheet(); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddCue("autonum.mp4", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(nums(), ","); got != "10,20,30,40,50,60" {
+		t.Fatalf("step 10 = %s, want 10,20,30,40,50,60", got)
+	}
+}
+
+func TestCueNumbersStayUnique(t *testing.T) {
+	if err := ClearCueSheet(); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"un-a.mp4", "un-b.mp4"} {
+		mustRegisterMedia(t, n)
+		if err := AddCue(n, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := UpdateCue("1", "cueNum", "10"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateCue("2", "cueNum", "10"); !errors.Is(err, ErrDuplicateCueNum) {
+		t.Fatalf("duplicate cue number: err = %v, want ErrDuplicateCueNum", err)
+	}
+	if err := UpdateCue("2", "cueNum", "10.0"); !errors.Is(err, ErrDuplicateCueNum) {
+		t.Fatalf("10.0 is the same number as 10: err = %v", err)
+	}
+	if err := UpdateCueFields("2", map[string]string{"cueNum": "10"}); !errors.Is(err, ErrDuplicateCueNum) {
+		t.Fatalf("batched duplicate: err = %v", err)
+	}
+	if err := UpdateCue("1", "cueNum", "10"); err != nil {
+		t.Fatalf("re-saving a cue's own number must pass: %v", err)
+	}
+
+	gid, err := CreateGroup("un-group", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, _ := GetGroup(gid)
+	g.CueNum = "10"
+	if err := UpdateGroup(g); !errors.Is(err, ErrDuplicateCueNum) {
+		t.Fatalf("group taking a cue's number: err = %v", err)
+	}
+	g.CueNum = "20"
+	if err := UpdateGroup(g); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateCue("2", "cueNum", "20"); !errors.Is(err, ErrDuplicateCueNum) {
+		t.Fatalf("cue taking a group's number: err = %v", err)
+	}
+	g.Name = "renamed"
+	if err := UpdateGroup(g); err != nil {
+		t.Fatalf("saving a group with its own number must pass: %v", err)
+	}
+
+	if got, err := freeCueNum(db, "10"); err != nil || got != "21" {
+		t.Fatalf("freeCueNum(10) = %q, %v; want the next number above everything, 21", got, err)
+	}
+	if got, err := freeCueNum(db, "7"); err != nil || got != "7" {
+		t.Fatalf("freeCueNum(7) = %q, %v; an unused number is kept", got, err)
+	}
+	_ = DeleteGroup(gid)
+}
+
+func TestSortSheetByCueNumber(t *testing.T) {
+	if err := ClearCueSheet(); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"so-a.mp4", "so-b.mp4", "so-c.mp4", "so-d.mp4"} {
+		mustRegisterMedia(t, n)
+		if err := AddCue(n, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, pn := range [][2]string{{"1", "30"}, {"2", "7"}, {"3", "B"}, {"4", "10"}} {
+		if err := UpdateCue(pn[0], "cueNum", pn[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SortSheetByCueNumber(); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := db.Select(&got, `SELECT cueNum FROM cuesheet ORDER BY sheet_index`); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "7,10,30,B" {
+		t.Fatalf("sorted = %v, want 7,10,30,B (numbers by value, text after)", got)
 	}
 }

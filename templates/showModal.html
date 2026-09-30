@@ -1,34 +1,84 @@
 {{ define "showModal.html" }}
-<div class="modal fade" id="showModal" tabindex="-1" aria-hidden="true">
+<div class="app-modal fade" id="showModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
-    <div class="modal-content">
+    <div class="modal-content modal">
       <div class="modal-header">
-        <h1 class="modal-title fs-5">Import .CTP show</h1>
+        <span class="modal-title">Import .CTP show</span>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
-      <form
-        hx-post="/api/show/import"
-        hx-encoding="multipart/form-data"
-        hx-swap="none"
-      >
+      <form id="showImportForm" action="/api/show/import" method="post" enctype="multipart/form-data">
         <div class="modal-body">
           <label class="form-label" for="showFile">Choose a .CTP file</label>
           <input class="form-control" type="file" id="showFile" name="file" accept=".ctp,application/zip" required />
-          <div class="ftl-field-hint ftl-text-muted">A show archive exported from CuTePi (media + cues + settings + audit trail).</div>
+          <div class="field-hint text-muted">A show archive exported from CuTePi (media + cues + settings + audit trail).</div>
 
-          <label class="ftl-label ftl-mt-m" for="showMode">Import mode</label>
+          <label class="label mt-m" for="showMode">Import mode</label>
           <select class="form-select" id="showMode" name="mode">
             <option value="append">Append to end of current cuesheet</option>
             <option value="overwrite">Overwrite current cuesheet</option>
           </select>
-          <div class="ftl-field-hint ftl-text-muted">Overwrite clears the current cuesheet. Media is added to the pool in both modes.</div>
+          <div class="field-hint text-muted">Overwrite clears the current cuesheet. Media is added to the pool in both modes.</div>
+          <progress id="showImportProgress" class="w-100 mt-m" max="100" value="0" hidden></progress>
+          <div id="showImportStatus" class="small" role="status" aria-live="polite"></div>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn ftl-btn-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="submit" class="btn ftl-btn-primary">Import</button>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Import</button>
         </div>
       </form>
     </div>
   </div>
 </div>
+<script>
+  // Show import with live progress (§5.7): free-space check, byte progress,
+  // then an indeterminate bar while the server validates and imports. The
+  // cuesheet and pool follow via the usual WebSocket sync.
+  (function () {
+    var form = document.getElementById("showImportForm");
+    if (!form) return;
+    var bar = document.getElementById("showImportProgress");
+    var status = document.getElementById("showImportStatus");
+    function say(text, cls) { status.textContent = text; status.className = "small " + (cls || ""); }
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var input = document.getElementById("showFile");
+      var files = input && input.files ? Array.from(input.files) : [];
+      if (!files.length) { say("Choose a .CTP file first.", "text-warning"); return; }
+      var btn = form.querySelector('button[type="submit"]');
+      Promise.resolve(window.cutepiCheckSpace ? window.cutepiCheckSpace(files) : true).then(function (ok) {
+        if (!ok) { say("Import cancelled — not enough disk space.", "text-warning"); return; }
+        if (btn) btn.disabled = true;
+        bar.hidden = false;
+        bar.value = 0;
+        say("Uploading… 0%");
+        return window.cutepiUpload("/api/show/import", new FormData(form), function (pct, text) {
+          if (pct === null) bar.removeAttribute("value"); else bar.value = pct;
+          say(text);
+        }).then(function (res) {
+          if (res.status >= 200 && res.status < 300) {
+            bar.value = 100;
+            say("Show imported.", "text-success");
+            form.reset();
+            if (window.htmx && document.getElementById("mediapool")) {
+              htmx.ajax("GET", "/mediapool", {target: "#mediapool", swap: "outerHTML"});
+            }
+            document.dispatchEvent(new Event("cutepi-sync"));
+            setTimeout(function () {
+              var m = window.bootstrap && bootstrap.Modal.getInstance(document.getElementById("showModal"));
+              if (m) m.hide();
+              bar.hidden = true;
+              say("");
+            }, 800);
+          } else {
+            bar.value = 0;
+            say("Import failed: " + (res.text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() || ("server returned " + res.status)), "text-danger");
+          }
+        }, function (err) {
+          bar.value = 0;
+          say("Import failed: " + err.message, "text-danger");
+        }).then(function () { if (btn) btn.disabled = false; });
+      });
+    });
+  })();
+</script>
 {{ end }}

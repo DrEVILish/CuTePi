@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jmoiron/sqlx"
-	"sort"
 	"log"
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,50 +40,60 @@ type Media struct {
 
 type Cue struct {
 	Media
-	Cue_id         int     `db:"cue_id"`
-	CuePos         int     `db:"cuePos"`
-	CueNum         string  `db:"cueNum"`
-	Media_id       int     `db:"media_id"`
-	Title          string  `db:"title"`
-	PosStart       int     `db:"posStart"`
-	PosEnd         int     `db:"posEnd"`
-	PreWait        int     `db:"preWait"`
-	CueDuration    int     `db:"cueDuration"`
-	PostWait       int     `db:"postWait"`
-	Hold           bool    `db:"hold"`
-	Loop           bool    `db:"loop"`
-	LoopCount      int     `db:"loop_count"` // 0 = infinite, N = play N times (when loop is on)
-	Color          string  `db:"color"`
-	Parent         int     `db:"parent"`
-	FadeOut        int     `db:"fadeOut"` // ms; fade & stop other cues over this time
-	FadeAction     string  `db:"fadeAction"`
-	AutoContinue   bool    `db:"autoContinue"`
-	Volume         float64 `db:"volume"` // per-cue master gain in dB; 0 = 0dB
-	FadeIn         int     `db:"fadeIn"` // ms; audio and video fade from silence/black
-	Rate           float64 `db:"rate"`
-	Balance        float64 `db:"balance"`
-	Mute           bool    `db:"mute"`
-	LastResult     int     `db:"last_result"`    // 0 never played, 1 ok, 2 error (§12.3)
-	LastPlayedAt   int64   `db:"last_played_at"` // unix ms of the last fire
-	SheetIndex     float64 `db:"sheet_index"`    // visual+playback order (§4)
-	FadeCurve      string  `db:"fade_curve"`     // linear|smooth|log|exp (§12.7)
-	FitMode        string  `db:"fit_mode"`       // fit|stretch: image/video frame fitting (§5.5)
-	Rotation       int     `db:"rotation"`       // 0|90|180|270 clockwise degrees (§5.5)
-	Flip           string  `db:"flip"`           // none|h|v: mirror horizontal/vertical (§5.5)
-	ScheduleEnabled bool   `db:"schedule_enabled"` // whether scheduling is enabled for this cue
+	Cue_id          int     `db:"cue_id"`
+	CuePos          int     `db:"cuePos"`
+	CueNum          string  `db:"cueNum"`
+	Media_id        int     `db:"media_id"`
+	Title           string  `db:"title"`
+	PosStart        int     `db:"posStart"`
+	PosEnd          int     `db:"posEnd"`
+	PreWait         int     `db:"preWait"`
+	CueDuration     int     `db:"cueDuration"`
+	PostWait        int     `db:"postWait"`
+	Hold            bool    `db:"hold"`
+	Loop            bool    `db:"loop"`
+	LoopCount       int     `db:"loop_count"` // 0 = infinite, N = play N times (when loop is on)
+	Color           string  `db:"color"`
+	Parent          int     `db:"parent"`
+	FadeOut         int     `db:"fadeOut"` // ms; fade & stop other cues over this time
+	FadeAction      string  `db:"fadeAction"`
+	AutoContinue    bool    `db:"autoContinue"`
+	Volume          float64 `db:"volume"` // per-cue master gain in dB; 0 = 0dB
+	FadeIn          int     `db:"fadeIn"` // ms; audio and video fade from silence/black
+	Rate            float64 `db:"rate"`
+	Balance         float64 `db:"balance"`
+	Mute            bool    `db:"mute"`
+	LastResult      int     `db:"last_result"`    // 0 never played, 1 ok, 2 error (§12.3)
+	LastPlayedAt    int64   `db:"last_played_at"` // unix ms of the last fire
+	SheetIndex      float64 `db:"sheet_index"`    // visual+playback order (§4)
+	FadeCurve       string  `db:"fade_curve"`     // linear|smooth|log|exp (§12.7)
+	FitMode         string  `db:"fit_mode"`       // fit|stretch: image/video frame fitting (§5.5)
+	Opacity         float64 `db:"opacity"`        // 0..100 %: picture opacity on the wall (§5.5)
+	GeomX           string  `db:"geom_x"`         // picture box: "" (fill), pixels, or "N%" of the display
+	GeomY           string  `db:"geom_y"`
+	GeomW           string  `db:"geom_w"`
+	GeomH           string  `db:"geom_h"`
+	CropL           string  `db:"crop_l"` // crop per source edge: "", pixels, or "N%"
+	CropR           string  `db:"crop_r"`
+	CropT           string  `db:"crop_t"`
+	CropB           string  `db:"crop_b"`
+	Rotation        int     `db:"rotation"`         // 0|90|180|270 clockwise degrees (§5.5)
+	Flip            string  `db:"flip"`             // none|h|v: mirror horizontal/vertical (§5.5)
+	ScheduleEnabled bool    `db:"schedule_enabled"` // whether scheduling is enabled for this cue
 	ScheduleDays    int     `db:"schedule_days"`    // bitmask: bit0=Mon, bit1=Tue, ..., bit6=Sun
 	ScheduleTimeMs  int     `db:"schedule_time_ms"` // time of day in milliseconds since 00:00:00
-	PreWaitFmt     string
-	CueDurationFmt string
-	PostWaitFmt    string
-	MediaType      string // "video" | "audio" | "image" | "other", for the row icon
-	Selected       bool
-	Playing        bool   // true if this cue is the currently playing file
-	PlayPos        int    // ms into the playing clip (progress bar) when Playing
-	PlayDur        int    // ms total duration of the playing clip
-	InSelection    bool   // member of the multi-selection (§12.4); anchor uses Selected
-	WaitKind       string // "pre"|"post" while a chain wait counts down on this cue (§12.2)
-	WaitLeftS      int    // whole seconds left in that wait (render-time)
+	PreWaitFmt      string
+	CueDurationFmt  string
+	PostWaitFmt     string
+	MediaType       string // "video" | "audio" | "image" | "other", for the row icon
+	Selected        bool
+	Playing         bool   // true if this cue is the currently playing file
+	PlayPos         int    // ms into the playing clip (progress bar) when Playing
+	PlayDur         int    // ms total duration of the playing clip
+	InSelection     bool   // member of the multi-selection (§12.4); anchor uses Selected
+	WaitKind        string // "pre"|"post" while a chain wait counts down on this cue (§12.2)
+	WaitLeftS       int    // whole seconds left in that wait (render-time)
+	WaitPct         int    // 0..100 through the current wait phase (render-time)
 }
 
 type Cuesheet struct {
@@ -166,6 +177,16 @@ func setSelectedCuePos(pos int) error {
 	return err
 }
 
+// GetCueByID fetches a cue by its stable cue_id (unlike cuePos, unchanged
+// by reordering), with the same derived fields as GetCue.
+func GetCueByID(id int) (Cue, error) {
+	var pos int
+	if err := db.Get(&pos, `SELECT cuePos FROM cuesheet WHERE cue_id = ?`, id); err != nil {
+		return Cue{}, err
+	}
+	return GetCue(strconv.Itoa(pos))
+}
+
 func GetCue(cuePos string) (cue Cue, err error) {
 	query := `
 		SELECT *
@@ -175,8 +196,12 @@ func GetCue(cuePos string) (cue Cue, err error) {
 	`
 	err = db.Get(&cue, query, sql.Named("cuePos", cuePos))
 	if err != nil {
-		log.Printf("Error Getting Cue: %v", err)
-		return Cue{}, err // Return an empty Cue
+		// No such cue is an expected answer (a group or nothing is selected);
+		// callers handle it, so only real database faults are logged.
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("Error Getting Cue: %v", err)
+		}
+		return Cue{}, err
 	}
 	cue.PreWaitFmt = FormatTime(cue.PreWait)
 	cue.CueDurationFmt = FormatTime(EffectiveCueDuration(cue))
@@ -185,10 +210,6 @@ func GetCue(cuePos string) (cue Cue, err error) {
 	return cue, nil // Return the found Cue
 }
 
-// effectiveCueDuration returns the duration shown to the operator. A valid
-// trim window takes precedence; otherwise use an explicitly stored duration,
-// then the probed media duration. New cues leave cueDuration at zero, so they
-// still display the real media length instead of 00:00:00.000.
 // mediaTypeFromMimetype maps a media mimetype to the short kind string used
 // for the cue row's media-type icon and the fade/stop logic.
 func mediaTypeFromMimetype(mimetype string) string {
@@ -204,6 +225,10 @@ func mediaTypeFromMimetype(mimetype string) string {
 	}
 }
 
+// EffectiveCueDuration returns the duration shown to the operator. A valid
+// trim window takes precedence; otherwise use an explicitly stored duration,
+// then the probed media duration. New cues leave cueDuration at zero, so they
+// still display the real media length instead of 00:00:00.000.
 func EffectiveCueDuration(cue Cue) int {
 	// Rate correction: playback duration is source duration divided by rate
 	rate := cue.Rate
@@ -299,7 +324,7 @@ func SetSelectedGroup(groupID int) error {
 const stateKeyEscFadeMs = "escFadeMs"
 
 // DefaultEscFadeMs is the ESC fade time when nothing is stored.
-const DefaultEscFadeMs = 500
+const DefaultEscFadeMs = 1000
 
 // GetEscFadeMs reports the ESC fade-out time in ms.
 func GetEscFadeMs() int {
@@ -316,12 +341,32 @@ func GetEscFadeMs() int {
 
 // SetEscFadeMs persists the ESC fade-out time (0..10000 ms).
 func SetEscFadeMs(ms int) error {
-	if ms < 0 || ms > 10000 {
-		return fmt.Errorf("esc fade must be 0..10000 ms")
+	if err := ValidateEscFadeMs(ms); err != nil {
+		return err
 	}
 	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyEscFadeMs, strconv.Itoa(ms))
 	return err
+}
+
+// colorRe is the only colour syntax stored for cues and groups: CSS hex
+// (#rgb, #rgba, #rrggbb, #rrggbbaa). Group colours are emitted into style
+// attributes through safeCSS (which bypasses html/template's CSS
+// sanitiser), so a looser "starts with #" check let a value like
+// "#000;background:url(//evil)" inject arbitrary CSS.
+var colorRe = regexp.MustCompile(`^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+
+// ValidColor reports whether c is empty (no colour) or a CSS hex colour.
+func ValidColor(c string) bool {
+	return c == "" || colorRe.MatchString(c)
+}
+
+// ValidateEscFadeMs checks an Esc fade duration without persisting it.
+func ValidateEscFadeMs(ms int) error {
+	if ms < 0 || ms > 10000 {
+		return fmt.Errorf("esc fade must be 0..10000 ms")
+	}
+	return nil
 }
 
 // stateKeyGoAdvance persists the GO-bar behaviour: fire the selected unit and
@@ -685,7 +730,7 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 	type span struct {
 		groupID  int
 		depth    int
-		lastRow  int  // index in rows of the last emitted row of this span
+		lastRow  int // index in rows of the last emitted row of this span
 		skipping bool
 	}
 	var stack []span
@@ -758,15 +803,15 @@ func FlattenSheet(cs *Cuesheet) []FlatRow {
 				stack = append(stack, span{groupID: g.GroupID, depth: d, lastRow: -1, skipping: true})
 				continue
 			}
-		rows = append(rows, FlatRow{Group: g, Depth: d, SpanDepth: d})
-		// A collapsed group's own members are hidden too (not just
-		// descendants of collapsed ancestors): the header stays, its span
-		// skips. Without this, collapsing changed state but rendered
-		// nothing — the button and arrow keys looked dead.
-		stack = append(stack, span{groupID: g.GroupID, depth: d, lastRow: len(rows) - 1, skipping: g.Collapse})
-		// Verticals for the header row: outer open spans plus its own.
-		rows[len(rows)-1].SpanBase, rows[len(rows)-1].SpanShadows = spanPaint()
-		continue
+			rows = append(rows, FlatRow{Group: g, Depth: d, SpanDepth: d})
+			// A collapsed group's own members are hidden too (not just
+			// descendants of collapsed ancestors): the header stays, its span
+			// skips. Without this, collapsing changed state but rendered
+			// nothing — the button and arrow keys looked dead.
+			stack = append(stack, span{groupID: g.GroupID, depth: d, lastRow: len(rows) - 1, skipping: g.Collapse})
+			// Verticals for the header row: outer open spans plus its own.
+			rows[len(rows)-1].SpanBase, rows[len(rows)-1].SpanShadows = spanPaint()
+			continue
 		}
 		// A cue: member of the innermost open span.
 		if len(stack) == 0 {
@@ -1256,8 +1301,8 @@ func RenameMedia(oldName, newName string) error {
 }
 
 // stateKeyAutoNumber persists auto-numbering (§12.5): new cues numbered
-// 5, 10, 15…; mid-sheet inserts take the numeric midpoint of their
-// neighbours. Off = the legacy MAX+1 integer sequence.
+// 1, 2, 3…; mid-sheet inserts take the numeric midpoint of their
+// neighbours. Off = the plain MAX+1 sequence with no midpoint inserts.
 const stateKeyAutoNumber = "autoNumberCues"
 
 // GetAutoNumber reports whether auto-numbering is on (default on).
@@ -1284,6 +1329,96 @@ func SetAutoNumber(on bool) error {
 	return nil
 }
 
+// ErrDuplicateCueNum marks a cue number that another cue or group header
+// already uses. It is an operator mistake, not a fault: callers reject the
+// edit and leave the old number in place without logging an error.
+var ErrDuplicateCueNum = errors.New("cue number already in use")
+
+type duplicateCueNumError struct{ num string }
+
+func (e *duplicateCueNumError) Error() string {
+	return fmt.Sprintf("Cue number %s is already used", e.num)
+}
+func (e *duplicateCueNumError) Is(target error) bool { return target == ErrDuplicateCueNum }
+
+// sameCueNum treats "12" and "12.0" as the same number; text numbers compare
+// case-insensitively.
+func sameCueNum(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	fa, aok := parseCueNumFloat(a)
+	fb, bok := parseCueNumFloat(b)
+	return aok && bok && fa == fb
+}
+
+// otherCueNums lists every cue and group-header number except the cue at
+// exceptCuePos and the group exceptGroupID (0 = none).
+func otherCueNums(q sqlx.Queryer, exceptCuePos, exceptGroupID int) ([]string, error) {
+	var nums []string
+	err := sqlx.Select(q, &nums, `
+		SELECT COALESCE(cueNum, '') FROM cuesheet WHERE cuePos != ?
+		UNION ALL
+		SELECT COALESCE(cue_num, '') FROM cue_group WHERE group_id != ?`, exceptCuePos, exceptGroupID)
+	return nums, err
+}
+
+// checkCueNumFree returns a duplicateCueNumError when num is already used.
+// Blank numbers never collide.
+func checkCueNumFree(q sqlx.Queryer, num string, exceptCuePos, exceptGroupID int) error {
+	num = strings.TrimSpace(num)
+	if num == "" {
+		return nil
+	}
+	nums, err := otherCueNums(q, exceptCuePos, exceptGroupID)
+	if err != nil {
+		return err
+	}
+	for _, n := range nums {
+		if sameCueNum(n, num) {
+			return &duplicateCueNumError{num}
+		}
+	}
+	return nil
+}
+
+// maxCueNum is the highest numeric cue or group-header number (0 if none).
+func maxCueNum(q sqlx.Queryer) (float64, error) {
+	nums, err := otherCueNums(q, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	max := 0.0
+	for _, n := range nums {
+		if f, ok := parseCueNumFloat(n); ok && f > max {
+			max = f
+		}
+	}
+	return max, nil
+}
+
+// freeCueNum keeps num when it is unused, otherwise hands out the next whole
+// number above every existing one (imports appended onto a sheet).
+func freeCueNum(q sqlx.Queryer, num string) (string, error) {
+	err := checkCueNumFree(q, num, 0, 0)
+	if !errors.Is(err, ErrDuplicateCueNum) {
+		return num, err
+	}
+	max, err := maxCueNum(q)
+	if err != nil {
+		return "", err
+	}
+	return formatCueNum(math.Floor(max) + 1), nil
+}
+
+// currentCueNum reads the stored number of one cue.
+func currentCueNum(cuePos int) (string, error) {
+	var cur string
+	err := db.Get(&cur, `SELECT COALESCE(cueNum, '') FROM cuesheet WHERE cuePos = ?`, cuePos)
+	return cur, err
+}
+
 // parseCueNumFloat parses a cueNum that is a plain decimal number ("12",
 // "12.5"); ok=false for hand-set text numbers, which auto-numbering never
 // touches.
@@ -1306,23 +1441,25 @@ func formatCueNum(f float64) string {
 	return s
 }
 
-// nextCueNum computes the cue number for a new cue landing at insertAt
-// (post-bump position). With auto-numbering on: an append gets the next
-// multiple of 5; a mid-sheet insert between two numeric neighbours gets
-// their midpoint ("12.5" between 12 and 13). Off (or non-numeric
-// neighbours) falls back to the legacy MAX+1.
-func nextCueNum(tx *sqlx.Tx, insertAt int, auto bool) (string, error) {
-	var maxNum sql.NullFloat64
-	if err := tx.Get(&maxNum, `SELECT MAX(CAST(cueNum AS REAL)) FROM cuesheet`); err != nil {
+// nextCueNum computes the cue number for a new cue landing at visual
+// position sheetIndex. With auto-numbering on: an append gets the next whole
+// number; an insert between two numeric neighbours (in sheet order, the
+// order the operator sees) gets their midpoint ("12.5" between 12 and 13).
+// Off (or non-numeric neighbours) falls back to MAX+1.
+func nextCueNum(tx *sqlx.Tx, sheetIndex float64, auto bool, step float64) (string, error) {
+	maxNum, err := maxCueNum(tx)
+	if err != nil {
 		return "", err
 	}
+	// The next multiple of step above the highest number (step 1: MAX+1).
+	next := (math.Floor(maxNum/step) + 1) * step
 	if !auto {
-		return formatCueNum(maxNum.Float64 + 1), nil
+		return formatCueNum(next), nil
 	}
-	if insertAt > 1 {
+	{
 		var prevNum, nextNum sql.NullString
-		_ = tx.Get(&prevNum, `SELECT cueNum FROM cuesheet WHERE cuePos = ?`, insertAt-1)
-		_ = tx.Get(&nextNum, `SELECT cueNum FROM cuesheet WHERE cuePos = ?`, insertAt)
+		_ = tx.Get(&prevNum, `SELECT cueNum FROM cuesheet WHERE sheet_index < ? ORDER BY sheet_index DESC, cuePos DESC LIMIT 1`, sheetIndex)
+		_ = tx.Get(&nextNum, `SELECT cueNum FROM cuesheet WHERE sheet_index > ? ORDER BY sheet_index, cuePos LIMIT 1`, sheetIndex)
 		p, pok := parseCueNumFloat(prevNum.String)
 		n, nok := parseCueNumFloat(nextNum.String)
 		if pok && nok && n > p {
@@ -1331,19 +1468,19 @@ func nextCueNum(tx *sqlx.Tx, insertAt int, auto bool) (string, error) {
 			mid := (p + n) / 2
 			for step := 0.0; step < 50; step += 0.5 {
 				cand := formatCueNum(mid + step)
-				var exists int
-				if err := tx.Get(&exists, `SELECT COUNT(*) FROM cuesheet WHERE cueNum = ?`, cand); err != nil {
-					return "", err
-				}
-				if exists == 0 {
+				err := checkCueNumFree(tx, cand, 0, 0)
+				if err == nil {
 					return cand, nil
+				}
+				if !errors.Is(err, ErrDuplicateCueNum) {
+					return "", err
 				}
 			}
 		}
 	}
-	// Append (or unparseable neighbours): next multiple of 5 above the max.
-	base := math.Max(0, maxNum.Float64)
-	return formatCueNum(math.Ceil((base+0.1)/5) * 5), nil
+	// Append (or unparseable neighbours): the next whole number above the
+	// max (12.5 → 13), so appends keep a clean integer sequence.
+	return formatCueNum(next), nil
 }
 
 // BulkEdit applies one operation to many cues in ONE transaction (§12.4),
@@ -1395,7 +1532,7 @@ func BulkEdit(op, value string, positions []int) error {
 	defer tx.Rollback()
 	switch op {
 	case "color":
-		if value != "" && !strings.HasPrefix(value, "#") {
+		if !ValidColor(value) {
 			return fmt.Errorf("invalid color %q", value)
 		}
 		for _, p := range positions {
@@ -1558,43 +1695,6 @@ func BulkGroupNewAt(positions []int, atCue int) (int, error) {
 	return id, nil
 }
 
-// RenumberCues renumbers every cue 5, 10, 15… in sheet order (§12.5). An// explicit operator action — it rewrites hand-set numbers. Two-phase like
-// ReorderCues: temporary high numbers first so the UNIQUE constraint never
-// trips mid-reassign.
-func RenumberCues() error {
-	length, err := cuesheetLength()
-	if err != nil {
-		return err
-	}
-	var order []int
-	if err := db.Select(&order, `SELECT cuePos FROM cuesheet ORDER BY sheet_index, cuePos`); err != nil {
-		return err
-	}
-	tx, err := db.Beginx()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	offset := length + 100000
-	for _, pos := range order {
-		if _, err := tx.Exec(`UPDATE cuesheet SET cueNum = ? WHERE cuePos = ?`,
-			strconv.Itoa(pos+offset), pos); err != nil {
-			return err
-		}
-	}
-	for i, pos := range order {
-		if _, err := tx.Exec(`UPDATE cuesheet SET cueNum = ? WHERE cuePos = ?`,
-			formatCueNum(float64((i+1)*5)), pos); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
 func AddCue(filename string, cuePos string) (err error) {
 	title, err := uniqueCueField("title", filename)
 	if err != nil {
@@ -1603,6 +1703,7 @@ func AddCue(filename string, cuePos string) (err error) {
 	// Read settings BEFORE the tx opens: SQLite runs single-connection, so
 	// any pool query while the tx holds the connection deadlocks.
 	autoNumber := GetAutoNumber()
+	numStep := GetCueNumStep()
 	// Target position: an empty cuePos appends after the last cue; otherwise
 	// cuePos names the cue the new row lands in front of — or, when that cue
 	// opens its group's run, in front of the group's header (above the
@@ -1693,8 +1794,8 @@ func AddCue(filename string, cuePos string) (err error) {
 		}
 	}
 	// insert new cue at the nextPos position. cueNum comes from nextCueNum
-	// (§12.5): auto-number 5,10,15… / numeric midpoint, or the legacy MAX+1.
-	newCueNum, err := nextCueNum(tx, nextPos, autoNumber)
+	// (§12.5): auto-number 1,2,3… / numeric midpoint, or MAX+1.
+	newCueNum, err := nextCueNum(tx, newSheetIndex, autoNumber, numStep)
 	if err != nil {
 		log.Printf("Error computing cueNum: %v", err)
 		return err
@@ -1736,6 +1837,7 @@ func AddCueToGroup(filename string, groupID int, first bool) error {
 		return err
 	}
 	autoNumber := GetAutoNumber()
+	numStep := GetCueNumStep()
 	var headerIdx float64
 	if err := db.Get(&headerIdx, `SELECT sheet_index FROM cue_group WHERE group_id = ?`, groupID); err != nil {
 		return err
@@ -1761,7 +1863,7 @@ func AddCueToGroup(filename string, groupID int, first bool) error {
 		return err
 	}
 	defer tx.Rollback()
-	newCueNum, err := nextCueNum(tx, nextPos, autoNumber)
+	newCueNum, err := nextCueNum(tx, seat, autoNumber, numStep)
 	if err != nil {
 		return err
 	}
@@ -1928,6 +2030,15 @@ func CueColumnValue(cue Cue, col string) (string, error) {
 	}
 }
 
+// cueDBColumn maps an editable column name to its SQL column (only
+// fadeCurve differs).
+func cueDBColumn(col string) string {
+	if col == "fadeCurve" {
+		return "fade_curve"
+	}
+	return col
+}
+
 func parseBool(val string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(val)) {
 	case "1", "true", "on", "yes":
@@ -1937,6 +2048,19 @@ func parseBool(val string) (bool, error) {
 	default:
 		return false, fmt.Errorf("invalid boolean value %q", val)
 	}
+}
+
+// checkCueNumChange rejects a new number for the cue at cuePos that another
+// cue or group already uses; re-saving the cue's own number always passes.
+func checkCueNumChange(cuePos int, num string) error {
+	cur, err := currentCueNum(cuePos)
+	if err != nil {
+		return err
+	}
+	if sameCueNum(cur, num) {
+		return nil
+	}
+	return checkCueNumFree(db, num, cuePos, 0)
 }
 
 func UpdateCue(cuePos string, col string, val string) (err error) {
@@ -1954,9 +2078,14 @@ func UpdateCue(cuePos string, col string, val string) (err error) {
 	if err != nil {
 		return err
 	}
+	if col == "cueNum" {
+		if err := checkCueNumChange(cuePosInt, setVal); err != nil {
+			return err
+		}
+	}
 	_, err = db.Exec(`
 		UPDATE cuesheet
-		SET `+col+` = ?
+		SET `+cueDBColumn(col)+` = ?
 		WHERE cuePos = ?;`, setVal, cuePosInt)
 	if err != nil {
 		log.Printf("Error updating cue: %v", err)
@@ -2006,7 +2135,7 @@ func parseCueColumn(col string, val string) (string, error) {
 		return val, nil
 	case "color":
 		c := strings.TrimSpace(val)
-		if c != "" && !strings.HasPrefix(c, "#") {
+		if !ValidColor(c) {
 			return "", fmt.Errorf("invalid color %q (want a #rrggbb hex value)", val)
 		}
 		return c, nil
@@ -2017,12 +2146,24 @@ func parseCueColumn(col string, val string) (string, error) {
 			return v, nil
 		}
 		return "", fmt.Errorf("invalid fadeCurve %q (want linear, smooth, log or exp)", val)
+	case "opacity":
+		f, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(val), "%"), 64)
+		if err != nil || f < 0 || f > 100 {
+			return "", fmt.Errorf("invalid opacity %q (want 0 to 100 %%)", val)
+		}
+		return strconv.FormatFloat(f, 'f', -1, 64), nil
+	case "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b":
+		v := strings.ToLower(strings.TrimSpace(val))
+		if v != "" && !validGeom(v) {
+			return "", fmt.Errorf("invalid %s %q (want pixels like 960, or a percentage like 50%%)", col, val)
+		}
+		return v, nil
 	case "fit_mode":
 		switch v := strings.TrimSpace(val); v {
-		case "fit", "stretch":
+		case "fit", "stretch", "fill-width", "fill-height", "fill":
 			return v, nil
 		default:
-			return "", fmt.Errorf("invalid fit_mode %q (want fit or stretch)", val)
+			return "", fmt.Errorf("invalid fit_mode %q (want fit, stretch, fill-width, fill-height or fill)", val)
 		}
 	case "rotation":
 		switch strings.TrimSpace(val) {
@@ -2080,7 +2221,7 @@ func UpdateCueFields(cuePos string, fields map[string]string) (err error) {
 		"cueNum", "title", "posStart", "posEnd", "preWait", "cueDuration",
 		"postWait", "hold", "loop", "loop_count", "color", "parent", "fadeOut",
 		"fadeAction", "autoContinue", "volume", "fadeIn", "rate", "balance", "mute",
-		"fit_mode", "rotation", "flip",
+		"fadeCurve", "fit_mode", "rotation", "flip", "opacity", "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b",
 		"schedule_enabled", "schedule_days", "schedule_time_ms",
 	} {
 		val, ok := fields[col]
@@ -2091,7 +2232,12 @@ func UpdateCueFields(cuePos string, fields map[string]string) (err error) {
 		if err != nil {
 			return fmt.Errorf("%s: %w", col, err)
 		}
-		cols = append(cols, col+" = ?")
+		if col == "cueNum" {
+			if err := checkCueNumChange(cuePosInt, setVal); err != nil {
+				return err
+			}
+		}
+		cols = append(cols, cueDBColumn(col)+" = ?")
 		args = append(args, setVal)
 	}
 	if len(cols) == 0 {
@@ -2152,6 +2298,7 @@ func boolToInt(b bool) int {
 // ScheduleInfo holds one row of the schedule query for the
 // scheduler; it carries only the fields the scheduler needs.
 type ScheduleInfo struct {
+	CueID        int     `db:"cue_id"` // stable identity: cuePos changes on reorder
 	CuePos       int     `db:"cuePos"`
 	Title        string  `db:"title"`
 	Filename     string  `db:"filename"`
@@ -2171,6 +2318,15 @@ type ScheduleInfo struct {
 	FitMode      string  `db:"fit_mode"`
 	Rotation     int     `db:"rotation"`
 	Flip         string  `db:"flip"`
+	Opacity      float64 `db:"opacity"`
+	GeomX        string  `db:"geom_x"`
+	GeomY        string  `db:"geom_y"`
+	GeomW        string  `db:"geom_w"`
+	GeomH        string  `db:"geom_h"`
+	CropL        string  `db:"crop_l"`
+	CropR        string  `db:"crop_r"`
+	CropT        string  `db:"crop_t"`
+	CropB        string  `db:"crop_b"`
 	Mimetype     string  `db:"mimetype"`
 }
 
@@ -2198,6 +2354,15 @@ func (s ScheduleInfo) AsCue() Cue {
 		FitMode:   s.FitMode,
 		Rotation:  s.Rotation,
 		Flip:      s.Flip,
+		Opacity:   s.Opacity,
+		GeomX:     s.GeomX,
+		GeomY:     s.GeomY,
+		GeomW:     s.GeomW,
+		GeomH:     s.GeomH,
+		CropL:     s.CropL,
+		CropR:     s.CropR,
+		CropT:     s.CropT,
+		CropB:     s.CropB,
 	}
 }
 
@@ -2217,7 +2382,7 @@ func NextSchedule(now time.Time) (dueIn time.Duration, num, title string, ok boo
 	}
 	todayBit := (int(now.Weekday()) + 6) % 7 // Mon=0 .. Sun=6
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	best := time.Duration(1<<62)
+	best := time.Duration(1 << 62)
 	for _, r := range rows {
 		for d := 0; d < 7; d++ {
 			if r.Days&(1<<((todayBit+d)%7)) == 0 {
@@ -2253,10 +2418,10 @@ func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
 	timeMs := now.Hour()*3600*1000 + now.Minute()*60*1000 + now.Second()*1000
 	var rows []ScheduleInfo
 	err := db.Select(&rows, `
-		SELECT c.cuePos, c.title, m.filename, c.schedule_time_ms, c.posStart, c.posEnd,
+		SELECT c.cue_id, c.cuePos, c.title, m.filename, c.schedule_time_ms, c.posStart, c.posEnd,
 			c.hold, c.loop, c.loop_count, c.volume, m.loudness_gain,
 			c.rate, c.balance, c.mute, c.fadeIn, c.fade_curve,
-			c.fit_mode, c.rotation, c.flip,
+			c.fit_mode, c.rotation, c.flip, c.opacity, c.geom_x, c.geom_y, c.geom_w, c.geom_h, c.crop_l, c.crop_r, c.crop_t, c.crop_b,
 			m.mimetype
 		FROM cuesheet c
 		JOIN mediapool m ON c.media_id = m.media_id
@@ -2269,6 +2434,7 @@ func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
 		1<<(day-1), 1<<(day-1), timeMs, timeMs, now.UnixMilli())
 	return rows, err
 }
+
 // sequence into the given order, keeping group headers at their relative
 // positions. Membership re-derives from the resulting sequence — positions
 // are the truth, nothing is inferred. Returns the final cue order.
@@ -2423,11 +2589,22 @@ func RemoveCue(cuePos string) (err error) {
 		return err
 	}
 	oldToNew := make(map[int]int)
+	// Two passes (negate, then assign): after a drag reorder the visual
+	// order differs from cuePos order, so a direct UPDATE can collide with a
+	// row that still holds the target position (UNIQUE cuePos).
 	for i, c := range remainingCues {
 		newPos := i + 1
 		oldToNew[c.CuePos] = newPos
 		if c.CuePos != newPos {
-			if _, err := tx.Exec(`UPDATE cuesheet SET cuePos = ? WHERE cuePos = ?`, newPos, c.CuePos); err != nil {
+			if _, err := tx.Exec(`UPDATE cuesheet SET cuePos = -cuePos WHERE cuePos = ?`, c.CuePos); err != nil {
+				return err
+			}
+		}
+	}
+	for i, c := range remainingCues {
+		newPos := i + 1
+		if c.CuePos != newPos {
+			if _, err := tx.Exec(`UPDATE cuesheet SET cuePos = ? WHERE cuePos = ?`, newPos, -c.CuePos); err != nil {
 				return err
 			}
 		}
@@ -2501,6 +2678,7 @@ func RegisterMedia(filename string, size int64, meta media.Metadata, title strin
 			media_meta = excluded.media_meta,
 			thumbnail_pending = 1,
 			loudness_gain = 0,
+			missing = 0,
 			waveform_pending = 1;
 	`,
 		sql.Named("filename", filename),
@@ -2619,6 +2797,16 @@ func Delete(filename string) (err error) {
 	if n == 0 {
 		return fmt.Errorf("media %q not found in pool", filename)
 	}
+	// A deleted file must not linger as a pinned test pattern or as the
+	// panic holding image (both would point at nothing).
+	if err := RemoveTestPattern(filename); err != nil {
+		log.Printf("Error unpinning deleted media %q from test patterns: %v", filename, err)
+	}
+	if GetPanicHoldImage() == filename {
+		if err := SetPanicHoldImage(""); err != nil {
+			log.Printf("Error clearing deleted panic holding image %q: %v", filename, err)
+		}
+	}
 	bumpMediaVersion()
 	bumpCuesheetVersion()
 	return nil
@@ -2656,4 +2844,35 @@ func UpdateMediaMeta(filename string, metaJSON string) (err error) {
 	}
 	bumpMediaVersion()
 	return nil
+}
+
+// validGeom accepts pixels ("960", "960px", "-20") or a percentage ("50%").
+func validGeom(v string) bool {
+	v = strings.TrimSuffix(strings.TrimSuffix(v, "%"), "px")
+	f, err := strconv.ParseFloat(v, 64)
+	return err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
+// stateKeyTestOverlay: test patterns carry a label with the display's
+// resolution and refresh rate (§12.10). Off by default.
+const stateKeyTestOverlay = "testOverlay"
+
+// GetTestOverlay reports whether test patterns show the display-mode label.
+func GetTestOverlay() bool {
+	var val string
+	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyTestOverlay); err != nil {
+		return false
+	}
+	return strings.TrimSpace(val) == "1"
+}
+
+// SetTestOverlay persists the test-pattern display-mode label setting.
+func SetTestOverlay(on bool) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyTestOverlay, v)
+	return err
 }

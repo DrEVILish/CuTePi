@@ -53,7 +53,7 @@ func audioDevices() []audioDevice {
 	if err != nil {
 		return nil
 	}
-	out, err := exec.Command(aplay, "-L").Output()
+	out, err := sysOutput(false, aplay, "-L")
 	if err != nil {
 		return nil
 	}

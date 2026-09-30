@@ -3,6 +3,7 @@ package routes
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"html/template"
@@ -276,10 +277,8 @@ func TestThemeLogoAndMobileUploadMarkup(t *testing.T) {
 	for _, want := range []string{
 		`src="/img/cutepi-logo.svg"`,
 		`id="settingsTheme"`,
-		// Option values are ids ("app:<name>"), not bare names: a shared
-		// ftl-themes bundle can carry the same data-theme name as an app
-		// theme, so the picker has to distinguish them.
-		`value="app:blue-future"`,
+		// Option values are ids ("ftl:<slug>").
+		`value="ftl:xbmc"`,
 		`hx-swap="outerHTML"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -315,7 +314,7 @@ func TestCuesheetRendersAddedCue(t *testing.T) {
 	if !strings.Contains(body, "routes-test.mp4") {
 		t.Fatalf("expected the rendered cuesheet to contain the cue's title, got:\n%s", body)
 	}
-	if !strings.Contains(body, `class="row cue table-warning"`) {
+	if !strings.Contains(body, `class="sheet-row cue table-warning"`) {
 		t.Fatalf("expected the selected cue to be highlighted, got:\n%s", body)
 	}
 	if !strings.Contains(body, "00:00:10.000") {
@@ -468,7 +467,6 @@ func TestGroupRoutesCreateAssignUpdateDelete(t *testing.T) {
 	if strings.Contains(w.Body.String(), `data-cue-group="1"`) {
 		t.Fatalf("collapsed group should hide members, got:\n%s", w.Body.String())
 	}
-
 
 	// Deleting the group deletes its member cues too.
 	w = del(t, r, "/api/group/1")
@@ -796,7 +794,7 @@ func TestCuesheetRendersColumnResizeMarkers(t *testing.T) {
 	// cancellable (justEdited) so a single-click selection still works but
 	// can't re-render the sheet out from under the editor opened by the
 	// double-click that just happened.
-	for _, want := range []string{`class="cue-inline-edit" hx-target="this" hx-trigger="dblclick"`, `click delay:250ms[!justEdited()]`} {
+	for _, want := range []string{`class="cue-inline-edit" hx-target="this" hx-trigger="dblclick"`, `click[!justEdited()] delay:250ms`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected inline-edit markup %q to render, got:\n%s", want, body)
 		}
@@ -1178,14 +1176,14 @@ func TestSettingsPost(t *testing.T) {
 	r := setupTestServer(t)
 
 	form := url.Values{
-		"port":             {"4010"},
-		"displayRefresh":   {"60"},
-		"audioChannels":    {"2.0"},
-		"audioRate":        {"48000"},
-		"apSSID":           {"CuTePi-Upload"},
-		"apPass":           {"upstage-pass"},
-		"apEnabled":        {"true"},
-		"displayUseEDID":   {"false"},
+		"port":           {"4010"},
+		"displayRefresh": {"60"},
+		"audioChannels":  {"2.0"},
+		"audioRate":      {"48000"},
+		"apSSID":         {"CuTePi-Upload"},
+		"apPass":         {"upstage-pass"},
+		"apEnabled":      {"true"},
+		"displayUseEDID": {"false"},
 	}
 	req := httptest.NewRequest("POST", "/api/settings", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1429,10 +1427,20 @@ func TestSelectCuePersistsAndRenders(t *testing.T) {
 func TestNowPlayingWidgetControlsMarkup(t *testing.T) {
 	r := setupTestServer(t)
 	body := get(t, r, "/api/nowplaying").Body.String()
-	// Endpoint wiring is unconditional.
-	for _, want := range []string{`/api/seek`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected Now Playing script to reference %q, got:\n%s", want, body)
+	// The partial is re-rendered by DOM swap, where inline scripts never
+	// run: its behaviour must live in ui.js, not a <script> in the partial
+	// (the old inline script bound only the first render).
+	if strings.Contains(body, "<script") {
+		t.Fatalf("Now Playing partial must not carry an inline script, got:\n%s", body)
+	}
+	js, err := os.ReadFile("../public/src/ui.js")
+	if err != nil {
+		t.Fatalf("reading ui.js: %v", err)
+	}
+	for _, want := range []string{`function initNowPlaying()`, `"/api/seek"`, `htmx.process(replacement);
+      initNowPlaying();`} {
+		if !strings.Contains(string(js), want) {
+			t.Fatalf("ui.js missing Now Playing wiring %q", want)
 		}
 	}
 	// Controls appear once something is loaded.
@@ -1978,11 +1986,13 @@ func TestAutoContinueChainFiresAndIsDisarmed(t *testing.T) {
 	// exercised directly, not over HTTP.
 	setupTestServer(t)
 
-	// DB-only media (no files on disk): buildPipeline succeeds and the swap
-	// happens synchronously, while the sink error surfaces later on the bus —
-	// same approach as TestGroupPlayNonSlideshowPlaysFirstMember. Keeps the
-	// test free of real sink state changes (no audio device in CI).
+	// Real (tiny) WAV files: a load whose preroll fails is now an error
+	// (it used to "succeed" silently, which this test relied on). 5s clips
+	// so no cue ends naturally mid-test and fires the chain on its own.
 	for _, name := range []string{"chain-a.wav", "chain-b.wav", "chain-c.wav"} {
+		if err := os.WriteFile(filepath.Join(config.MediaLocation(), name), buildTinyWav(5), 0o644); err != nil {
+			t.Fatalf("write wav fixture: %v", err)
+		}
 		if err := ctp.RegisterMedia(name, 40000, media.Metadata{
 			Mimetype: "audio/wav", Duration: 1.0, Codec: "pcm_s16le",
 		}, name); err != nil {
@@ -2129,6 +2139,7 @@ func TestUploadFailurePreservesExistingMedia(t *testing.T) {
 	// fails media.Probe.
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
+	mw.WriteField("onConflict", "replace")
 	fw, _ := mw.CreateFormFile("media", "clip.mp4")
 	fw.Write([]byte("this is not a real video file"))
 	mw.Close()
@@ -2417,14 +2428,14 @@ func TestYoutubeDlpTimeout(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	start := time.Now()
-	_, _, err := downloadWithYtDlp("https://youtube.com/watch?v=x", nil)
+	_, _, err := downloadWithYtDlp(context.Background(), "https://youtube.com/watch?v=x", nil)
 	if err == nil {
 		t.Fatal("hung yt-dlp must fail via timeout")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("timeout took %v, subprocess not killed promptly", elapsed)
 	}
-	entries, _ := os.ReadDir(config.MediaLocation())
+	entries, _ := os.ReadDir(config.TmpDir())
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "ytdlp-") {
 			t.Fatalf("temp download dir left behind: %s", e.Name())
@@ -2629,5 +2640,94 @@ func TestCachePolicy(t *testing.T) {
 	w = get(t, r, "/")
 	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("GET / Cache-Control = %q, want no-store", cc)
+	}
+}
+
+func TestIndexRendersGroupInspectorWhenGroupSelected(t *testing.T) {
+	r := setupTestServer(t)
+	gid, err := ctp.CreateGroup("Initial Group", 0)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if err := ctp.SetSelectedGroup(gid); err != nil {
+		t.Fatalf("SetSelectedGroup: %v", err)
+	}
+	body := get(t, r, "/").Body.String()
+	if !strings.Contains(body, `class="groupinspector-body"`) {
+		t.Fatalf("first page render must show the Group Inspector for a persisted group selection")
+	}
+	if strings.Contains(body, "Select a cue to edit its time") {
+		t.Fatalf("cue-inspector placeholder rendered although a group is selected")
+	}
+}
+
+// uploadWav posts one tiny WAV under name with an optional onConflict choice.
+func uploadWav(t *testing.T, r http.Handler, name, onConflict string, seconds int) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if onConflict != "" {
+		mw.WriteField("onConflict", onConflict)
+	}
+	fw, _ := mw.CreateFormFile("media", name)
+	fw.Write(buildTinyWav(seconds))
+	mw.Close()
+	req := httptest.NewRequest("POST", "/upload/", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestUploadNameConflictChoices(t *testing.T) {
+	r := setupTestServer(t)
+	dir := config.MediaLocation()
+	if w := uploadWav(t, r, "dup.wav", "", 1); w.Code != http.StatusOK {
+		t.Fatalf("first upload = %d: %s", w.Code, w.Body.String())
+	}
+	orig, _ := os.ReadFile(filepath.Join(dir, "dup.wav"))
+
+	req := httptest.NewRequest("POST", "/upload/check", strings.NewReader(`{"names":["dup.wav","new.wav","new.wav"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"conflicts":["dup.wav","new.wav"]`) {
+		t.Fatalf("check = %d %s, want dup.wav and the repeated new.wav", w.Code, w.Body.String())
+	}
+
+	if w := uploadWav(t, r, "dup.wav", "", 2); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "dup.wav") {
+		t.Fatalf("unresolved clash = %d %s, want 409 naming the file", w.Code, w.Body.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "dup.wav")); !bytes.Equal(got, orig) {
+		t.Fatal("a refused clash must leave the pool file untouched")
+	}
+
+	if w := uploadWav(t, r, "dup.wav", "skip", 2); w.Code != http.StatusOK || !strings.Contains(w.Header().Get("X-Upload-Result"), "skipped") {
+		t.Fatalf("skip = %d result=%q", w.Code, w.Header().Get("X-Upload-Result"))
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "dup.wav")); !bytes.Equal(got, orig) {
+		t.Fatal("skip must leave the pool file untouched")
+	}
+
+	if w := uploadWav(t, r, "dup.wav", "rename", 2); w.Code != http.StatusOK {
+		t.Fatalf("rename = %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dup (2).wav")); err != nil {
+		t.Fatalf("rename should import as \"dup (2).wav\": %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "dup.wav")); !bytes.Equal(got, orig) {
+		t.Fatal("rename must keep the original")
+	}
+
+	if w := uploadWav(t, r, "dup.wav", "replace", 2); w.Code != http.StatusOK {
+		t.Fatalf("replace = %d: %s", w.Code, w.Body.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "dup.wav")); bytes.Equal(got, orig) {
+		t.Fatal("replace must overwrite the pool file")
+	}
+
+	if w := uploadWav(t, r, "dup.wav", "bogus", 1); w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown choice = %d, want 400", w.Code)
 	}
 }

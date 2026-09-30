@@ -32,6 +32,15 @@ type ExportCue struct {
 	FitMode      string  `json:"fitMode"`
 	Rotation     int     `json:"rotation"`
 	Flip         string  `json:"flip"`
+	Opacity      float64 `json:"opacity,omitempty"` // 0/absent (older shows) = 100 %
+	GeomX        string  `json:"geomX,omitempty"`
+	GeomY        string  `json:"geomY,omitempty"`
+	GeomW        string  `json:"geomW,omitempty"`
+	GeomH        string  `json:"geomH,omitempty"`
+	CropL        string  `json:"cropL,omitempty"`
+	CropR        string  `json:"cropR,omitempty"`
+	CropT        string  `json:"cropT,omitempty"`
+	CropB        string  `json:"cropB,omitempty"`
 	Volume       float64 `json:"volume"`
 	FadeIn       int     `json:"fadeIn"`
 	Rate         float64 `json:"rate"`
@@ -43,26 +52,35 @@ type ExportCue struct {
 // selected cue position, for building a .CTP manifest.
 func ExportCues() (cues []ExportCue, selected int, err error) {
 	type row struct {
-		CueNum       string `db:"cueNum"`
-		Title        string `db:"title"`
-		Filename     string `db:"filename"`
-		PosStart     int    `db:"posStart"`
-		PosEnd       int    `db:"posEnd"`
-		PreWait      int    `db:"preWait"`
-		CueDuration  int    `db:"cueDuration"`
-		PostWait     int    `db:"postWait"`
-		Hold         bool   `db:"hold"`
-		Loop         bool   `db:"loop"`
-		LoopCount    int    `db:"loop_count"`
-		AutoContinue bool   `db:"autoContinue"`
-		Color        string `db:"color"`
-		Parent       int    `db:"parent"`
-		FadeOut      int    `db:"fadeOut"`
-		FadeAction   string `db:"fadeAction"`
-		FadeCurve    string `db:"fade_curve"`
-		FitMode      string `db:"fit_mode"`
-		Rotation     int    `db:"rotation"`
-		Flip         string `db:"flip"`
+		CueNum       string  `db:"cueNum"`
+		Title        string  `db:"title"`
+		Filename     string  `db:"filename"`
+		PosStart     int     `db:"posStart"`
+		PosEnd       int     `db:"posEnd"`
+		PreWait      int     `db:"preWait"`
+		CueDuration  int     `db:"cueDuration"`
+		PostWait     int     `db:"postWait"`
+		Hold         bool    `db:"hold"`
+		Loop         bool    `db:"loop"`
+		LoopCount    int     `db:"loop_count"`
+		AutoContinue bool    `db:"autoContinue"`
+		Color        string  `db:"color"`
+		Parent       int     `db:"parent"`
+		FadeOut      int     `db:"fadeOut"`
+		FadeAction   string  `db:"fadeAction"`
+		FadeCurve    string  `db:"fade_curve"`
+		FitMode      string  `db:"fit_mode"`
+		Rotation     int     `db:"rotation"`
+		Flip         string  `db:"flip"`
+		Opacity      float64 `db:"opacity"`
+		GeomX        string  `db:"geom_x"`
+		GeomY        string  `db:"geom_y"`
+		GeomW        string  `db:"geom_w"`
+		GeomH        string  `db:"geom_h"`
+		CropL        string  `db:"crop_l"`
+		CropR        string  `db:"crop_r"`
+		CropT        string  `db:"crop_t"`
+		CropB        string  `db:"crop_b"`
 		Volume       float64 `db:"volume"`
 		FadeIn       int     `db:"fadeIn"`
 		Rate         float64 `db:"rate"`
@@ -76,7 +94,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			cuesheet.cueDuration, cuesheet.postWait, cuesheet.hold,
 			cuesheet.loop, cuesheet.loop_count, cuesheet.autoContinue,
 			cuesheet.color, cuesheet.parent, cuesheet.fadeOut,
-			cuesheet.fadeAction, cuesheet.fade_curve, cuesheet.fit_mode, cuesheet.rotation, cuesheet.flip, cuesheet.volume, cuesheet.fadeIn, cuesheet.rate, cuesheet.balance, cuesheet.mute
+			cuesheet.fadeAction, cuesheet.fade_curve, cuesheet.fit_mode, cuesheet.rotation, cuesheet.flip, cuesheet.opacity, cuesheet.geom_x, cuesheet.geom_y, cuesheet.geom_w, cuesheet.geom_h, cuesheet.crop_l, cuesheet.crop_r, cuesheet.crop_t, cuesheet.crop_b, cuesheet.volume, cuesheet.fadeIn, cuesheet.rate, cuesheet.balance, cuesheet.mute
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
 		ORDER BY cuesheet.cuePos
@@ -106,6 +124,15 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			FadeAction:   r.FadeAction,
 			FadeCurve:    r.FadeCurve,
 			FitMode:      r.FitMode,
+			Opacity:      r.Opacity,
+			GeomX:        r.GeomX,
+			GeomY:        r.GeomY,
+			GeomW:        r.GeomW,
+			GeomH:        r.GeomH,
+			CropL:        r.CropL,
+			CropR:        r.CropR,
+			CropT:        r.CropT,
+			CropB:        r.CropB,
 			Rotation:     r.Rotation,
 			Flip:         r.Flip,
 			Volume:       r.Volume,
@@ -205,8 +232,11 @@ func ImportGroups(groups []ExportGroup) (map[int]int, error) {
 			Loop:          eg.Loop,
 			FadeMS:        eg.FadeMS,
 			DurationMS:    eg.DurationMS,
-			CueNum:        eg.CueNum,
-			Color:         eg.Color,
+			Color:         sanitizeColor(eg.Color),
+		}
+		if g.CueNum, err = freeCueNum(db, eg.CueNum); err != nil {
+			ImportGroupsRollback(idMap)
+			return nil, err
 		}
 		if err := UpdateGroup(g); err != nil {
 			ImportGroupsRollback(idMap)
@@ -235,10 +265,10 @@ func CueCount() (int, error) {
 
 // uniqueCueField returns value with a numeric suffix appended until it no
 // longer collides with an existing row. field must be a string literal
-// ("title" or "cueNum") chosen by the caller, never user input.
+// ("title") chosen by the caller, never user input.
 func uniqueCueField(field, value string) (string, error) {
 	switch field {
-	case "title", "cueNum":
+	case "title":
 	default:
 		return "", fmt.Errorf("uniqueCueField: unsafe field %q", field)
 	}
@@ -284,7 +314,7 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 		return 0, err
 	}
 
-	cueNum, err := uniqueCueField("cueNum", c.CueNum)
+	cueNum, err := freeCueNum(db, c.CueNum)
 	if err != nil {
 		return 0, err
 	}
@@ -292,10 +322,10 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 	_, err = db.Exec(`
 			INSERT INTO cuesheet (cuePos, cueNum, media_id, title, posStart, posEnd,
 			preWait, cueDuration, postWait, hold, loop, loop_count, color,
-			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index)
+			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index)
 		SELECT :cuePos, :cueNum, mp.media_id, :title, :posStart, :posEnd,
 			:preWait, :cueDuration, :postWait, :hold, :loop, :loop_count, :color,
-			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0
+			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0
 		FROM (SELECT media_id FROM mediapool WHERE filename = :filename) AS mp
 	`,
 		sql.Named("cuePos", cuePos),
@@ -309,7 +339,7 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 		sql.Named("hold", boolInt(c.Hold)),
 		sql.Named("loop", boolInt(c.Loop)),
 		sql.Named("loop_count", c.LoopCount),
-		sql.Named("color", c.Color),
+		sql.Named("color", sanitizeColor(c.Color)),
 		sql.Named("parent", c.Parent),
 		sql.Named("fadeOut", c.FadeOut),
 		sql.Named("fadeAction", c.FadeAction),
@@ -317,6 +347,15 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 		sql.Named("fitMode", c.FitMode),
 		sql.Named("rotation", c.Rotation),
 		sql.Named("flip", c.Flip),
+		sql.Named("opacity", importOpacity(c.Opacity)),
+		sql.Named("geomX", c.GeomX),
+		sql.Named("geomY", c.GeomY),
+		sql.Named("geomW", c.GeomW),
+		sql.Named("geomH", c.GeomH),
+		sql.Named("cropL", c.CropL),
+		sql.Named("cropR", c.CropR),
+		sql.Named("cropT", c.CropT),
+		sql.Named("cropB", c.CropB),
 		sql.Named("autoContinue", boolInt(c.AutoContinue)),
 		sql.Named("volume", c.Volume),
 		sql.Named("fadeIn", c.FadeIn),
@@ -362,4 +401,22 @@ func SelectedCuePosFor(exported, exportedTotal, appendedOffset int) {
 		return
 	}
 	_ = setSelectedCuePos(exported + appendedOffset) // best-effort
+}
+
+// sanitizeColor drops a colour that is not a CSS hex value: imported .CTP
+// files are foreign input and a bad colour must not reach a style attribute.
+func sanitizeColor(c string) string {
+	if ValidColor(c) {
+		return c
+	}
+	return ""
+}
+
+// importOpacity maps a manifest opacity to the stored percentage: shows
+// exported before opacity existed carry none (0), which means fully opaque.
+func importOpacity(v float64) float64 {
+	if v <= 0 || v > 100 {
+		return 100
+	}
+	return v
 }

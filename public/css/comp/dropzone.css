@@ -24,3 +24,37 @@
 #dropzone.has-advanced-upload .dragndrop {
   display: block;
 }
+
+/* Upload name-conflict choice: above Bootstrap modals (1055), below toasts. */
+.upload-conflict-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+.upload-conflict {
+  width: 100%;
+  max-width: 28rem;
+  padding: 1rem;
+}
+.upload-conflict ul {
+  max-height: 8rem;
+  overflow-y: auto;
+  word-break: break-all;
+}
+.upload-conflict .upload-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+.upload-conflict .upload-conflict-actions .btn {
+  min-height: 44px;
+}
+.cue-num-tooltip .tooltip-inner {
+  background-color: var(--bs-danger, #dc3545);
+}

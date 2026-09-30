@@ -18,6 +18,8 @@ func (e TimeParseError) Error() string {
 	return "ctp: invalid time format " + e.Input + ": " + e.Msg
 }
 
+func (e TimeParseError) Unwrap() error { return ErrInvalidTimeFormat }
+
 // ErrInvalidTimeFormat indicates the time string couldn't be parsed.
 var ErrInvalidTimeFormat = errors.New("invalid time format")
 
@@ -31,12 +33,19 @@ var ErrInvalidTimeFormat = errors.New("invalid time format")
 //	"0:01:30.5"  -> 90500
 //	"90"         -> 90000   (bare number = seconds)
 //	"90.5"       -> 90500
+//	"1m5s"       -> 65000   (unit form: h, m/min, s/sec, ms; any order of
+//	"1m 5.5s"    -> 65500    largest first, spaces allowed)
+//	"500ms"      -> 500
 //
 // Returns ErrInvalidTimeFormat on parse failure.
 func ParseTime(s string) (int, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, ErrInvalidTimeFormat
+	}
+
+	if ms, ok, err := parseUnitTime(s); ok {
+		return ms, err
 	}
 
 	// Bare number (no colons) -> treat as seconds
@@ -106,4 +115,43 @@ func FormatTime(ms int) string {
 	s := ms / 1000
 	ms %= 1000
 	return fmt.Sprintf("%02d:%02d:%02d.%03d", h, m, s, ms)
+}
+
+var timeUnitMs = map[string]float64{"h": 3_600_000, "hr": 3_600_000, "m": 60_000, "min": 60_000, "s": 1000, "sec": 1000, "ms": 1}
+
+// parseUnitTime reads "1h2m3.5s", "1m 5s", "500ms". ok=false when s has no
+// unit letters at all (a clock or bare-seconds form, parsed by the caller).
+func parseUnitTime(s string) (ms int, ok bool, err error) {
+	lower := strings.ToLower(strings.ReplaceAll(s, " ", ""))
+	if strings.IndexFunc(lower, func(r rune) bool { return r >= 'a' && r <= 'z' }) < 0 {
+		return 0, false, nil
+	}
+	bad := TimeParseError{Input: s, Msg: "use a form like 1:05, 1m5s or 65"}
+	total, lastRank := 0.0, 0.0
+	for lower != "" {
+		i := strings.IndexFunc(lower, func(r rune) bool { return r >= 'a' && r <= 'z' })
+		if i <= 0 {
+			return 0, true, bad
+		}
+		num, err := strconv.ParseFloat(lower[:i], 64)
+		if err != nil || num < 0 {
+			return 0, true, bad
+		}
+		j := i
+		for j < len(lower) && lower[j] >= 'a' && lower[j] <= 'z' {
+			j++
+		}
+		unit, found := timeUnitMs[lower[i:j]]
+		// Units must shrink left to right ("1m5s", not "5s1m" or "1m1m").
+		if !found || (lastRank != 0 && unit >= lastRank) {
+			return 0, true, bad
+		}
+		lastRank = unit
+		total += num * unit
+		lower = lower[j:]
+	}
+	if math.IsInf(total, 0) || total >= float64(math.MaxInt) {
+		return 0, true, bad
+	}
+	return int(math.Round(total)), true, nil
 }

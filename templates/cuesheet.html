@@ -10,7 +10,7 @@
   <div id="spaceBar" hx-trigger="spaceBar" hx-post="/api/cue/selected/play" hx-swap="none"></div>
     <table class="table table-dark table-striped table-sm align-middle">
     <thead>
-      <tr class="row">
+      <tr class="sheet-row">
         <th scope="col" class="col-type" title="Media type"></th>
         <th scope="col" class="col-cue-num" title="Cue number">Number</th>
         <th scope="col">Name</th>
@@ -22,14 +22,14 @@
     <tbody>
       {{ range .Rows }}
         {{ if .Group }}
-        <tr class="row cuegroup cue-group-header{{ if .Selected }} table-warning{{ end }}{{ if .Group.Collapse }} cue-gcollapsed{{ end }}" data-group-id="{{ .Group.GroupID }}" data-group-collapsed="{{ .Group.Collapse }}"
+        <tr class="sheet-row cuegroup cue-group-header{{ if .Selected }} table-warning{{ end }}{{ if .Group.Collapse }} cue-gcollapsed{{ end }}" data-group-id="{{ .Group.GroupID }}" data-group-collapsed="{{ .Group.Collapse }}"
           data-cue-color="{{ .Group.Color }}" data-cue-name="{{ .Group.Name }}"
           style="--depth: {{ .Depth }};{{ if .Group.Color }} --cue-accent: {{ .Group.Color }};{{ end }}{{ if ge .SpanDepth 0 }} --span-base: {{ safeCSS .SpanBase }};{{ if ne .SpanShadows "" }} --span-shadows: {{ safeCSS .SpanShadows }};{{ end }}{{ end }}"
           draggable="true"
-          hx-trigger="click delay:250ms[!justEdited()]" hx-post="/api/group/{{ .Group.GroupID }}/select" hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML"
+          hx-trigger="click[!justEdited()] delay:250ms" hx-post="/api/group/{{ .Group.GroupID }}/select" hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML"
           aria-label="Group {{ .Group.Name }}">
           <td class="cue-type" title="{{ if .Group.Slideshow }}Slideshow group{{ else }}Cue group{{ end }}">
-            <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ if .Group.Slideshow }}image{{ else }}folder{{ end }}"/></svg>
+            <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ if .Group.Slideshow }}image{{ else }}folder{{ end }}"/></svg>
           </td>
           <td class="cue-num col-group-num">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/group/{{ .Group.GroupID }}/edit/cueNum" hx-swap="outerHTML">{{ .Group.CueNum }}</span>
@@ -38,7 +38,7 @@
             <span class="cue-group-toggle" role="button" tabindex="0" title="Collapse / expand"
               hx-post="/api/group/{{ .Group.GroupID }}/collapse" hx-target="#cuesheet" hx-swap="outerHTML"
               hx-on:click="event.stopPropagation()">
-              <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ if .Group.Collapse }}chevron-right{{ else }}chevron-down{{ end }}"/></svg>
+              <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ if .Group.Collapse }}chevron-right{{ else }}chevron-down{{ end }}"/></svg>
             </span>
             <span class="cue-group-select" role="button" tabindex="0" title="Select this group (double-click the name to rename)">
               <span class="cue-group-name cue-inline-edit" title="{{ .Group.Name }}"
@@ -54,12 +54,13 @@
           <td class="cue-time"></td>
         </tr>
         {{ else }}
-        <tr class="row cue{{ if .Cue.Selected }} table-warning{{ end }}{{ if .Cue.InSelection }} table-warning{{ end }}{{ if .Cue.Playing }} cue-playing{{ end }}{{ if ne .Cue.Parent 0 }} cue-in-group{{ end }}{{ if .LastInGroup }} cue-glast{{ end }}" style="--depth: {{ .Depth }};{{ if .Cue.Color }} --cue-accent: {{ .Cue.Color }};{{ end }}{{ if .GroupColor }} --group-accent: {{ .GroupColor }};{{ end }}{{ if ge .SpanDepth 0 }} --span-base: {{ safeCSS .SpanBase }};{{ if ne .SpanShadows "" }} --span-shadows: {{ safeCSS .SpanShadows }};{{ end }}{{ end }}" data-cue-pos="{{ .Cue.CuePos }}" data-cue-auto-continue="{{ .Cue.AutoContinue }}" data-cue-color="{{ .Cue.Color }}" data-cue-fade-action="{{ .Cue.FadeAction }}" data-cue-fade-out="{{ .Cue.FadeOut }}" data-cue-missing="{{ .Cue.Missing }}" data-cue-result="{{ .Cue.LastResult }}" data-cue-sel="{{ if .Cue.InSelection }}1{{ else }}0{{ end }}" data-cue-anchor="{{ if .Cue.Selected }}1{{ else }}0{{ end }}" data-cue-group="{{ .Cue.Parent }}" draggable="true"
-          hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML" {{ if not .Cue.Selected }}hx-trigger="click delay:250ms[!justEdited()]" hx-post="/api/cue/{{ .Cue.CuePos }}"{{ end }}>
+        <tr class="sheet-row cue{{ if .Cue.Selected }} table-warning{{ end }}{{ if .Cue.InSelection }} table-warning{{ end }}{{ if .Cue.Playing }} cue-playing{{ end }}{{ if ne .Cue.Parent 0 }} cue-in-group{{ end }}{{ if .LastInGroup }} cue-glast{{ end }}" style="--depth: {{ .Depth }};{{ if .Cue.Color }} --cue-accent: {{ .Cue.Color }};{{ end }}{{ if .GroupColor }} --group-accent: {{ .GroupColor }};{{ end }}{{ if ge .SpanDepth 0 }} --span-base: {{ safeCSS .SpanBase }};{{ if ne .SpanShadows "" }} --span-shadows: {{ safeCSS .SpanShadows }};{{ end }}{{ end }}" data-cue-pos="{{ .Cue.CuePos }}" data-cue-auto-continue="{{ .Cue.AutoContinue }}" data-cue-color="{{ .Cue.Color }}" data-cue-fade-action="{{ .Cue.FadeAction }}" data-cue-fade-out="{{ .Cue.FadeOut }}" data-cue-missing="{{ .Cue.Missing }}" data-cue-result="{{ .Cue.LastResult }}" data-cue-sel="{{ if .Cue.InSelection }}1{{ else }}0{{ end }}" data-cue-anchor="{{ if .Cue.Selected }}1{{ else }}0{{ end }}" data-cue-group="{{ .Cue.Parent }}" draggable="true"
+          hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML" {{ if not .Cue.Selected }}hx-trigger="click[!justEdited()] delay:250ms" hx-post="/api/cue/{{ .Cue.CuePos }}"{{ end }}>
           <td class="cue-type" title="{{ .Cue.Mimetype }}">
-            <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ typeIcon .Cue.MediaType }}"/></svg>
-            {{ if .Cue.Missing }}<svg class="ftl-icon text-warning" title="Source file missing from disk"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>{{ end }}
-            {{ if eq .Cue.LastResult 2 }}<svg class="ftl-icon cue-result-error" title="Last play failed"><use href="/ftl/assets/icons/icons.svg#icon-close"/></svg>{{ end }}
+            <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ typeIcon .Cue.MediaType }}"/></svg>
+            {{ if .Cue.ScheduleEnabled }}<svg class="icon cue-sched-icon" aria-label="Scheduled {{ formatSchedule .Cue.ScheduleTimeMs }}"><title>Scheduled trigger {{ formatSchedule .Cue.ScheduleTimeMs }}</title><use href="/ftl/assets/icons/icons.svg#icon-clock"/></svg>{{ end }}
+            {{ if .Cue.Missing }}<svg class="icon text-warning" title="Source file missing from disk"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>{{ end }}
+            {{ if eq .Cue.LastResult 2 }}<svg class="icon cue-result-error" title="Last play failed"><use href="/ftl/assets/icons/icons.svg#icon-close"/></svg>{{ end }}
           </td>
           <td class="cue-num">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/cueNum" hx-swap="outerHTML">{{ .Cue.CueNum }}</span>
@@ -67,9 +68,9 @@
           <td class="cue-name">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/title" hx-swap="outerHTML">{{ .Cue.Title }}</span>
             {{ if .Cue.WaitKind }}<span class="cue-wait-pill" title="{{ if eq .Cue.WaitKind "post" }}PostWait{{ else }}PreWait{{ end }} in progress">{{ .Cue.WaitLeftS }}s</span>{{ end }}
-            {{ if .Cue.ScheduleEnabled }}<span class="cue-slotsched" title="Scheduled trigger"> · <svg class="ftl-icon"><use href="/ftl/assets/icons/icons.svg#icon-clock"/></svg> {{ formatSchedule .Cue.ScheduleTimeMs }}</span>{{ end }}
           </td>
-          <td class="cue-time">
+          <td class="cue-time cue-wait-cell">
+            {{ if eq .Cue.WaitKind "pre" }}<div class="cue-wait-progress" aria-hidden="true"><div class="cue-progress-fill" style="width: {{ .Cue.WaitPct }}%"></div></div>{{ end }}
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/preWait" hx-swap="outerHTML">{{ .Cue.PreWaitFmt }}</span>
           </td>
           <td class="cue-time cue-dur">
@@ -81,7 +82,8 @@
             </div>
             {{ end }}
           </td>
-          <td class="cue-time">
+          <td class="cue-time cue-wait-cell">
+            {{ if eq .Cue.WaitKind "post" }}<div class="cue-wait-progress" aria-hidden="true"><div class="cue-progress-fill" style="width: {{ .Cue.WaitPct }}%"></div></div>{{ end }}
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/postWait" hx-swap="outerHTML">{{ .Cue.PostWaitFmt }}</span>
           </td>
         </tr>

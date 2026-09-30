@@ -3,6 +3,7 @@ package routes
 import (
 	"archive/zip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -73,8 +74,16 @@ func Show(rg *gin.RouterGroup) {
 			Groups:         groups,
 			Audit:          logs.AuditTrail(),
 		}); err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
-			return
+			logs.PrintfWarn("EXPORT", "show export failed: %v", err)
+			if !c.Writer.Written() {
+				c.String(http.StatusInternalServerError, err.Error())
+				return
+			}
+			// Mid-stream: the 200 and part of the zip are already out, so an
+			// error body would just be appended to the archive. Kill the
+			// connection instead — the browser reports a failed download
+			// rather than saving a truncated .CTP that looks complete.
+			abortConnection(c)
 		}
 	})
 
@@ -99,8 +108,13 @@ func Show(rg *gin.RouterGroup) {
 
 		// Spool the uploaded .CTP to a temp file rather than io.ReadAll: the
 		// archive is streamed out of it entry-at-a-time below, so a big show
-		// never occupies RAM on the Pi.
-		tmpZip, err := os.CreateTemp("", "cutepi-show-*.ctp")
+		// never occupies RAM on the Pi. Spooled under the data dir's tmp/,
+		// not /tmp, which is a RAM-backed tmpfs on current Raspberry Pi OS.
+		if err := os.MkdirAll(config.TmpDir(), 0o755); err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		tmpZip, err := os.CreateTemp(config.TmpDir(), "show-*.ctp")
 		if err != nil {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
@@ -121,8 +135,11 @@ func Show(rg *gin.RouterGroup) {
 
 		manifest, mediaFiles, err := parseShowZip(zipPath)
 		if err != nil {
-			removeMediaTemps(mediaFiles)
-			c.String(http.StatusUnprocessableEntity, "invalid .CTP file: "+err.Error())
+			status := http.StatusUnprocessableEntity
+			if errors.Is(err, errShowTooLarge) {
+				status = http.StatusInsufficientStorage
+			}
+			c.String(status, "invalid .CTP file: "+err.Error())
 			return
 		}
 		defer removeMediaTemps(mediaFiles)
@@ -150,10 +167,8 @@ func Show(rg *gin.RouterGroup) {
 
 		// Import media BEFORE touching the cuesheet: a media write/probe
 		// failure must not cost the operator their current show. The .CTP's
-		// media entries were streamed to temp files during parsing; commit
-		// here moves each into place (copy+rename so it works across
-		// filesystems; /tmp and the media dir may be different mounts).
-		mediaDir := config.MediaLocation()
+		// media entries were streamed to temp files during parsing;
+		// importMedia moves each into place (rename, or copy across mounts).
 		for _, cue := range manifest.Cues {
 			if registered[cue.Filename] {
 				continue
@@ -162,13 +177,8 @@ func Show(rg *gin.RouterGroup) {
 			if !ok {
 				continue
 			}
-			dest := filepath.Join(mediaDir, cue.Filename)
-			if err := moveIntoPlace(tmp, dest); err != nil {
-				c.String(http.StatusInternalServerError, err.Error())
-				return
-			}
-			delete(mediaFiles, cue.Filename) // committed; skip deferred cleanup
-			if err := importMedia(cue.Filename, dest); err != nil {
+			delete(mediaFiles, cue.Filename) // importMedia owns (and cleans up) tmp now
+			if err := importMedia(cue.Filename, tmp); err != nil {
 				c.String(http.StatusUnprocessableEntity, fmt.Sprintf("imported media %q failed: %v", cue.Filename, err))
 				return
 			}
@@ -229,6 +239,7 @@ func Show(rg *gin.RouterGroup) {
 			inserted++
 		}
 		ctp.SelectedCuePosFor(manifest.SelectedCuePos, len(manifest.Cues), appendedOffset)
+		logs.Emit(logs.AuditEvent{Event: "show_imported", Title: fmt.Sprintf("%s: %d cues", mode, inserted)})
 
 		if c.GetHeader("HX-Request") != "" {
 			renderCuesheet(c)
@@ -268,7 +279,13 @@ func writeShowZip(dst io.Writer, m showManifest) error {
 		return err
 	}
 
+	written := map[string]bool{}
 	for _, cue := range m.Cues {
+		// One entry per file: cues sharing media must not duplicate it.
+		if written[cue.Filename] {
+			continue
+		}
+		written[cue.Filename] = true
 		path := filepath.Join(config.MediaLocation(), cue.Filename)
 		f, err := os.Open(path)
 		if err != nil {
@@ -336,19 +353,51 @@ func moveIntoPlace(tmp, dest string) error {
 	return os.Remove(tmp)
 }
 
+// errShowTooLarge: the archive's media would not fit on the media volume.
+var errShowTooLarge = errors.New("not enough free space for the show's media")
+
 // parseShowZip reads cutepi.json and the media/ entries from a .CTP archive
 // on disk. Entry names are validated with safeMediaName before they ever
 // reach filepath.Join on import. Media content is streamed out to temp files
 // (returned as filename -> temp path), so a multi-GB show never sits in RAM.
-func parseShowZip(path string) (showManifest, map[string]string, error) {
+// On error every temp file it created is removed and the map is nil.
+//
+// Size guard: the sum of the entries' declared uncompressed sizes must fit
+// in the media volume's free space (with headroom). archive/zip refuses to
+// inflate an entry past its declared size, so a zip bomb cannot exceed the
+// total checked here.
+func parseShowZip(path string) (_ showManifest, _ map[string]string, err error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return showManifest{}, nil, err
 	}
 	defer zr.Close()
 
+	// Duplicate media/ entries are legitimate (older exports wrote one
+	// entry per cue, so cues sharing a file repeat it); only the first of
+	// each name is extracted or counted.
+	var total uint64
+	counted := map[string]bool{}
+	for _, f := range zr.File {
+		if strings.HasPrefix(f.Name, "media/") && !counted[f.Name] {
+			counted[f.Name] = true
+			total += f.UncompressedSize64
+		}
+	}
+	if free, ok := mediaFreeBytes(); ok {
+		const headroom = 256 << 20 // keep the DB and logs writable
+		if total+headroom > free {
+			return showManifest{}, nil, fmt.Errorf("%w: needs %d MiB, %d MiB free", errShowTooLarge, total>>20, free>>20)
+		}
+	}
+
 	var m showManifest
 	mediaFiles := map[string]string{}
+	defer func() {
+		if err != nil {
+			removeMediaTemps(mediaFiles)
+		}
+	}()
 	for _, f := range zr.File {
 		switch {
 		case f.Name == "cutepi.json":
@@ -356,7 +405,7 @@ func parseShowZip(path string) (showManifest, map[string]string, error) {
 			if err != nil {
 				return showManifest{}, nil, err
 			}
-			err = json.NewDecoder(rc).Decode(&m)
+			err = json.NewDecoder(io.LimitReader(rc, 64<<20)).Decode(&m)
 			rc.Close()
 			if err != nil {
 				return showManifest{}, nil, err
@@ -366,38 +415,60 @@ func parseShowZip(path string) (showManifest, map[string]string, error) {
 			if !safeMediaName(name) {
 				return showManifest{}, nil, fmt.Errorf("unsafe media entry name %q", f.Name)
 			}
-			rc, err := f.Open()
+			if _, dup := mediaFiles[name]; dup {
+				continue // same file, already extracted
+			}
+			tmp, err := extractToTemp(f)
 			if err != nil {
 				return showManifest{}, nil, err
 			}
-			tmp, err := os.CreateTemp("", "cutepi-media-*")
-			if err != nil {
-				rc.Close()
-				return showManifest{}, nil, err
-			}
-			if _, err := io.Copy(tmp, rc); err != nil {
-				rc.Close()
-				tmp.Close()
-				os.Remove(tmp.Name())
-				return showManifest{}, nil, err
-			}
-			rc.Close()
-			if err := tmp.Close(); err != nil {
-				os.Remove(tmp.Name())
-				return showManifest{}, nil, err
-			}
-			mediaFiles[name] = tmp.Name()
+			mediaFiles[name] = tmp
 		}
 	}
 	if m.Version == 0 {
-		removeMediaTemps(mediaFiles)
 		return showManifest{}, nil, fmt.Errorf("missing cutepi.json manifest")
 	}
 	for _, cue := range m.Cues {
 		if !safeMediaName(cue.Filename) {
-			removeMediaTemps(mediaFiles)
 			return showManifest{}, nil, fmt.Errorf("manifest cue %q has an unsafe media filename %q", cue.Title, cue.Filename)
 		}
 	}
 	return m, mediaFiles, nil
+}
+
+// extractToTemp streams one archive entry to a new temp file under the data
+// dir's tmp/ and returns its path (removed again on any failure).
+func extractToTemp(f *zip.File) (string, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+	if err := os.MkdirAll(config.TmpDir(), 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(config.TmpDir(), "import-*")
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(tmp, rc); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return tmp.Name(), nil
+}
+
+// abortConnection hard-closes the client connection. Used when a streamed
+// response fails after its status line went out, so the client sees a
+// broken transfer instead of a truncated body that looks complete.
+func abortConnection(c *gin.Context) {
+	c.Abort()
+	if conn, _, err := c.Writer.Hijack(); err == nil {
+		_ = conn.Close()
+	}
 }

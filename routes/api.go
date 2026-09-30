@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -83,16 +84,15 @@ func splitHhMmSs(v string) (int, int, int, error) {
 	return 0, 0, 0, fmt.Errorf("invalid HH:MM[:SS] format")
 }
 
-// builtinTestPatterns is the full GStreamer videotestsrc enum offered in
-// the Tests modal (§12.10); custom pool items ride on top of it. Names are
-// the exact videotestsrc nicks (verified against gst-inspect 1.26) —
-// anything else silently falls back to the default smpte.
+// builtinTestPatterns is the curated videotestsrc set offered in the Tests
+// modal (§12.10); custom pool items ride on top of it. Names are the exact
+// videotestsrc nicks (verified against gst-inspect 1.26) — anything else
+// silently falls back to the default smpte.
 var builtinTestPatterns = []struct {
 	Name  string
 	Label string
 }{
 	{"smpte", "SMPTE bars"},
-	{"smpte75", "SMPTE 75%"},
 	{"smpte100", "SMPTE 100%"},
 	{"snow", "Snow"},
 	{"black", "Black"},
@@ -106,13 +106,8 @@ var builtinTestPatterns = []struct {
 	{"checkers-8", "Checkers 8px"},
 	{"circular", "Circle"},
 	{"blink", "Blink"},
-	{"zone-plate", "Zone plate"},
-	{"gamut", "Gamut"},
-	{"chroma-zone-plate", "Chroma zone"},
 	{"solid-color", "Solid color"},
-	{"ball", "Moving ball"},
 	{"bar", "Bar"},
-	{"pinwheel", "Pinwheel"},
 }
 
 // lastTestPattern is what the Tests toggle re-shows; the default SMPTE
@@ -173,28 +168,42 @@ func systemdUnit() string {
 	return "cutepi"
 }
 
+// wifiQREscape escapes a WIFI: QR field: the format's special characters
+// (\ ; , : ") must be backslash-escaped or an SSID/password containing them
+// produces a code phones mis-parse.
+func wifiQREscape(v string) string {
+	var b strings.Builder
+	for _, r := range v {
+		switch r {
+		case '\\', ';', ',', ':', '"':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func Api(rg *gin.RouterGroup) {
 	registerThemeRoutes(rg)
 	registerDisplayRoute(rg)
 	registerAudioRoute(rg)
+	registerDiskRoute(rg)
 	rg.GET("/ws", func(c *gin.Context) {
 		ws.Handle(c.Writer, c.Request)
 	})
 	// Full HTML render of the "Now Playing" widget. Used for the initial page
-	// render and by the change-detection poller (public/src/ui.js) only when
-	// GET /api/nowplaying/status reports a change.
+	// render and by the WebSocket-driven refresher (public/src/ui.js) only
+	// when GET /api/nowplaying/status reports a change.
 	rg.GET("/nowplaying", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "mediainfo.html", nowplayingData())
 	})
 
-	// Lightweight change-detection endpoint polled every 500ms by the Now
-	// Playing widget. Returns a monotonic server-side version counter that
-	// gsp bumps on real playback state changes and position ticks, plus a
-	// "changed" flag computed against the version the client last saw. The
-	// widget only re-renders (via GET /api/nowplaying) when changed is true,
-	// so idle/paused widgets stop being re-rendered on every poll. Per-client
-	// tracking lives entirely in the client; the server keeps no per-client
-	// state, so any number of concurrent clients work.
+	// Lightweight change-detection endpoint, called once per WebSocket
+	// "sync" (no polling). Returns the server-side version (playback state
+	// counter + cuesheet counter) plus a "changed" flag computed against the
+	// version the client last saw; the widget only re-renders (via GET
+	// /api/nowplaying) when changed is true. Per-client tracking lives
+	// entirely in the client, so any number of concurrent clients work.
 	rg.GET("/nowplaying/status", func(c *gin.Context) {
 		clientVersion := c.Query("version")
 		gsp.CurrentPosition()
@@ -241,9 +250,11 @@ func Api(rg *gin.RouterGroup) {
 			// Wi-Fi join code (Android hostapd 2.x syntax): clients scan it
 			// straight into their network list - used by the Network tab.
 			ap := config.AP()
-			target = fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", ap.SSID, ap.Pass)
+			// The join code necessarily carries the hotspot password; like
+			// every API route it is behind the operator password when set.
+			target = fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", wifiQREscape(ap.SSID), wifiQREscape(ap.Pass))
 			if ap.Pass == "" {
-				target = fmt.Sprintf("WIFI:T:nopass;S:%s;;", ap.SSID)
+				target = fmt.Sprintf("WIFI:T:nopass;S:%s;;", wifiQREscape(ap.SSID))
 			}
 		}
 		png, err := qrcode.Encode(target, qrcode.Medium, 256)
@@ -303,10 +314,34 @@ func Api(rg *gin.RouterGroup) {
 		}
 		c.Status(http.StatusOK)
 	})
+	// Shared by ESC and the menu's Fade out: fade the running output to black
+	// over the Settings > General ESC fade time, then stop everything
+	// including any background soundtrack. Nothing loaded is a plain stop.
+	// Returns immediately; the fade runs out in the background like the
+	// queued fade-then-play.
+	fadeStop := func(c *gin.Context) {
+		if gsp.CurrentPlaying() == "" {
+			gsp.Stop()
+			c.Status(http.StatusOK)
+			return
+		}
+		durMs := ctp.GetEscFadeMs()
+		logs.Printf(logs.RTEStop, "ESC fade-stop %dms", durMs)
+		loads := gsp.Loads()
+		goSafe(func() {
+			gsp.FadeAndStop(durMs)
+			// A cue fired during the fade is a newer decision; the trailing
+			// stop (which also ends the background soundtrack) must not kill it.
+			if gsp.Loads() != loads {
+				return
+			}
+			gsp.Stop()
+		})
+		c.Status(http.StatusOK)
+	}
 	rg.POST("/fadeOut", func(c *gin.Context) {
 		logs.Printf(logs.RTEFadeOut, "fadeOut")
-		gsp.Stop()
-		c.Status(http.StatusOK)
+		fadeStop(c)
 	})
 	rg.POST("/panic", func(c *gin.Context) {
 		logs.Printf(logs.RTEPanic, "!!PANIC!!")
@@ -335,24 +370,8 @@ func Api(rg *gin.RouterGroup) {
 		c.Status(http.StatusOK)
 	})
 
-	// ESC key: fade the running output to black over the Settings >
-	// General ESC fade time, then stop everything including any background
-	// soundtrack. Nothing loaded is a plain stop. Returns immediately; the
-	// fade runs out in the background like the queued fade-then-play.
-	rg.POST("/esc", func(c *gin.Context) {
-		if gsp.CurrentPlaying() == "" {
-			gsp.Stop()
-			c.Status(http.StatusOK)
-			return
-		}
-		durMs := ctp.GetEscFadeMs()
-		logs.Printf(logs.RTEStop, "ESC fade-stop %dms", durMs)
-		goSafe(func() {
-			gsp.FadeAndStop(durMs)
-			gsp.Stop()
-		})
-		c.Status(http.StatusOK)
-	})
+	// ESC key: see fadeStop.
+	rg.POST("/esc", fadeStop)
 
 	// Fade & stop the active clip over the given duration (ms); no duration
 	// means "stop now". Mirrors the fade-to-black used when a subsequent cue
@@ -422,6 +441,25 @@ func Api(rg *gin.RouterGroup) {
 		c.Status(http.StatusOK)
 	})
 
+	// Test-pattern label (display resolution and refresh rate), §12.10.
+	gsp.SetTestOverlay(ctp.GetTestOverlay())
+	rg.POST("/setting/testoverlay", func(c *gin.Context) {
+		on := c.PostForm("on") == "1" || c.PostForm("on") == "true"
+		if err := ctp.SetTestOverlay(on); err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		gsp.SetTestOverlay(on)
+		// A pattern on the wall picks the change up at once.
+		if gsp.TestShowing() && !ctp.GetShowMode() {
+			if err := gsp.ShowTest(lastTestPattern); err != nil {
+				c.String(http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		c.Status(http.StatusNoContent)
+	})
+
 	// GET /api/testpatterns: what the Tests modal lists — built-ins plus the
 	// operator's pinned pool items, plus live toggle state for the button.
 	rg.GET("/testpatterns", func(c *gin.Context) {
@@ -434,6 +472,7 @@ func Api(rg *gin.RouterGroup) {
 			"custom":  ctp.TestPatterns(),
 			"showing": gsp.TestShowing(),
 			"current": lastTestPattern,
+			"overlay": ctp.GetTestOverlay(),
 		})
 	})
 
@@ -467,7 +506,7 @@ func Api(rg *gin.RouterGroup) {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := gsp.LoadWithOpts(filename, gsp.LoadOpts{Loop: config.Loop(), LoudnessGain: gain}); err != nil {
+		if err := gsp.LoadWithOpts(filename, gsp.LoadOpts{Loop: config.Loop(), LoudnessGain: gain, Hold: gsp.IsStill(filename)}); err != nil {
 			logs.Printf(logs.RTEDirect, "direct play failed filename=%q error=%v", filename, err)
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
@@ -491,7 +530,7 @@ func Api(rg *gin.RouterGroup) {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := gsp.LoadWithOpts(filename, gsp.LoadOpts{Loop: config.Loop(), LoudnessGain: gain}); err != nil {
+		if err := gsp.LoadWithOpts(filename, gsp.LoadOpts{Loop: config.Loop(), LoudnessGain: gain, Hold: gsp.IsStill(filename)}); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
 				"error": err.Error(),
 			})
@@ -546,8 +585,16 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
-		os.Remove(filepath.Join(config.MediaLocation(), filename))
-		os.Remove(filepath.Join(config.ThumbnailLocation(), filename+".jpg"))
+		// The pool row is gone either way; a file that can't be removed is
+		// orphaned disk space, worth a log line (absent files are fine).
+		for _, p := range []string{
+			filepath.Join(config.MediaLocation(), filename),
+			filepath.Join(config.ThumbnailLocation(), filename+".jpg"),
+		} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				logs.PrintfWarn(logs.RTEDelete, "removing %q: %v", p, err)
+			}
+		}
 
 		// Re-render the mediapool so the deleted tile is removed from the DOM.
 		// Without a body the hx-target/hx-swap on the delete dropdown item
@@ -664,24 +711,36 @@ func Api(rg *gin.RouterGroup) {
 
 	// Ctrl+A: select every rendered (visible) cue.
 	rg.POST("/cue/selectall", func(c *gin.Context) {
-		sheet, err := ctp.GetCuesheet()
+		units, err := ctp.SelectUnits()
 		if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}
-		rows := ctp.FlattenSheet(&sheet)
+		// Ids: +cuePos for cues, -groupID for headers (same as the persisted set).
+		ids := make([]int, 0, len(units))
+		for _, u := range units {
+			if u.IsGroup {
+				ids = append(ids, -u.GroupID)
+			} else {
+				ids = append(ids, u.CuePos)
+			}
+		}
 		anchor, _ := ctp.SelectedCuePos()
-		set := make([]int, 0, len(rows))
-		for _, r := range rows {
-			if r.Cue != nil && r.Cue.CuePos != anchor {
-				set = append(set, r.Cue.CuePos)
+		if anchor == 0 {
+			if gid, _ := ctp.SelectedGroupPos(); gid != 0 {
+				anchor = -gid
+			}
+		}
+		set := make([]int, 0, len(ids))
+		for _, id := range ids {
+			if id != anchor {
+				set = append(set, id)
 			}
 		}
 		if anchor == 0 && len(set) > 0 {
-			anchor = set[0]
-			set = set[1:]
+			anchor, set = set[0], set[1:]
 		}
-		if err := ctp.SetSelection(anchor, set); err != nil {
+		if err := ctp.SetGroupSelection(anchor, set); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}
@@ -779,14 +838,34 @@ func Api(rg *gin.RouterGroup) {
 		})
 	})
 
-	// Renumber every cue 5, 10, 15… in sheet order (§12.5) — explicit
-	// operator action, rewrites hand-set numbers.
-	rg.POST("/cue/renumber", func(c *gin.Context) {
-		if err := ctp.RenumberCues(); err != nil {
+	// Sort the sheet by cue number (§12.5), group blocks kept together.
+	rg.POST("/cue/sort", func(c *gin.Context) {
+		if err := ctp.SortSheetByCueNumber(); err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}
 		renderCuesheet(c)
+	})
+	// Renumber every cue in sheet order: step, 2×step… (1, 2, 3 by default;
+	// §12.5) — explicit operator action, rewrites hand-set numbers.
+	rg.POST("/cue/renumber", func(c *gin.Context) {
+		if err := ctp.RenumberSheet(); err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			return
+		}
+		renderCuesheet(c)
+	})
+
+	// Output device from the inspector Audio tab (§5.5): the same
+	// system-wide ALSA device as Settings > Audio (CuTePi is the only audio
+	// producer), keeping the saved channels/rate. "" = default HDMI embedded.
+	rg.POST("/setting/audiodevice", func(c *gin.Context) {
+		a := config.Audio()
+		if err := config.SetAudio(c.PostForm("device"), a.Channels, a.Rate); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
+		}
+		c.Status(http.StatusNoContent)
 	})
 
 	// Auto-numbering toggle (§12.5).
@@ -829,15 +908,17 @@ func Api(rg *gin.RouterGroup) {
 		display, audio := config.Display(), config.Audio()
 		ap := config.AP()
 		c.JSON(http.StatusOK, gin.H{
-			"port":        config.Port(),
-			"loop":        gsp.Loop(),
-			"authEnabled": config.HasAuth(), // never return the password itself
-			"panicHold":   ctp.GetPanicHoldImage(),
-			"escFadeMs":   ctp.GetEscFadeMs(),
+			"port":         config.Port(),
+			"loop":         gsp.Loop(),
+			"authEnabled":  config.HasAuth(), // never return the password itself
+			"panicHold":    ctp.GetPanicHoldImage(),
+			"escFadeMs":    ctp.GetEscFadeMs(),
 			"instanceName": InstanceName(),
-			"autoNumber":  ctp.GetAutoNumber(),
-			"goAdvance":   ctp.GetGoAdvance(),
-			"showMode":    ctp.GetShowMode(),
+			"autoNumber":   ctp.GetAutoNumber(),
+			"cueNumStep":   ctp.GetCueNumStep(),
+			"displayMode":  displayModeLabel(),
+			"goAdvance":    ctp.GetGoAdvance(),
+			"showMode":     ctp.GetShowMode(),
 			"display": gin.H{
 				"resolution": display.Resolution,
 				"refreshHz":  display.RefreshHz,
@@ -854,6 +935,8 @@ func Api(rg *gin.RouterGroup) {
 				//PASSWORD NEVER RETURNED — only whether it is set
 				"passwordSet": ap.Pass != "",
 			},
+			"remote":       config.Remote(),
+			"remoteStatus": RemoteStatus(),
 		})
 	})
 
@@ -873,80 +956,160 @@ func Api(rg *gin.RouterGroup) {
 			APPass            string `json:"apPass" form:"apPass"`
 			APEnabled         *bool  `json:"apEnabled" form:"apEnabled"`
 			EscFadeMs         *int   `json:"escFadeMs" form:"escFadeMs"`
+			EscFade           string `json:"escFade" form:"escFade"` // time text ("1s", "0:01.5", "500ms"); wins over escFadeMs
+			CueNumStep        string `json:"cueNumStep" form:"cueNumStep"`
+			// Remote listeners (§12.8). RemoteBlock marks that the Network
+			// tab posted them, so absent (unchecked) toggles mean "off" only
+			// then — a partial post never switches a listener off.
+			RemoteBlock          bool   `json:"remoteBlock" form:"remoteBlock"`
+			RemoteHyperdeck      bool   `json:"remoteHyperdeck" form:"remoteHyperdeck"`
+			RemoteHyperdeckPort  int    `json:"remoteHyperdeckPort" form:"remoteHyperdeckPort"`
+			RemoteHyperdeckClips string `json:"remoteHyperdeckClips" form:"remoteHyperdeckClips"`
+			RemoteOSCUDP         bool   `json:"remoteOscUdp" form:"remoteOscUdp"`
+			RemoteOSCUDPPort     int    `json:"remoteOscUdpPort" form:"remoteOscUdpPort"`
+			RemoteOSCTCP         bool   `json:"remoteOscTcp" form:"remoteOscTcp"`
+			RemoteOSCTCPPort     int    `json:"remoteOscTcpPort" form:"remoteOscTcpPort"`
+			RemoteOSCBind        string `json:"remoteOscBind" form:"remoteOscBind"`
 		}
 		if err := c.ShouldBind(&body); err != nil {
 			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
 			return
 		}
-		if body.Port > 0 {
-			if err := config.SetPort(body.Port); err != nil {
-				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+		if raw := strings.TrimSpace(body.EscFade); raw != "" {
+			ms, err := ctp.ParseTime(raw)
+			if err != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "ESC fade-out time: " + err.Error()})
 				return
 			}
+			body.EscFadeMs = &ms
 		}
-		if body.Loop != nil {
-			gsp.SetLoop(*body.Loop)
+		// Which blocks this post carries. An all-default block means "not
+		// touched by this form post" and must not wipe real settings (older
+		// clients, partial pages). AP fields apply only when the Network tab
+		// actually posted them (an SSID value or the checkbox); a blank pass
+		// keeps the stored one — the tab never re-renders existing passwords.
+		hasDisplay := body.DisplayResolution != "" || body.DisplayRefresh > 0 || body.DisplayUseEDID
+		hasAudio := body.AudioDevice != "" || body.AudioRate > 0 || body.AudioChannels != ""
+		hasAP := body.APSSID != "" || body.APEnabled != nil
+		apPrev := config.AP()
+		apEnabled := body.APEnabled != nil && *body.APEnabled
+		apPass := body.APPass
+		if apPass == "" {
+			apPass = apPrev.Pass
 		}
-		if body.EscFadeMs != nil {
-			if err := ctp.SetEscFadeMs(*body.EscFadeMs); err != nil {
-				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
-				return
+		remote := config.RemoteSettings{
+			HyperDeck:      body.RemoteHyperdeck,
+			HyperDeckPort:  body.RemoteHyperdeckPort,
+			HyperDeckClips: body.RemoteHyperdeckClips,
+			OSCUDP:         body.RemoteOSCUDP,
+			OSCUDPPort:     body.RemoteOSCUDPPort,
+			OSCTCP:         body.RemoteOSCTCP,
+			OSCTCPPort:     body.RemoteOSCTCPPort,
+			OSCBind:        body.RemoteOSCBind,
+		}
+
+		numStep, numStepErr := 0.0, error(nil)
+		if raw := strings.TrimSpace(body.CueNumStep); raw != "" {
+			if numStep, numStepErr = strconv.ParseFloat(raw, 64); numStepErr == nil {
+				numStepErr = ctp.ValidateCueNumStep(numStep)
+			} else {
+				numStepErr = ctp.ValidateCueNumStep(-1)
 			}
+		}
+		// Validate EVERY posted field before persisting any: a bad value
+		// late in the form must not leave the earlier fields half-saved.
+		var verr error
+		switch {
+		case body.Port > 0 && config.ValidatePort(body.Port) != nil:
+			verr = config.ValidatePort(body.Port)
+		case numStepErr != nil:
+			verr = numStepErr
+		case body.EscFadeMs != nil && ctp.ValidateEscFadeMs(*body.EscFadeMs) != nil:
+			verr = ctp.ValidateEscFadeMs(*body.EscFadeMs)
+		case hasDisplay && config.ValidateDisplay(body.DisplayResolution, body.DisplayRefresh) != nil:
+			verr = config.ValidateDisplay(body.DisplayResolution, body.DisplayRefresh)
+		case hasAudio && config.ValidateAudio(body.AudioChannels, body.AudioRate) != nil:
+			verr = config.ValidateAudio(body.AudioChannels, body.AudioRate)
+		case hasAP && config.ValidateAP(body.APSSID, apPass, apEnabled) != nil:
+			verr = config.ValidateAP(body.APSSID, apPass, apEnabled)
+		}
+		if verr == nil && body.RemoteBlock {
+			_, verr = config.ValidateRemote(remote)
+		}
+		if verr != nil {
+			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": verr.Error()})
+			return
+		}
+
+		// Apply. Validation passed, so the only failures left are persistence
+		// (disk full, read-only data dir) — surfaced as 500s.
+		fail := func(err error) bool {
+			if err == nil {
+				return false
+			}
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": "saving settings: " + err.Error()})
+			return true
+		}
+		portChanged := body.Port > 0 && body.Port != config.Port()
+		if body.Port > 0 && fail(config.SetPort(body.Port)) {
+			return
+		}
+		if body.Loop != nil && fail(gsp.SetLoop(*body.Loop)) {
+			return
+		}
+		if numStep > 0 && fail(ctp.SetCueNumStep(numStep)) {
+			return
+		}
+		if body.EscFadeMs != nil && fail(ctp.SetEscFadeMs(*body.EscFadeMs)) {
+			return
 		}
 		// A blank password means "unchanged" (forms always send the field);
 		// the explicit clear checkbox disables auth.
 		if body.ClearPassword {
-			config.SetAuthPassword("")
+			if fail(config.SetAuthPassword("")) {
+				return
+			}
 		} else if pw := strings.TrimSpace(body.Password); pw != "" {
-			config.SetAuthPassword(pw)
-		}
-		// Validation-on-save but the form passes ALL fields together; an
-		// all-default triplet means "not touched by this form post" and
-		// must not wipe real settings (older clients, partial pages).
-		if body.DisplayResolution != "" || body.DisplayRefresh > 0 || body.DisplayUseEDID {
-			if err := config.SetDisplay(body.DisplayResolution, body.DisplayRefresh, body.DisplayUseEDID); err != nil {
-				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+			if fail(config.SetAuthPassword(pw)) {
 				return
 			}
 		}
-		if body.AudioDevice != "" || body.AudioRate > 0 || body.AudioChannels != "" {
-			if err := config.SetAudio(body.AudioDevice, body.AudioChannels, body.AudioRate); err != nil {
-				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+		if hasDisplay && fail(config.SetDisplay(body.DisplayResolution, body.DisplayRefresh, body.DisplayUseEDID)) {
+			return
+		}
+		if hasAudio && fail(config.SetAudio(body.AudioDevice, body.AudioChannels, body.AudioRate)) {
+			return
+		}
+		// The hotspot is only touched when its own settings changed:
+		// re-running nmcli on every save (the old behaviour) bounced the
+		// access point — dropping every Wi-Fi tablet driving the show —
+		// whenever the operator changed an unrelated setting.
+		if hasAP {
+			if fail(config.SetAP(body.APSSID, apPass, apEnabled)) {
 				return
 			}
+			if apNow := config.AP(); apNow != apPrev {
+				if apErr := applyAP(); apErr != nil {
+					networkAPWarn(apErr) // hotspot failure must never kill the save
+				}
+			}
 		}
-		// AP settings persist always; turning the hotspot on/off is a system
-		// action handled by /api/network/ap so a failed hostapd setup never
-		// blocks saving an SSID twice.
-		// AP fields are only applied when the Network tab actually posted
-		// them (an SSID value or the checkbox); blank w/o checkbox must not
-		// erase a configured hotspot. A blank pass keeps the stored one —
-		// the tab never re-renders existing passwords (like auth).
-		if body.APSSID != "" || body.APEnabled != nil {
-			apEnabled := false
-			if body.APEnabled != nil {
-				apEnabled = *body.APEnabled
-			}
-			pass := body.APPass
-			if pass == "" {
-				pass = config.AP().Pass
-			}
-			if err := config.SetAP(body.APSSID, pass, apEnabled); err != nil {
-				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+		if body.RemoteBlock {
+			if fail(config.SetRemote(remote)) {
 				return
 			}
-			if apErr := networkAPApply(); apErr != nil {
-				networkAPWarn(apErr) // hotspot failure must never kill the save
-			}
+			ApplyRemote()
 		}
-		if apErr := networkAPApply(); apErr != nil {
-			networkAPWarn(apErr) // hotspot failure must never kill the save
+		msg := "Saved."
+		if portChanged {
+			msg = "Saved. The new port takes effect after a server restart."
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"port":        config.Port(),
-			"loop":        gsp.Loop(),
-			"authEnabled": config.HasAuth(),
-			"message":     "Port changes require a server restart to take effect.",
+			"port":         config.Port(),
+			"loop":         gsp.Loop(),
+			"authEnabled":  config.HasAuth(),
+			"remoteStatus": RemoteStatus(),
+			"message":      msg,
 		})
 	})
 
@@ -1069,8 +1232,15 @@ func Api(rg *gin.RouterGroup) {
 		inMS, inErr := ctp.ParseTime(in)
 		outMS, outErr := ctp.ParseTime(out)
 		if inErr != nil || outErr != nil || (inMS > 0 && outMS > 0 && outMS <= inMS) {
+			msg := "trim Out must be after trim In"
+			switch {
+			case inErr != nil:
+				msg = fmt.Sprintf("invalid trim In %q (use hh:mm:ss.mmm)", in)
+			case outErr != nil:
+				msg = fmt.Sprintf("invalid trim Out %q (use hh:mm:ss.mmm)", out)
+			}
 			c.HTML(http.StatusBadRequest, "error.html", gin.H{
-				"error": "trim Out must be after trim In",
+				"error": msg,
 			})
 			return
 		}
@@ -1087,7 +1257,7 @@ func Api(rg *gin.RouterGroup) {
 			"autoContinue": strconv.FormatBool(autoCont),
 			"color":        strings.TrimSpace(c.PostForm("color")),
 		}
-		for _, col := range []string{"volume", "rate", "balance", "fadeIn", "preWait", "postWait", "fadeCurve", "cueDuration", "fit_mode", "rotation", "flip"} {
+		for _, col := range []string{"volume", "rate", "balance", "fadeIn", "preWait", "postWait", "fadeCurve", "cueDuration", "fit_mode", "rotation", "flip", "opacity", "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b"} {
 			if val, present := c.GetPostForm(col); present {
 				fields[col] = strings.TrimSpace(val)
 			}
@@ -1178,6 +1348,7 @@ func Api(rg *gin.RouterGroup) {
 			"MediaRows":     mediaInfoRows(cue),
 			"ScheduleDay":   schedDayNum(cue.ScheduleDays),
 			"Pool":          replacementPool(),
+			"AudioDevice":   config.Audio().Device,
 		})
 	})
 
@@ -1260,11 +1431,11 @@ func Api(rg *gin.RouterGroup) {
 				if anchor == 0 {
 					anchor = pos
 				}
-			if err := ctp.SetSelection(anchor, out); err == nil {
-				awardsSelectionSync()
-				renderCuesheet(c)
-				return
-			}
+				if err := ctp.SetSelection(anchor, out); err == nil {
+					awardsSelectionSync()
+					renderCuesheet(c)
+					return
+				}
 			}
 		}
 		err := ctp.SetCue(cuePos)
@@ -1296,11 +1467,17 @@ func Api(rg *gin.RouterGroup) {
 			})
 			return
 		}
+		validate := ""
+		switch col {
+		case "posStart", "posEnd", "preWait", "cueDuration", "postWait", "fadeOut", "fadeIn":
+			validate = "time"
+		}
 		c.HTML(http.StatusOK, "cueeditcol.html", gin.H{
-			"cuePos": cuePos,
-			"col":    col,
-			"val":    val,
-			"action": "/api/cue/" + cuePos + "/edit/" + col,
+			"cuePos":   cuePos,
+			"col":      col,
+			"val":      val,
+			"validate": validate,
+			"action":   "/api/cue/" + cuePos + "/edit/" + col,
 		})
 	})
 	rg.PUT("/cue/:cuePos/edit/:col", func(c *gin.Context) {
@@ -1309,8 +1486,17 @@ func Api(rg *gin.RouterGroup) {
 		val := c.PostForm("val")
 		logs.Printf(logs.RTEUpdate, "Update %v Column %v Value %v", cuePos, col, val)
 		err := ctp.UpdateCue(cuePos, col, val)
+		if errors.Is(err, ctp.ErrDuplicateCueNum) {
+			rejectCueNum(c, err, `#cuesheet tr.cue[data-cue-pos="`+cuePos+`"] .cue-num`, "")
+			renderCuesheet(c)
+			return
+		}
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+			status := http.StatusInternalServerError
+			if errors.Is(err, ctp.ErrInvalidTimeFormat) {
+				status = http.StatusBadRequest
+			}
+			c.HTML(status, "error.html", gin.H{
 				"error": err.Error(),
 			})
 			return
@@ -1376,4 +1562,17 @@ func Api(rg *gin.RouterGroup) {
 		c.HTML(http.StatusOK, "cueinspector.html", inspectorData())
 	})
 
+}
+
+// displayModeLabel is the HDMI output's current mode for the Settings
+// Display tab, e.g. "1920 × 1080 @ 60 Hz" ("" when unknown).
+func displayModeLabel() string {
+	w, h, hz := gsp.DisplayMode()
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+	if hz > 0 {
+		return fmt.Sprintf("%d × %d @ %d Hz", w, h, hz)
+	}
+	return fmt.Sprintf("%d × %d", w, h)
 }

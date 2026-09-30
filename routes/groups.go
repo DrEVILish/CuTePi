@@ -1,11 +1,14 @@
 package routes
 
 import (
+	"encoding/json"
+	"errors"
 	"log"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -171,9 +174,10 @@ func Groups(rg *gin.RouterGroup) {
 		if name := strings.TrimSpace(c.PostForm("name")); name != "" {
 			g.Name = name
 		}
-		if col := strings.TrimSpace(c.PostForm("color")); strings.HasPrefix(col, "#") || col == "" {
+		if col := strings.TrimSpace(c.PostForm("color")); ctp.ValidColor(col) {
 			g.Color = col
 		}
+		prevNum := g.CueNum
 		if cn := strings.TrimSpace(c.PostForm("cueNum")); len(cn) <= 24 {
 			g.CueNum = cn
 		}
@@ -205,13 +209,32 @@ func Groups(rg *gin.RouterGroup) {
 		// The group inspector submits hold/fade in SECONDS (its labels read
 		// "(s)") but the persisted fields are milliseconds; ×1000 here so a
 		// "5" is a 5s hold, not 5ms.
-		if f, err := strconv.Atoi(c.PostForm("fadeSecs")); err == nil {
-			g.FadeMS = f * 1000
+		// Time fields: "5", "5s", "0:05", "1m5s" (ctp.ParseTime; bare = seconds).
+		// Blank keeps the stored value; anything else unparseable is refused.
+		for _, f := range []struct {
+			field string
+			dst   *int
+		}{{"fadeSecs", &g.FadeMS}, {"durationSecs", &g.DurationMS}} {
+			raw := strings.TrimSpace(c.PostForm(f.field))
+			if raw == "" {
+				continue
+			}
+			ms, perr := ctp.ParseTime(raw)
+			if perr != nil {
+				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": perr.Error()})
+				return
+			}
+			*f.dst = ms
 		}
-		if d, err := strconv.Atoi(c.PostForm("durationSecs")); err == nil {
-			g.DurationMS = d * 1000
-		}
-		if err := ctp.UpdateGroup(g); err != nil {
+		if err := ctp.UpdateGroup(g); errors.Is(err, ctp.ErrDuplicateCueNum) {
+			rejectCueNum(c, err, "#group-cuenum", prevNum)
+			g.CueNum = prevNum
+			err = ctp.UpdateGroup(g)
+			if err != nil {
+				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+				return
+			}
+		} else if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}
@@ -291,7 +314,7 @@ func Groups(rg *gin.RouterGroup) {
 			return
 		}
 		g.Color = strings.TrimSpace(c.PostForm("color"))
-		if g.Color != "" && !strings.HasPrefix(g.Color, "#") {
+		if !ctp.ValidColor(g.Color) {
 			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "invalid colour"})
 			return
 		}
@@ -413,7 +436,9 @@ func Groups(rg *gin.RouterGroup) {
 		if g.CueNum = strings.TrimSpace(c.PostForm("val")); len(g.CueNum) > 24 {
 			g.CueNum = g.CueNum[:24]
 		}
-		if err := ctp.UpdateGroup(g); err != nil {
+		if err := ctp.UpdateGroup(g); errors.Is(err, ctp.ErrDuplicateCueNum) {
+			rejectCueNum(c, err, `#cuesheet tr.cue-group-header[data-group-id="`+strconv.Itoa(id)+`"] .cue-num`, "")
+		} else if err != nil {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 			return
 		}
@@ -563,20 +588,32 @@ func groupTiming(groupID int) (totalMS int, remainMS int) {
 // cue.H → groupinspector.html expects .Group and .MemberCount plus the cue
 // palette for the colour dropdown.
 func renderGroupInspector(c *gin.Context, groupID int) {
-	g, err := ctp.GetGroup(groupID)
-	if err != nil {
+	if _, err := ctp.GetGroup(groupID); err != nil {
 		c.String(http.StatusNotFound, "group not found")
 		return
 	}
-	members, err := ctp.GroupCuePositions(groupID)
+	data, err := groupInspectorData(groupID)
 	if err != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
 		return
 	}
+	c.HTML(http.StatusOK, "groupinspector.html", data)
+}
+
+// groupInspectorData builds the groupinspector.html model, shared by the
+// partial endpoint and the initial page render.
+func groupInspectorData(groupID int) (gin.H, error) {
+	g, err := ctp.GetGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	members, err := ctp.GroupCuePositions(groupID)
+	if err != nil {
+		return nil, err
+	}
 	all, err := ctp.Groups()
 	if err != nil {
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
-		return
+		return nil, err
 	}
 	// Depth-indent by walking each group's ancestors; the picker group's own
 	// subtree is disabled in the dropdown (cycle prevention at the UI level;
@@ -622,14 +659,14 @@ func renderGroupInspector(c *gin.Context, groupID int) {
 		})
 	}
 	total, remaining := groupTiming(groupID)
-	c.HTML(http.StatusOK, "groupinspector.html", gin.H{
+	return gin.H{
 		"Group":         g,
 		"MemberCount":   len(members),
 		"Palette":       cuePalette,
 		"OtherGroups":   opts,
 		"DurationTotal": formatClock(float64(total) / 1000),
 		"Remaining":     formatClock(float64(remaining) / 1000),
-	})
+	}, nil
 }
 
 // openSelGroup opens (true) or closes (false) the currently selected group;
@@ -723,43 +760,83 @@ func slideshowRunner(g ctp.Group) {
 	if hold <= 0 {
 		hold = defaultSlideshowHold
 	}
-	fade := time.Duration(g.FadeMS) * time.Millisecond
-
-	for {
-		for _, cue := range members {
-			if err := loadAndPlayCueKeep(cue, strings.HasPrefix(cue.Mimetype, "image/")); err != nil {
-				log.Printf("slideshow: loading %q failed: %v", cue.Filename, err)
+	fade := g.FadeMS
+	run := slideshowRuns.Add(1) // a newer slideshow start cancels this one
+	var ownGen uint64           // playback generation after our own last load
+	// wait sleeps d but returns false as soon as this run is cancelled or the
+	// operator took another playback decision (anything that moved the
+	// generation away from the one our own load left).
+	wait := func(d time.Duration) bool {
+		end := time.Now().Add(d)
+		for time.Now().Before(end) {
+			if slideshowRuns.Load() != run || gsp.Generation() != ownGen {
+				return false
+			}
+			time.Sleep(min(100*time.Millisecond, time.Until(end)))
+		}
+		return slideshowRuns.Load() == run && gsp.Generation() == ownGen
+	}
+	order := members
+	var last int
+	for pass := 0; ; pass++ {
+		if g.Shuffle && pass > 0 {
+			order = append([]ctp.Cue(nil), members...)
+			rand.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+			// Never show the same slide twice in a row across a loop.
+			if len(order) > 1 && order[0].CuePos == last {
+				order[0], order[len(order)-1] = order[len(order)-1], order[0]
+			}
+		}
+		for i, cue := range order {
+			if slideshowRuns.Load() != run || (ownGen != 0 && gsp.Generation() != ownGen) {
 				return
 			}
-			_ = ctp.SetCue(strconv.Itoa(cue.CuePos)) // highlight = current image
+			opts := cueOpts(cue, true)
+			// The group owns the timing: every slide holds on screen (its own
+			// cue timer and hold setting do not apply) until the next one
+			// replaces it, crossfading over the group's fade time.
+			opts.Hold = true
+			opts.Loop = false
+			opts.FadeIn = 0
+			opts.Crossfade = 0
+			if pass > 0 || i > 0 {
+				opts.Crossfade = fade
+			}
+			slideStart := time.Now()
+			if err := gsp.LoadWithOpts(cue.Filename, opts); err != nil {
+				log.Printf("slideshow: loading %q failed: %v", cue.Filename, err)
+				ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
+				return
+			}
+			gsp.SetCuePos(cue.CuePos)
+			gsp.Play()
+			ownGen = gsp.Generation()
+			last = cue.CuePos
+			_ = ctp.SetCue(strconv.Itoa(cue.CuePos)) // highlight = current slide
 			// Images show for the group hold; video slides play their own
 			// duration (rate/trim-corrected): a 30s clip is not a 5s slide.
-			ms := hold.Milliseconds()
+			d := hold
 			if !strings.HasPrefix(cue.Mimetype, "image/") {
 				if eff := ctp.EffectiveCueDuration(cue); eff > 0 {
-					ms = int64(eff)
+					d = time.Duration(eff) * time.Millisecond
 				}
 			}
-			time.Sleep(time.Duration(ms) * time.Millisecond)
-
-			// Operator intervention aborts the slideshow (same identity guard
-			// shape as auto-continue).
-			if gsp.CurrentCuePos() != cue.CuePos {
+			// Cadence from the start of the load: the next slide change comes
+			// exactly d after this one began, whatever the preroll took.
+			if !wait(d - time.Since(slideStart)) {
 				return
-			}
-			if fade > 0 {
-				gsp.FadeAndStop(int(fade / time.Millisecond))
-				time.Sleep(fade)
-				// No identity check here: FadeAndStop ends the cue itself,
-				// so the end hook clears cuePos regardless — checking
-				// CurrentCuePos here aborted every slideshow after slide 1.
 			}
 		}
 		if !g.Loop {
+			// The last slide stays on screen (held) until the operator acts.
 			return
 		}
 	}
 }
+
+// slideshowRuns identifies the live slideshow: each start takes the next
+// number and every older runner sees it moved and stops.
+var slideshowRuns atomic.Uint64
 
 // groupScope returns every group id in groupID's subtree (the group itself
 // plus all descendants) — the scope GO order and runtime timing both use.
@@ -800,4 +877,16 @@ func playFirstGroupMember(groupID int) {
 			return
 		}
 	}
+}
+
+// rejectCueNum reports a refused cue-number edit. The response still renders
+// the unchanged number (the edit is undone, not an error page), and the
+// cueNumRejected event shows the reason as a tooltip on the field at anchor
+// (an input anchor is also reset to value). An operator mistake, so nothing
+// is logged.
+func rejectCueNum(c *gin.Context, err error, anchor, value string) {
+	payload, _ := json.Marshal(map[string]any{
+		"cueNumRejected": map[string]string{"target": "body", "message": err.Error(), "anchor": anchor, "value": value},
+	})
+	c.Header("HX-Trigger", string(payload))
 }

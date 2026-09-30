@@ -18,7 +18,9 @@ import (
 
 	"CuTePi/config"
 	"CuTePi/ctp"
+	"CuTePi/gsp"
 	"CuTePi/logs"
+	"CuTePi/media"
 )
 
 func Youtube(rg *gin.RouterGroup) {
@@ -43,8 +45,14 @@ func handleYoutubeDownload(c *gin.Context) {
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
+	// yt-dlp's stdout and stderr are pumped on separate goroutines; gin's
+	// ResponseWriter is not safe for concurrent use, so every write to the
+	// stream goes through this one mutex.
+	var wmu sync.Mutex
 	writeLine := func(msg map[string]any) bool {
 		body, _ := json.Marshal(msg)
+		wmu.Lock()
+		defer wmu.Unlock()
 		_, err := c.Writer.Write(append(body, '\n'))
 		c.Writer.Flush()
 		return err == nil
@@ -57,7 +65,9 @@ func handleYoutubeDownload(c *gin.Context) {
 
 	stage("resolving")
 	th := &pctThrottle{every: 250 * time.Millisecond}
-	tmpDir, filename, err := downloadWithYtDlp(url, func(line string) {
+	// The request context: a client that disconnects (closed modal, lost
+	// Wi-Fi) kills yt-dlp instead of leaving it downloading for 30 minutes.
+	tmpDir, filename, err := downloadWithYtDlp(c.Request.Context(), url, func(line string) {
 		if msg := parseYtDlpLine(line, th); msg != nil {
 			writeLine(msg)
 		}
@@ -159,19 +169,24 @@ var (
 // temp subdir - never directly over an existing media file. Every progress
 // line from the second (download) invocation is passed to onLine, so a
 // streaming handler can mirror yt-dlp's own percentage/speed/ETA.
-func downloadWithYtDlp(url string, onLine func(string)) (string, string, error) {
+func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) (string, string, error) {
 	outputTemplate := "%(title)s.%(ext)s"
 	// The default web client currently returns YouTube's "page needs to be
 	// reloaded" response in the target environment. Android remains the
 	// simplest yt-dlp client that resolves these public videos.
 	extractorArgs := "youtube:player_client=android"
 
-	tmpDir, err := os.MkdirTemp(config.MediaLocation(), "ytdlp-")
+	// Scratch space under the data dir's tmp/ — not inside the media dir,
+	// which is served statically at /media and scanned as the pool.
+	if err := os.MkdirAll(config.TmpDir(), 0o755); err != nil {
+		return "", "", err
+	}
+	tmpDir, err := os.MkdirTemp(config.TmpDir(), "ytdlp-")
 	if err != nil {
 		return "", "", err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), ytDlpResolveTimeout)
+	ctx, cancel := context.WithTimeout(parent, ytDlpResolveTimeout)
 	defer cancel()
 	printCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", "--", url)
 	printCmd.Dir = tmpDir
@@ -190,24 +205,20 @@ func downloadWithYtDlp(url string, onLine func(string)) (string, string, error) 
 	// force the same single-video selection in both invocations. --newline
 	// makes yt-dlp print progress once per line (one line per tick instead of
 	// \r-updated), so a line-based parser sees live percentages.
-	ctx, cancel = context.WithTimeout(context.Background(), ytDlpDownloadTimeout)
+	ctx, cancel = context.WithTimeout(parent, ytDlpDownloadTimeout)
 	defer cancel()
 	dlCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "--newline", "--progress", "-o", outputTemplate, "--", url)
 	dlCmd.Dir = tmpDir
 
-	var tail strings.Builder
-	if onLine != nil {
-		// One line-writer per stream so a partial line in stdout can never
-		// be spliced with a mid-line stderr write; progress (stdout) and
-		// stage lines (stderr) share the tail for errors.
-		wout := &lineWriter{onLine: onLine, tail: &tail, max: 8 << 10}
-		werr := &lineWriter{onLine: onLine, tail: &tail, max: 8 << 10}
-		dlCmd.Stdout = wout
-		dlCmd.Stderr = werr
-	}
+	// One line-writer per stream so a partial line in stdout can never be
+	// spliced with a mid-line stderr write; both share one sink (tail +
+	// callback) whose mutex serialises the two pump goroutines.
+	sink := &lineSink{onLine: onLine, max: 8 << 10}
+	dlCmd.Stdout = &lineWriter{sink: sink}
+	dlCmd.Stderr = &lineWriter{sink: sink}
 	if err := dlCmd.Run(); err != nil {
 		os.RemoveAll(tmpDir)
-		return "", "", fmt.Errorf("%w: %s", err, strings.TrimSpace(tail.String()))
+		return "", "", fmt.Errorf("%w: %s", err, strings.TrimSpace(sink.Tail()))
 	}
 	if _, err := os.Stat(filepath.Join(tmpDir, filename)); err != nil {
 		os.RemoveAll(tmpDir)
@@ -217,44 +228,54 @@ func downloadWithYtDlp(url string, onLine func(string)) (string, string, error) 
 	return tmpDir, filename, nil
 }
 
-// lineWriter is exec-friendly stdout/stderr plumbing: complete lines are
-// handed to onLine (buffering partial writes); a bounded tail keeps the last
-// output for error text.
-type lineWriter struct {
+// lineSink is the state shared by a command's stdout and stderr writers: a
+// bounded tail of recent output (for error text) and the per-line callback.
+// exec pumps the two streams on separate goroutines, so everything here is
+// under mu — including onLine, which writes to the HTTP response.
+type lineSink struct {
 	mu     sync.Mutex
-	buf    string
-	onLine func(string)
-	tail   *strings.Builder
+	tail   strings.Builder
 	max    int
+	onLine func(string)
+}
+
+// Tail returns the retained recent output.
+func (s *lineSink) Tail() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tail.String()
+}
+
+// lineWriter is exec-friendly stdout/stderr plumbing: complete lines are
+// handed to the sink's onLine (buffering partial writes per stream).
+type lineWriter struct {
+	sink *lineSink
+	buf  string
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
-	s := string(p)
-	if w.tail != nil {
-		w.tail.WriteString(s)
-		if w.tail.Len() > w.max {
-			t := w.tail.String()
-			w.tail.Reset()
-			w.tail.WriteString("…" + t[len(t)-w.max:])
+	s := w.sink
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tail.Write(p)
+	if s.tail.Len() > s.max {
+		t := []rune(s.tail.String())
+		if len(t) > s.max {
+			t = t[len(t)-s.max:] // rune-safe cut: never split a UTF-8 sequence
 		}
+		s.tail.Reset()
+		s.tail.WriteString("…" + string(t))
 	}
-	w.mu.Lock()
-	w.buf += s
-	var lines []string
+	w.buf += string(p)
 	for {
 		i := strings.IndexByte(w.buf, '\n')
 		if i < 0 {
 			break
 		}
-		lines = append(lines, strings.TrimSpace(w.buf[:i]))
+		line := strings.TrimSpace(w.buf[:i])
 		w.buf = w.buf[i+1:]
-	}
-	w.mu.Unlock()
-	if w.onLine != nil {
-		for _, l := range lines {
-			if l != "" {
-				w.onLine(l)
-			}
+		if line != "" && s.onLine != nil {
+			s.onLine(line)
 		}
 	}
 	return len(p), nil
@@ -271,7 +292,7 @@ func handleYoutubeRename(c *gin.Context) {
 		return
 	}
 	base := filepath.Base(name)
-	if base == "." || base == "" {
+	if base == "." || base == ".." || base == "" || strings.HasPrefix(base, ".") {
 		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "invalid filename"})
 		return
 	}
@@ -292,6 +313,16 @@ func handleYoutubeRename(c *gin.Context) {
 	}
 	if filepath.Ext(old) != "" && !strings.Contains(base, ".") {
 		base += filepath.Ext(old)
+	}
+	// The new name must still be a media type the pool plays: renaming
+	// clip.mp4 to clip.txt would register an unplayable item.
+	if media.KindFromExtension(base) != media.KindFromExtension(filepath.Base(old)) {
+		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": fmt.Sprintf("%q must keep the %s file type", base, filepath.Ext(old))})
+		return
+	}
+	if gsp.CurrentPlaying() == filepath.Base(old) {
+		c.HTML(http.StatusConflict, "error.html", gin.H{"error": "can't rename the clip that is playing"})
+		return
 	}
 	mediaDir := config.MediaLocation()
 	oldPath := filepath.Join(mediaDir, base)

@@ -12,6 +12,7 @@
 
 # Output of the `go build` and `go run` commands
 /main
+/cutepi
 
 # Vendor directory for dependencies (if not using go modules)
 vendor/

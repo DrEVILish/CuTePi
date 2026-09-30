@@ -59,7 +59,7 @@ func parseDRMModes(text string) map[string]bool {
 func displayModes() []string {
 	modes := map[string]bool{}
 	if xrandr, err := exec.LookPath("xrandr"); err == nil {
-		if out, err := exec.Command(xrandr, "--query").CombinedOutput(); err == nil {
+		if out, err := sysOutput(true, xrandr, "--query"); err == nil {
 			modes = parseXrandrModes(string(out))
 		}
 	}

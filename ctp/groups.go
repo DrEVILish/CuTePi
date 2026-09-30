@@ -1,9 +1,9 @@
 package ctp
 
 import (
-	"strconv"
 	"fmt"
 	"log"
+	"strconv"
 )
 
 // Group is a cue_group row: a visual folder that holds cues (via
@@ -11,19 +11,19 @@ import (
 // Folder membership is a presentation layer - global order stays the flat
 // cuePos, so groups never change playback order by themselves.
 type Group struct {
-	GroupID       int    `db:"group_id"`
-	Name          string `db:"name"`
-	ParentGroupID int    `db:"parent_group_id"`
-	Collapse      bool   `db:"collapse"`
-	Slideshow     bool   `db:"slideshow"`
-	AwardsMode    bool   `db:"awards_mode"`
-	Shuffle       bool   `db:"shuffle"`
-	Loop          bool   `db:"loop"`
-	FadeMS        int    `db:"fade_ms"`
-	DurationMS    int    `db:"duration_ms"`
-	CueNum        string `db:"cue_num"`
-	Color         string `db:"color"`
-	AnchorPos     int    `db:"anchor_pos"` // legacy: pre-sheet_index empty-group anchor
+	GroupID       int     `db:"group_id"`
+	Name          string  `db:"name"`
+	ParentGroupID int     `db:"parent_group_id"`
+	Collapse      bool    `db:"collapse"`
+	Slideshow     bool    `db:"slideshow"`
+	AwardsMode    bool    `db:"awards_mode"`
+	Shuffle       bool    `db:"shuffle"`
+	Loop          bool    `db:"loop"`
+	FadeMS        int     `db:"fade_ms"`
+	DurationMS    int     `db:"duration_ms"`
+	CueNum        string  `db:"cue_num"`
+	Color         string  `db:"color"`
+	AnchorPos     int     `db:"anchor_pos"`  // legacy: pre-sheet_index empty-group anchor
 	SheetIndex    float64 `db:"sheet_index"` // header position in the visual sequence (§4)
 }
 
@@ -80,6 +80,16 @@ func GetGroup(id int) (Group, error) {
 func UpdateGroup(g Group) error {
 	if err := ValidateGroupParent(g.GroupID, g.ParentGroupID); err != nil {
 		return err
+	}
+	// Routes reject bad colour input with a 400; here a non-hex value can
+	// only be legacy data, which is dropped rather than failing every
+	// later edit of the group.
+	g.Color = sanitizeColor(g.Color)
+	var cur string
+	if err := db.Get(&cur, `SELECT COALESCE(cue_num, '') FROM cue_group WHERE group_id = ?`, g.GroupID); err == nil && !sameCueNum(cur, g.CueNum) {
+		if err := checkCueNumFree(db, g.CueNum, 0, g.GroupID); err != nil {
+			return err
+		}
 	}
 	_, err := db.Exec(`
 		UPDATE cue_group SET name = ?, parent_group_id = ?, collapse = ?,
@@ -211,7 +221,6 @@ func ValidateGroupParent(groupID, parentID int) error {
 	return nil
 }
 
-
 // groupDescendants maps every group id to the set of its PROPER descendants
 // (children, grandchildren, ...), cycle-proof.
 func groupDescendants() map[int]map[int]bool {
@@ -286,7 +295,7 @@ func GroupSubtreeCues(groupID int) ([]int, error) {
 // older clients): place the cue at the end of the target group's span.
 // Membership in the sequence model is positional, so "join" = move.
 func ReparentCue(newPos int, parentGroupID int) error {
-		return SheetDrop([]int{newPos}, 0, "group", parentGroupID, true, false, false, nil, 0)
+	return SheetDrop([]int{newPos}, 0, "group", parentGroupID, true, false, false, nil, 0)
 }
 
 // SetCueGroup assigns cue at cuePos to group (0 = top level) — the join

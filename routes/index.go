@@ -159,14 +159,14 @@ func mediaInfoRows(cue ctp.Cue) []MediaRow {
 	// Stale or pre-audio-import meta: if the stored JSON came up without an
 	// audio stream, re-probe the actual file once and persist the fresh meta,
 	// so the Media tab reflects the real streams even for old imports.
-	// ponytail: a genuinely silent video re-probes on every inspector open;
-	// add a persisted sentinel if such files turn up enough to matter.
+	// A genuinely silent file is re-probed once; Reprobed is persisted so it is not probed again.
 	isAV := strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "audio/")
-	if isAV && info.Audio == nil {
+	if isAV && info.Audio == nil && !info.Reprobed {
 		if meta, perr := media.Probe(filepath.Join(config.MediaLocation(), cue.Filename)); perr == nil && meta.Info != nil {
 			info = *meta.Info
+			info.Reprobed = true
 			unmarshalErr = false
-			if raw, jerr := json.Marshal(meta.Info); jerr == nil {
+			if raw, jerr := json.Marshal(info); jerr == nil {
 				if uerr := ctp.UpdateMediaMeta(cue.Filename, string(raw)); uerr != nil {
 					log.Printf("mediaInfoRows: storing refreshed meta for %q: %v", cue.Filename, uerr)
 				}
@@ -299,6 +299,7 @@ func inspectorData() gin.H {
 		"Pool":          replacementPool(),
 		"MediaRows":     mediaInfoRows(cue),
 		"ScheduleDay":   schedDayNum(cue.ScheduleDays),
+		"AudioDevice":   config.Audio().Device,
 	}
 }
 
@@ -350,7 +351,7 @@ func AssetStamp() string {
 
 // TypeIcon maps a media kind to an ftl-themes icon-pack symbol id
 // (assets/icons/icons.svg#icon-<id>); the templates render it as
-// <svg class="ftl-icon"><use/></svg>. The pack ships per-theme overrides,
+// <svg class="icon"><use/></svg>. The pack ships per-theme overrides,
 // so the same markup reterms under every shared theme.
 func TypeIcon(kind string) string {
 	switch kind {
@@ -405,6 +406,9 @@ func nowplayingData() gin.H {
 		// the displayed time from PositionRaw while playing, so the timer
 		// tracks real time instead of lagging a server round trip behind.
 		"Playing": gsp.CurrentPlaying() != "" && !gsp.IsPaused(),
+		"Paused":  gsp.CurrentPlaying() != "" && gsp.IsPaused(),
+		// Tests button state for every client (§12.10).
+		"TestShowing": gsp.TestShowing(),
 	}
 	// Merged header (§5.2): the partial also carries the GO cluster and the
 	// playing cue's identity, so one version-guarded render keeps the whole
@@ -465,6 +469,7 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 			if cuesheet.Cues[i].CuePos == w.CuePos {
 				cuesheet.Cues[i].WaitKind = w.Kind
 				cuesheet.Cues[i].WaitLeftS = int(left)
+				cuesheet.Cues[i].WaitPct = waitPct(w, time.Now().UnixMilli())
 				break
 			}
 		}
@@ -531,6 +536,7 @@ func armNextCue(gen uint64, pos int) {
 // protocols, auto-continue chains, the scheduler, preload arming).
 func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 	return gsp.LoadOpts{
+		CuePos:   cue.CuePos,
 		InPoint:  float64(cue.PosStart) / 1000,
 		OutPoint: float64(cue.PosEnd) / 1000,
 		Hold: cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")) ||
@@ -552,6 +558,18 @@ func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 		Flip:           cue.Flip,
 		KeepBackground: keepBackground,
 		WarmPreroll:    true,
+		// Fade-stop others (§6.5): this cue starts at once and whatever is
+		// on screen fades out over it for FadeOut ms.
+		Crossfade: cue.FadeOut,
+		Opacity:   cue.Opacity / 100,
+		GeomX:     cue.GeomX,
+		GeomY:     cue.GeomY,
+		GeomW:     cue.GeomW,
+		GeomH:     cue.GeomH,
+		CropL:     cue.CropL,
+		CropR:     cue.CropR,
+		CropT:     cue.CropT,
+		CropB:     cue.CropB,
 	}
 }
 
@@ -595,9 +613,11 @@ func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
 // it from 250ms ticks; the cuesheet render and the per-second version bump
 // carry it to clients, so a hung cue never masquerades as a deliberate wait.
 type waitState struct {
-	CuePos int
-	Kind   string // "pre" | "post"
-	EndsAt int64  // unix ms
+	CuePos     int
+	Kind       string // "pre" | "post"
+	EndsAt     int64  // unix ms: when the chain fires
+	PhaseStart int64  // unix ms: this wait phase's start (progress fill)
+	PhaseEnd   int64  // unix ms: this wait phase's end
 }
 
 var (
@@ -620,6 +640,23 @@ func clearWait() {
 	if had {
 		ctp.NotifyCuesheetChanged()
 	}
+}
+
+// waitPct is how far through its current phase a wait is (0..100), for the
+// progress fill behind the PreWait/PostWait numerals.
+func waitPct(w waitState, now int64) int {
+	span := w.PhaseEnd - w.PhaseStart
+	if span <= 0 {
+		return 100
+	}
+	pct := (now - w.PhaseStart) * 100 / span
+	if pct < 0 {
+		return 0
+	}
+	if pct > 100 {
+		return 100
+	}
+	return int(pct)
 }
 
 // CurrentWait returns the active wait (zero value when none).
@@ -700,7 +737,10 @@ func autoContinueFrom(endingPos int) {
 		time.AfterFunc(post+pre, safe(fire))
 		// Countdown display only: a live WHAT-is-waiting state (§12.2) for
 		// the pills, stepping post→pre at the phase boundary. Never fires.
-		setWait(waitState{CuePos: endingPos, Kind: "post", EndsAt: fireAt.UnixMilli()})
+		postStart := time.Now()
+		preStart := fireAt.Add(-pre)
+		setWait(waitState{CuePos: endingPos, Kind: "post", EndsAt: fireAt.UnixMilli(),
+			PhaseStart: postStart.UnixMilli(), PhaseEnd: preStart.UnixMilli()})
 		defer clearWait()
 		lastBump := time.Time{}
 		for {
@@ -713,7 +753,8 @@ func autoContinueFrom(endingPos int) {
 				return
 			}
 			if remaining < pre {
-				setWait(waitState{CuePos: next, Kind: "pre", EndsAt: fireAt.UnixMilli()})
+				setWait(waitState{CuePos: next, Kind: "pre", EndsAt: fireAt.UnixMilli(),
+					PhaseStart: preStart.UnixMilli(), PhaseEnd: fireAt.UnixMilli()})
 			}
 			if time.Since(lastBump) >= time.Second {
 				lastBump = time.Now()
@@ -777,6 +818,11 @@ func Index(rg *gin.RouterGroup) {
 		data["GoBar"] = computeGoBar(&cuesheet)
 		data["GoAdvance"] = ctp.GetGoAdvance()
 		data["Inspector"] = inspectorData()
+		if gid, gerr := ctp.SelectedGroupPos(); gerr == nil && gid > 0 {
+			if gi, err := groupInspectorData(gid); err == nil {
+				data["GroupInspector"] = gi
+			}
+		}
 		data["ShowMode"] = ctp.GetShowMode()
 		data["title"] = "CuTePi"
 		c.HTML(http.StatusOK, "index.html", data)
@@ -798,14 +844,14 @@ func Index(rg *gin.RouterGroup) {
 	})
 }
 
-// importMedia probes, verifies playability, registers, and moves srcPath
-// into the media directory under filename. On failure it removes srcPath and
-// returns the error, leaving no trace behind. The single shared import path
+// importMedia probes, verifies playability, moves srcPath into the media
+// directory under filename, and registers it. The single shared import path
 // for uploads, youtube downloads, and .CTP show imports — every caller must
 // reject a source that fails probe/verify/registration before it lands in
-// the pool. Imports always probe srcPath; after renaming into place the
-// path is final, which is why (unlike the upload path) to-be-imported cues
-// write directly to destPath and pass that path here.
+// the pool. On failure srcPath is removed and the media directory is left
+// exactly as it was: a file being replaced (same name re-uploaded) is parked
+// aside first and restored if the move or registration fails, so live cues
+// never lose their source to a failed import.
 func importMedia(filename, srcPath string) error {
 	meta, err := media.Probe(srcPath)
 	if err != nil {
@@ -825,13 +871,43 @@ func importMedia(filename, srcPath string) error {
 	}
 	title := strings.TrimSuffix(filename, filepath.Ext(filename))
 	destPath := filepath.Join(config.MediaLocation(), filename)
-	if err := os.Rename(srcPath, destPath); err != nil {
-		os.Remove(srcPath)
-		return err
+
+	backup := ""
+	if srcPath != destPath {
+		if _, err := os.Lstat(destPath); err == nil {
+			backup = fmt.Sprintf("%s.cutepi-replaced-%d", destPath, time.Now().UnixNano())
+			if err := os.Rename(destPath, backup); err != nil {
+				os.Remove(srcPath)
+				return fmt.Errorf("setting aside existing %q: %w", filename, err)
+			}
+		}
+		if err := moveIntoPlace(srcPath, destPath); err != nil {
+			os.Remove(srcPath)
+			os.Remove(destPath) // a partial cross-device copy
+			restoreReplaced(backup, destPath)
+			return err
+		}
 	}
 	if err := ctp.RegisterMedia(filename, info.Size(), meta, title); err != nil {
 		os.Remove(destPath)
+		restoreReplaced(backup, destPath)
 		return err
 	}
+	if backup != "" {
+		if err := os.Remove(backup); err != nil {
+			logs.PrintfWarn("IMPORT", "removing replaced copy %q: %v", backup, err)
+		}
+	}
 	return nil
+}
+
+// restoreReplaced moves a set-aside original back over dest (no-op when
+// nothing was replaced).
+func restoreReplaced(backup, dest string) {
+	if backup == "" {
+		return
+	}
+	if err := os.Rename(backup, dest); err != nil {
+		logs.PrintfWarn("IMPORT", "restoring %q from %q: %v", dest, backup, err)
+	}
 }

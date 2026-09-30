@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -12,12 +13,19 @@ import (
 )
 
 type Config struct {
-	Port           int    `json:"port"`
-	Loop           bool   `json:"loop"`
-	AuthPassword   string `json:"auth_password,omitempty"` // empty = no auth (LAN default)
-	WorkingDir     string `json:"working_dir"`
-	ConfigFilePath string `json:"config_file_path"`
-	Db         struct {
+	Port int  `json:"port"`
+	Loop bool `json:"loop"`
+	// AuthPassword is the optional operator password (HTTP Basic). It is
+	// stored in PLAIN TEXT in config.json (file mode 0600): anyone who can
+	// read the data directory can read it. See DESIGN.md "Operator password".
+	AuthPassword string `json:"auth_password,omitempty"` // empty = no auth (LAN default)
+	// AllowedHosts lists extra Host header names (e.g. a reverse-proxy
+	// domain) the server answers to, beyond IP literals, localhost, the
+	// machine hostname and <hostname>.local. DNS-rebinding guard.
+	AllowedHosts   []string `json:"allowed_hosts,omitempty"`
+	WorkingDir     string   `json:"working_dir"`
+	ConfigFilePath string   `json:"config_file_path"`
+	Db             struct {
 		Location string `json:"location"`
 	} `json:"db"`
 	Media struct {
@@ -43,6 +51,81 @@ type Config struct {
 		SSID     string `json:"ssid"`
 		Password string `json:"password"`
 	} `json:"hotspot"`
+	Remote RemoteSettings `json:"remote"`
+}
+
+// RemoteSettings are the remote-control listeners (§12.8). Neither protocol
+// authenticates, so every listener is off by default; ports and the OSC bind
+// address are operator-configurable from the Settings Network tab.
+type RemoteSettings struct {
+	HyperDeck      bool   `json:"hyperdeck"`
+	HyperDeckPort  int    `json:"hyperdeck_port"`
+	HyperDeckClips string `json:"hyperdeck_clips"` // "cuesheet" (default) | "mediapool"
+	OSCUDP         bool   `json:"osc_udp"`
+	OSCUDPPort     int    `json:"osc_udp_port"`
+	OSCTCP         bool   `json:"osc_tcp"`
+	OSCTCPPort     int    `json:"osc_tcp_port"`
+	OSCBind        string `json:"osc_bind"` // "" = all interfaces
+}
+
+const (
+	DefaultHyperDeckPort = 9993
+	DefaultOSCPort       = 53000
+)
+
+// withRemoteDefaults fills unset ports / clip source with the protocol
+// defaults (an old config file pre-dating the Network tab has zeros).
+func withRemoteDefaults(r RemoteSettings) RemoteSettings {
+	if r.HyperDeckPort == 0 {
+		r.HyperDeckPort = DefaultHyperDeckPort
+	}
+	if r.OSCUDPPort == 0 {
+		r.OSCUDPPort = DefaultOSCPort
+	}
+	if r.OSCTCPPort == 0 {
+		r.OSCTCPPort = DefaultOSCPort
+	}
+	if r.HyperDeckClips != "mediapool" {
+		r.HyperDeckClips = "cuesheet"
+	}
+	return r
+}
+
+// Remote returns the remote-control listener settings, defaults applied.
+func Remote() RemoteSettings {
+	confMu.RLock()
+	defer confMu.RUnlock()
+	return withRemoteDefaults(conf.Remote)
+}
+
+// SetRemote validates and persists the remote-control listener settings
+// (persist ONLY; starting/stopping listeners is the routes' job).
+func SetRemote(r RemoteSettings) error {
+	r, err := ValidateRemote(r)
+	if err != nil {
+		return err
+	}
+	confMu.Lock()
+	conf.Remote = r
+	confMu.Unlock()
+	return SaveConfig()
+}
+
+// ValidateRemote normalises r (defaults applied, bind trimmed) and checks it
+// without persisting, so a multi-field settings save can validate every
+// field before writing any.
+func ValidateRemote(r RemoteSettings) (RemoteSettings, error) {
+	r.OSCBind = strings.TrimSpace(r.OSCBind)
+	r = withRemoteDefaults(r)
+	for name, p := range map[string]int{"HyperDeck": r.HyperDeckPort, "OSC UDP": r.OSCUDPPort, "OSC TCP": r.OSCTCPPort} {
+		if p < 1 || p > 65535 {
+			return r, fmt.Errorf("invalid %s port %d", name, p)
+		}
+	}
+	if r.OSCBind != "" && net.ParseIP(r.OSCBind) == nil {
+		return r, fmt.Errorf("invalid bind address %q (an IP address, or empty for all interfaces)", r.OSCBind)
+	}
+	return r, nil
 }
 
 // conf is read by the auth middleware and every settings getter on their own
@@ -55,13 +138,13 @@ var (
 )
 
 const (
-	defaultPort         = 3000
-	defaultWorkingDir   = "cutepi"
-	defaultConfigDir    = "config"
-	defaultConfig       = "config.json"
-	defaultDb           = "ctp.db"
-	defaultMediaDir     = "media"
-	defaultThumbsDir    = "thumbnails"
+	defaultPort       = 3001 // dev default; the systemd unit sets PORT=80
+	defaultWorkingDir = "cutepi"
+	defaultConfigDir  = "config"
+	defaultConfig     = "config.json"
+	defaultDb         = "ctp.db"
+	defaultMediaDir   = "media"
+	defaultThumbsDir  = "thumbnails"
 )
 
 // expandHome expands a leading "~" or "~/" in path to the user's home directory.
@@ -197,7 +280,7 @@ func LoadConfig() {
 	// First run: create the config file with default values (SaveConfig takes
 	// the lock itself).
 	if err != nil {
-		SaveConfig()
+		_ = SaveConfig() // logged inside; first run keeps going on defaults
 	}
 }
 
@@ -208,13 +291,13 @@ func LoadConfig() {
 // encode under RLock so a concurrent setter can't partially update fields
 // mid-write; the temp+rename stays safe under concurrent saves (unique temp
 // per call, last rename wins).
-func SaveConfig() {
+func SaveConfig() error {
 	confMu.RLock()
 	defer confMu.RUnlock()
 
 	if err := ensureDirsLocked(); err != nil {
 		println("Error creating CuTePi directories:", err.Error())
-		return
+		return fmt.Errorf("creating config directories: %w", err)
 	}
 
 	// Unique temp sidecar per call (os.CreateTemp): concurrent SaveConfigs
@@ -224,7 +307,7 @@ func SaveConfig() {
 	file, err := os.CreateTemp(filepath.Dir(conf.ConfigFilePath), "config-*.tmp")
 	if err != nil {
 		println("Error creating config file:", err.Error())
-		return
+		return fmt.Errorf("creating config file: %w", err)
 	}
 	tmpPath := file.Name()
 	encoder := json.NewEncoder(file)
@@ -236,12 +319,14 @@ func SaveConfig() {
 	if err != nil {
 		os.Remove(tmpPath)
 		println("Error writing to config file:", err.Error())
-		return
+		return fmt.Errorf("writing config file: %w", err)
 	}
 	if err := os.Rename(tmpPath, conf.ConfigFilePath); err != nil {
 		os.Remove(tmpPath)
 		println("Error replacing config file:", err.Error())
+		return fmt.Errorf("replacing config file: %w", err)
 	}
+	return nil
 }
 
 // Port returns the port value from the configuration
@@ -260,23 +345,30 @@ func Loop() bool {
 }
 
 // SetLoop updates and persists the default loop-on-end behaviour.
-func SetLoop(loop bool) {
+func SetLoop(loop bool) error {
 	confMu.Lock()
 	conf.Loop = loop
 	confMu.Unlock()
-	SaveConfig()
+	return SaveConfig()
 }
 
 // SetPort validates and updates the configured port, persisting it.
 // Takes effect only after a restart.
 func SetPort(port int) error {
-	if port < 1 || port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
+	if err := ValidatePort(port); err != nil {
+		return err
 	}
 	confMu.Lock()
 	conf.Port = port
 	confMu.Unlock()
-	SaveConfig()
+	return SaveConfig()
+}
+
+// ValidatePort checks a listen port without persisting it.
+func ValidatePort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
 	return nil
 }
 
@@ -297,11 +389,30 @@ func HasAuth() bool {
 
 // SetAuthPassword sets (non-empty) or clears (empty) the operator password,
 // persisting it. Applies to new requests immediately.
-func SetAuthPassword(pw string) {
+//
+// The password is kept in plain text in config.json (see Config.AuthPassword).
+func SetAuthPassword(pw string) error {
 	confMu.Lock()
 	conf.AuthPassword = strings.TrimSpace(pw)
 	confMu.Unlock()
-	SaveConfig()
+	return SaveConfig()
+}
+
+// AllowedHosts returns the operator-configured extra Host names.
+func AllowedHosts() []string {
+	confMu.RLock()
+	defer confMu.RUnlock()
+	return append([]string(nil), conf.AllowedHosts...)
+}
+
+// TmpDir is the scratch directory for uploads, show imports and downloads:
+// <working dir>/tmp. It lives on the data disk, not /tmp (a RAM-backed
+// tmpfs on current Raspberry Pi OS), and normally shares a filesystem with
+// the media directory so finished files move into place by rename.
+func TmpDir() string {
+	confMu.RLock()
+	defer confMu.RUnlock()
+	return filepath.Join(conf.WorkingDir, "tmp")
 }
 
 // Display returns the wall/output display settings.
@@ -321,6 +432,21 @@ func Display() struct {
 
 // SetDisplay validates and persists the display settings (manual mode).
 func SetDisplay(resolution string, refreshHz int, useEDID bool) error {
+	if err := ValidateDisplay(resolution, refreshHz); err != nil {
+		return err
+	}
+	confMu.Lock()
+	conf.Display = struct {
+		Resolution string `json:"resolution"`
+		Refresh    int    `json:"refresh_hz"`
+		UseEDID    bool   `json:"use_edid"`
+	}{resolution, refreshHz, useEDID}
+	confMu.Unlock()
+	return SaveConfig()
+}
+
+// ValidateDisplay checks display settings without persisting them.
+func ValidateDisplay(resolution string, refreshHz int) error {
 	if resolution != "" {
 		parts := strings.SplitN(resolution, "x", 2)
 		w, herr := strconv.Atoi(parts[0])
@@ -335,14 +461,6 @@ func SetDisplay(resolution string, refreshHz int, useEDID bool) error {
 	if refreshHz < 0 || refreshHz > 240 {
 		return fmt.Errorf("invalid refresh rate %d", refreshHz)
 	}
-	confMu.Lock()
-	conf.Display = struct {
-		Resolution string `json:"resolution"`
-		Refresh    int    `json:"refresh_hz"`
-		UseEDID    bool   `json:"use_edid"`
-	}{resolution, refreshHz, useEDID}
-	confMu.Unlock()
-	SaveConfig()
 	return nil
 }
 
@@ -363,6 +481,17 @@ func Audio() struct {
 
 // SetAudio validates and persists the audio output settings.
 func SetAudio(device, channels string, rate int) error {
+	if err := ValidateAudio(channels, rate); err != nil {
+		return err
+	}
+	confMu.Lock()
+	conf.Audio.Device, conf.Audio.Channels, conf.Audio.Rate = strings.TrimSpace(device), channels, rate
+	confMu.Unlock()
+	return SaveConfig()
+}
+
+// ValidateAudio checks audio settings without persisting them.
+func ValidateAudio(channels string, rate int) error {
 	if rate < 0 || rate > 192000 {
 		return fmt.Errorf("invalid sample rate %d", rate)
 	}
@@ -371,10 +500,6 @@ func SetAudio(device, channels string, rate int) error {
 	default:
 		return fmt.Errorf("invalid channel layout %q", channels)
 	}
-	confMu.Lock()
-	conf.Audio.Device, conf.Audio.Channels, conf.Audio.Rate = strings.TrimSpace(device), channels, rate
-	confMu.Unlock()
-	SaveConfig()
 	return nil
 }
 
@@ -396,13 +521,8 @@ func AP() struct {
 // SetAP validates and persists the Wi-Fi access-point settings (persist ONLY;
 // enabling/disabling the actual hotspot is the network routes' system action).
 func SetAP(ssid, pass string, enabled bool) error {
-	if enabled {
-		if len(ssid) < 1 || len(ssid) > 32 {
-			return fmt.Errorf("SSID must be 1-32 characters")
-		}
-		if len(pass) != 0 && len(pass) < 8 {
-			return fmt.Errorf("WPA password must be at least 8 characters (or empty for open)")
-		}
+	if err := ValidateAP(ssid, pass, enabled); err != nil {
+		return err
 	}
 	confMu.Lock()
 	conf.AP = struct {
@@ -411,7 +531,19 @@ func SetAP(ssid, pass string, enabled bool) error {
 		Password string `json:"password"`
 	}{enabled, ssid, pass}
 	confMu.Unlock()
-	SaveConfig()
+	return SaveConfig()
+}
+
+// ValidateAP checks hotspot settings without persisting them.
+func ValidateAP(ssid, pass string, enabled bool) error {
+	if enabled {
+		if len(ssid) < 1 || len(ssid) > 32 {
+			return fmt.Errorf("SSID must be 1-32 characters")
+		}
+		if len(pass) != 0 && (len(pass) < 8 || len(pass) > 63) {
+			return fmt.Errorf("WPA password must be 8-63 characters (or empty for open)")
+		}
+	}
 	return nil
 }
 

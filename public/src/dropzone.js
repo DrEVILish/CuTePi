@@ -20,7 +20,10 @@ function preventDefaults(e) {
   e.stopPropagation();
 }
 
+// The label already opens the picker natively; opening it a second time from
+// here made iOS Safari drop the first picker and, with it, the chosen files.
 dropzone.addEventListener('click', (e)=>{
+  if (e.target.closest("label, input")) return;
   fileInput.click();
 })
 dropzone.addEventListener('dragover', (e)=>{
@@ -80,14 +83,25 @@ function setUploaderFeedback(text, cls) {
   }
 }
 
-form.addEventListener("submit", (e) => {
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const files = fileInput.files;
   if (!files || files.length === 0) {
     setUploaderFeedback("No file chosen.", "text-warning");
     return;
   }
+  // Warn before sending more than the media disk can hold (§5.7).
+  if (window.cutepiCheckSpace && !(await window.cutepiCheckSpace(Array.from(files)))) {
+    setUploaderFeedback("Upload cancelled — not enough disk space.", "text-warning");
+    return;
+  }
+  const choice = window.cutepiUploadChoice ? await window.cutepiUploadChoice(files) : { go: true, onConflict: "" };
+  if (!choice.go) {
+    setUploaderFeedback("Upload cancelled.", "text-warning");
+    return;
+  }
   const formData = new FormData();
+  if (choice.onConflict) formData.append("onConflict", choice.onConflict);
   for (const f of files) formData.append("media", f);
   const btn = document.getElementById("upload");
   if (btn) { btn.disabled = true; btn.classList.add("disabled"); }
@@ -104,11 +118,18 @@ form.addEventListener("submit", (e) => {
     uploadProgress.value = pct;
     setUploaderFeedback("Uploading… " + pct + "%");
   });
+  // Bytes are all sent: the server now probes/validates each file before it
+  // joins the pool, so show an indeterminate bar instead of a stuck 100%.
+  xhr.upload.addEventListener("load", () => {
+    if (uploadProgress) uploadProgress.removeAttribute("value");
+    setUploaderFeedback("Importing… validating media on the server");
+  });
   xhr.addEventListener("load", () => {
     if (btn) { btn.disabled = false; btn.classList.remove("disabled"); }
-    if (uploadProgress) uploadProgress.value = 100;
+    if (uploadProgress) uploadProgress.value = xhr.status >= 200 && xhr.status < 300 ? 100 : 0;
     if (xhr.status >= 200 && xhr.status < 300) {
-      setUploaderFeedback("Upload complete", "text-success");
+      const summary = window.cutepiUploadSummary ? window.cutepiUploadSummary(xhr.getResponseHeader("X-Upload-Result")) : "Upload complete";
+      setUploaderFeedback(summary, "text-success");
       fileList.innerHTML = "";
       fileInput.value = "";
       if (droppedFiles && droppedFiles.items) droppedFiles = new DataTransfer();
@@ -125,12 +146,22 @@ form.addEventListener("submit", (e) => {
           if (window.htmx) htmx.process(replacement);
         }
       }
-      if (typeof showToast === "function") showToast("Upload complete");
+      if (typeof showToast === "function") showToast(summary, "success");
       if (window.bootstrap && document.getElementById("uploadModal")) {
         try { bootstrap.Modal.getInstance(document.getElementById("uploadModal")).hide(); } catch (err) {}
       }
     } else {
-      setUploaderFeedback("Upload failed (server returned " + xhr.status + "). See the alert for details.", "text-danger");
+      let reason = "";
+      try {
+        const j = JSON.parse(xhr.responseText);
+        if (j && j.error) reason = j.error;
+      } catch (err) { /* not JSON */ }
+      if (!reason) try {
+        // error.html is a full page; the message lives in its <pre>.
+        const doc = new DOMParser().parseFromString(xhr.responseText || "", "text/html");
+        reason = (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim().slice(0, 300);
+      } catch (err) { /* status alone still shows */ }
+      setUploaderFeedback("Upload failed (" + xhr.status + ")" + (reason ? ": " + reason : ""), "text-danger");
     }
   });
   xhr.addEventListener("error", () => {

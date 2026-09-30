@@ -1,0 +1,462 @@
+# CuTePi system test report — 2026-09-29
+
+## How it was tested
+
+- **Target:** the real `cutepi` service on the test server (`192.168.10.73:80`, Raspberry Pi 4, 1080p60 HDMI monitor, `fbdevsink` wall).
+- **UI:** driven with Playwright on the dev server (`192.168.10.162`), pointed at the test server. Nothing was installed on the test server.
+- **Picture:** measured from outside the process by sampling `/dev/fb0` (RGB565 luma trace, 20ms resolution) on the test server. The sampler's timestamps were merged with `MARK` lines from the UI scripts.
+- **Before each phase:** the baseline database and config were restored.
+- **Baseline:** 6 cues and a slideshow group "New Group" (2 members), `escFadeMs=500`, `panicHoldImage=test_blue_1080p.png`.
+- **Go tests:** `go test ./...` passes for every package, and `gofmt` and `go vet` are clean.
+
+### Phases and results (all green after fixes)
+
+| Suite | Area | Result |
+|---|---|---|
+| p1a–p1c | Shell, top bar, media pool | pass |
+| p2a | Selection model, GO bar | pass |
+| p3a | Cue inspector (26 checks) | pass |
+| p4a–p4d | Cue sheet editing, drag and drop, groups, import/export | pass |
+| d9, p5 | Context menus, delete, show import | pass |
+| p6a | Transport: Space/GO, ESC fade, double-ESC, Panic confirm, progress (13) | pass |
+| p6b | Tests picker, custom patterns, two-client WebSocket sync, Show mode (17) | pass |
+| Proxy | Browser load through `cutepi-test.drevilish.com` | pass (after fix P1) |
+
+## Verified behaviour (cause → effect)
+
+| Action | Observed effect |
+|---|---|
+| Space in the control UI | GO fires the selected cue; the progress clock advances via WebSocket. |
+| Enter | Does not fire GO. |
+| ESC once | Audio and video fade over `escFadeMs`. The framebuffer shows black at about 600ms with a 500ms setting (after fix D19). |
+| ESC twice | Immediate cut to the holding image, about 420ms after the second press (image load latency; see open item O7). |
+| Panic | Confirm dialog appears. Cancel keeps playing; accept cuts to the holding image. |
+| Stop, Panic (no holding image), natural end of stream | Framebuffer goes to 0 (black) (after fix D17). |
+| Menu > Fade out | Same fade as a single ESC (after fix D16). |
+| Two clients | Client B follows A's selection, GO and NOW bar without reload. ESC from B stops both. Idle: 0 HTTP requests in 6s. |
+| Show mode | Persists across reload. Arrow keys and Space still work. Pool, inspector and Tests button are hidden. Edit gestures show the toast "Switch to EDIT mode to change the sheet". Test APIs return 403. |
+| Tests | Toggle, 16 built-in patterns, Hide Test, pin/unpin custom media, list refreshes without reload (after fix D18b). |
+| Direct play of a still | Holds on screen (after fix D18a). |
+
+## Deviations
+
+Each entry gives:
+1. The possible root causes, ranked by likelihood.
+2. How each cause was verified.
+3. The fix for the most likely cause.
+4. Related issues to check.
+
+### P1 — `cutepi-test.drevilish.com` does not load (fixed)
+
+1. **Causes:**
+   - (a) CuTePi's DNS-rebinding guard (`routes/origin.go`, `SameOrigin`) refuses any public Host name not listed in config `allowed_hosts`, with HTTP 421.
+   - (b) The proxy host is misconfigured in Nginx Proxy Manager.
+   - (c) The WebSocket upgrade isn't forwarded.
+   - (d) The Origin check rejects POSTs behind the proxy.
+2. **Verification:**
+   - `curl -H 'Host: cutepi-test.drevilish.com' http://192.168.10.73/` returned **421 directly from the app**, so the app, not the proxy, was refusing (a is confirmed).
+   - The proxy forwards correctly: after the fix, `http://cutepi-test.drevilish.com/` returns 200 (b is ruled out for HTTP).
+   - The WebSocket upgrade through the proxy returns 101 (c is ruled out).
+   - A browser POST with Origin `http(s)://cutepi-test.drevilish.com` returns 200 (d is ruled out, because NPM forwards `Host`).
+3. **Fix:**
+   - Added `"allowed_hosts": ["cutepi-test.drevilish.com"]` to `/root/cutepi/config/config.json` on the test server (and to the test baseline).
+   - The 421 used to be an empty page. It now says which Host was refused and how to allow it, and logs `RTE-E229`.
+   - AGENTS.md documents the requirement.
+   - A Playwright load through the proxy name gives 200, 6 cues, a WebSocket connection and no errors.
+4. **Related:**
+   - **HTTPS is not configured on the proxy.** Both `cutepi-test` and `cutepi-dev` fail the TLS handshake with alert 112 (unrecognized_name), so NPM has no certificate for these proxy hosts. Attach a certificate in NPM > Proxy Hosts > SSL.
+   - The dev server runs the committed code, which has no guard, so `cutepi-dev` works today. Once this change is deployed there, add `cutepi-dev.drevilish.com` to that machine's `allowed_hosts`.
+
+### D19 — ESC fade of 500ms took about 2s on 1080p video (fixed)
+
+1. **Causes:**
+   - (a) Setting `videobalance.brightness` blocks on the element's streaming lock while a frame is processed. This happens inline in the fade loop, under `mgr.mu`.
+   - (b) Sleep drift in the 20-step loop.
+   - (c) Lock contention from status readers.
+2. **Verification:**
+   - Instrumented `FadeAndStop`: each sleep was exactly 25ms and the lock wait was 0 (b and c are ruled out).
+   - Every 5th to 7th step, `applyBrightness` took **425–490ms** (a is confirmed).
+   - A framebuffer trace showed 211 → 44 at 1.3s → 0 at 2.04s.
+3. **Fix:** `gsp.applyBrightness` hands brightness updates for video to a `brightWorker` goroutine that always applies the latest level. The audio ramp and the fade deadline no longer wait on the video branch. Result: the fade ends and the picture is black at about 600ms. The UI's "Nothing playing" state arrives 0.73s after ESC instead of 2.1s. p6b 19.5 is green.
+4. **Related:** the brightness fade itself only shows 1–3 intermediate frames. See O1; that is the real underlying problem.
+
+### D17 — Last frame stayed on HDMI after Stop, Panic, fade end or natural end (fixed)
+
+1. **Causes:**
+   - (a) `fbdevsink` leaves its last frame in the framebuffer at teardown.
+   - (b) The pipeline was not torn down.
+2. **Verification:** the luma trace kept the frame's value after teardown, and pipeline state was NULL (a).
+3. **Fix:** `gsp/blank.go` `blankWall` zero-fills `/dev/fb0` (stride × height from sysfs), guarded by the generation counter. It runs immediately on Stop and Panic, and 150ms after end of stream. Unit tests were added. The trace shows 0 after every stop path.
+4. **Related:** this masked D18a.
+
+### D18a — Direct play of an image tore down after its first frame (fixed)
+
+1. **Causes:**
+   - (a) Direct `/api/play` and `/api/load` built `LoadOpts` without `Hold` for stills, so end of stream (immediate for an image) tore it down.
+   - (b) An image decoding issue.
+2. **Verification:** after D17 the screen went black at once. Cue playback of the same file held (a).
+3. **Fix:** `Hold: gsp.IsStill(filename)` on the direct routes and `Load`, plus the test `TestDirectPlayImageHolds`.
+4. **Related:** holding-image load on Panic already used Hold.
+
+### D18b — Custom test patterns were stale in the Tests picker until reload (fixed)
+
+1. **Causes:**
+   - (a) The picker was built once, guarded by `testPatternsLoaded`.
+   - (b) The pin API didn't persist.
+2. **Verification:** after a reload the pin showed (b is ruled out).
+3. **Fix:** the grid is rebuilt on every open.
+4. **Related:** none found.
+
+### D16 — Menu > Fade out cut instead of fading (fixed)
+
+1. **Causes:**
+   - (a) `/api/fadeOut` called a different code path from ESC.
+   - (b) `escFadeMs` wasn't read.
+2. **Verification:** the log and luma trace showed an instant cut (a).
+3. **Fix:** a shared `fadeStop` handler serves both `/api/fadeOut` and `/api/esc`. The fade is now about 600ms, then black.
+4. **Related:** Stop and Panic remain immediate cuts, as designed.
+
+### D15 — `DELETE /api/cue/N` returned 500 (UNIQUE) after a drag reorder (fixed)
+
+1. **Causes:**
+   - (a) The `RemoveCue` re-index updated `cuePos` in place and collided with the `UNIQUE` constraint.
+   - (b) Stale positions on the client.
+2. **Verification:** the SQL error named `cuesheet.cuePos` (a).
+3. **Fix:** a two-pass re-index (offset, then compact), with tests in `ctp_test.go`.
+4. **Related:** media delete now also unpins the test pattern and clears the holding image.
+
+### D8 — Inspector autosave lost-update race (fixed)
+
+1. **Causes:**
+   - (a) The inspector PUT took about 350ms, so a second edit raced the first and the older response overwrote it.
+   - (b) Debounce ordering on the client.
+2. **Verification:** timed PUTs, and two quick edits lost the rotation value (a).
+3. **Fix:** the PUT path was made fast (about 12ms). Both gap cases now keep the last value.
+4. **Related:** D6.
+
+### D6 — Inspector trim times truncated to centiseconds on unrelated saves (fixed)
+
+1. **Causes:**
+   - (a) The client `fmtClock` formatted to 10ms, and a save re-posted the displayed value.
+   - (b) The server rounded.
+2. **Verification:** the posted body contained `posStart=0:01.60` for a 1.605s value (a).
+3. **Fix:** millisecond formatting that matches `hh:mm:ss.mmm`.
+4. **Related:** D7.
+
+### D7 — Misleading trim error message (fixed)
+
+Invalid Trim Out gave text that blamed the wrong field. The message was corrected.
+
+### D1 — Group inspector not rendered on first page load (fixed)
+
+1. **Causes:**
+   - (a) `inspectorData()` in `routes/index.go` handled only a selected cue (positive id), not a group (negative id).
+   - (b) The client didn't request it.
+2. **Verification:** the server-rendered HTML lacked the group inspector (a).
+3. **Fix:** handle group selection in the initial render, with a regression test.
+
+### D2 — Unexpected client count (not a defect)
+
+The extra WebSocket client was the user's own browser (192.168.10.100). Tests now compare against a baseline count.
+
+### D3 — GO bar label wrong for some selection states (fixed)
+
+Fixed for all three states: a cue, a group, and nothing selected.
+
+### D9–D14 — UI error handling (fixed)
+
+- **Error text:** the htmx v4 event names were wrong (`htmx:after:swap` and `htmx:response:error` are the correct forms). Error toasts showed a full HTML page because `error.html` is a whole document. Drop zones and drag-and-drop didn't show the reason.
+- **Fixed in:** `ui.js`, `dropzone.js` and `dnd.js`. They now extract the `<pre>` reason. Toasts gained kinds (success, error).
+- **Import audit:** the show import now records an audit event (`show_imported`).
+- **Invalid times:** now return 400 with a message instead of 500.
+- **Related:** O4 is the root of D12.
+
+## Round 2 — answers applied (2026-09-29)
+
+| # | Your answer | What changed | Verified |
+|---|---|---|---|
+| 1 | Always match the display's frame rate | Requirement added to DESIGN.md §2. Not met yet: see O1 and its new `kmssink` measurement. | — |
+| 2 | Docs say "Space" only | GO tooltip is "Fire the selected cue (Space)"; Enter removed from Settings > Keys. DESIGN.md already said Space only. | p7 21.1, 21.2 |
+| 3 | Escape cancels the inline editor | `cueeditcol.html`: Escape closes the editor, keeps the old value, sends nothing and does not reach the transport. DESIGN.md §5.4. | p7 22.1, 22.2 |
+| 4 | No upper limit on times | Documented in DESIGN.md §5.4 (the code already had no limit). | — |
+| 5 | Default fade 1000ms, changeable | Code default was already 1000ms (`ctp.DefaultEscFadeMs`). DESIGN.md §5.6 notes it can be changed. | — |
+| 6 | Keep the menus, don't document | No change. | — |
+| 7 | Remove F8; Escape closes menus and double-click adds a cue are intended; no duplicate cue numbers | F8 handler and its row in the Keys table removed. Escape-closes-menu and double-click-adds-cue documented (§5.3, §5.4). Duplicate cue numbers are refused (below). Toasts are listed in §5.11. | p7 21.3, 23.x |
+| 8 | Offer replace / rename / skip | Upload name-conflict dialog (below). Mobile upload retested on an emulated iPhone (below). | p7 24.x, p7m 25.x |
+| 9 | Delete media also unpins and clears the holding image | Documented in §5.3. | earlier test |
+| 10 | Show mode as designed | New DESIGN.md §5.10 Show / Edit mode. | p6b 20.x |
+
+**Suite p7 (desktop Chromium):** 14 pass, 0 console errors, 0 failed requests. **p7m (iPhone 15 on WebKit, via the proxy):** 2 pass.
+
+### D20 — Duplicate cue numbers gave a 500 and a logged database error (fixed)
+
+1. **Causes:**
+   - (a) Nothing validated numbers. The `UNIQUE` constraint on `cuesheet.cueNum` caught cue-to-cue clashes as a database error: 500, "Error updating cue: UNIQUE constraint failed" in the log, and an error toast.
+   - (b) Group numbers live in another table, so a group could take a cue's number, and `12` and `12.0` counted as different numbers.
+   - (c) Append import renamed clashes to `"20 (2)"`.
+2. **Verification:** `PUT /api/cue/3/edit/cueNum val=20` returned 500 with the UNIQUE error in the journal (a). Setting a group to `30` succeeded while cue 30 existed (b).
+3. **Fix:**
+   - `ctp.checkCueNumFree` checks numbers across cues and group headers (blanks allowed, numeric equality), only when a number actually changes. It is used by `UpdateCue`, `UpdateCueFields`, `UpdateGroup` and auto-numbering.
+   - Routes answer 200 with the unchanged sheet and an `HX-Trigger: cueNumRejected` event. `ui.js` shows the reason as a tooltip on the field for 3.5s and resets an input field. Nothing is logged.
+   - Import appends keep a free number, otherwise they take the next whole number above the highest.
+   - Test: `TestCueNumbersStayUnique`.
+4. **Related:**
+   - A blank group or cue number cell had zero width, so it could not be double-clicked. Fixed with a minimum size in `cuesheet.css`.
+   - `GetCue` logged "Error Getting Cue: no rows" whenever a group was selected, which is noise that looks like a fault. It now logs only real database errors.
+
+### D21 — Upload silently replaced a same-name file (fixed)
+
+1. **Causes:**
+   - (a) `importMedia` always set aside and replaced an existing file, and nothing asked the operator.
+   - (b) Duplicate names within one batch overwrote each other.
+2. **Verification:** code reading, and the earlier O3 observation.
+3. **Fix:**
+   - `POST /upload/check` returns the clashing names, including repeats within a batch, before any bytes are sent. The dialog offers Replace, Keep both (`name (2).ext`), Skip or Cancel.
+   - The choice is sent as `onConflict`. An unresolved clash gets 409 and changes nothing.
+   - The result summary comes back in `X-Upload-Result` and is shown on the status line and in the toast.
+   - This applies to the upload modal, the standalone `/upload` page and pool drag-and-drop.
+   - Test: `TestUploadNameConflictChoices`.
+4. **Related:** YouTube/URL downloads still replace on a name clash. Not covered by your answer; same dialog could apply.
+
+### D22 — Mobile upload gave no feedback (cause found and fixed; please retest on the real iPhone)
+
+1. **Possible causes, ranked:**
+   - (a) If the upload page was opened through `cutepi-test.drevilish.com` before today's proxy fix, every request (page, scripts, upload) was refused with a blank 421.
+   - (b) One tap on "Choose a file" opened the file picker **twice**: the label opens it natively, then the drop zone's click handler called `fileInput.click()` again. On iOS Safari the second call can dismiss the first picker, so the chosen files are lost and nothing is shown.
+   - (c) iPhone formats: HEIC photos are not an accepted type. They are refused with a clear message, but only if the upload reaches the server.
+   - (d) A proxy body-size limit.
+   - (e) Files larger than the 2 GiB request cap (long 4K iPhone videos).
+2. **Verification:**
+   - The service journal had already rotated past your attempt (it only reached back to 19:42), so it can't show which cause hit you.
+   - **Playwright WebKit with the iPhone 15 profile:** JPEG, MOV and HEIC uploads, through the proxy and via the IP, all showed a status line (HEIC: "unsupported media type"). The emulation counted **2 file-chooser openings per tap** (b is confirmed as a defect).
+   - A 150MB upload passed through the proxy (d is ruled out up to that size).
+3. **Fix:**
+   - The drop zone no longer re-opens the picker when the tap lands on the label; the emulation now counts 1.
+   - (a) was fixed by the proxy change.
+4. **Related:**
+   - **Please retest on the iPhone** (Safari on iOS differs from the WebKit emulation): upload a photo and a video from the Photos picker, then the same photo again to see the name-clash dialog.
+   - DESIGN.md §5.7 says "no size limit", but §7 caps request bodies at 2 GiB. Decide which is right.
+   - HEIC support would need a GStreamer HEIF decoder on the Pi. Today iOS usually converts photos to JPEG on upload, but not always.
+
+## Round 4 (2026-09-30)
+
+| # | Issue | Root cause (verified) | Fix | Verified |
+|---|---|---|---|---|
+| D37 | 20 s fade-in "jumps the video 20 s" | Not the fade: the film has a second audio track drained by an unsynced fakesink, and the pipeline position (furthest sink) read ~20 s after 1 s of play, then lurched. Same numbers with fade-in 0 and with direct play. The fade itself ramped alpha correctly | Extra streams drain in real time (`sync=true`) | Position 1.05, 2.11, 3.18, 4.26 s… |
+| D38 | Progress bar and time jumpy | D37 plus a 500 ms clock tick, a row bar that moved only on sheet re-render, and a 0.4 s CSS transition | One 100 ms client clock drives the clock, scrubber and row bar; never steps back | 40 samples: steps 0.05–0.2 s, 0 backward |
+| D39 | Space/ESC ignored after clicking a button or in dialogs; Space re-pressed the focused button | Key handler treated focus on any button, select or input as "not plain" | Only text entry blocks them; Space never presses the focused control; no auto-repeat | Keys suite 4/4 |
+| New | Fit options and crop | — | Fill width, Fill height, Fill (cover), plus crop L/R/T/B in px or %; hardware crop via the plane's source rectangle | Plane SRC/CRTC rects exact, 30 fps each |
+
+## Round 5 — Companion compatibility (2026-09-30)
+
+Target: the Companion instance at companion.drevilish.com (v5.0.4), with the connections **CuTePi-Hyperdeck** (bmd-hyperdeck 3.1.1, model HyperDeck Studio Mini) and **CuTePi-QLab** (figure53-qlab-advance 2.14.1, TCP 53000). Only CuTePi was changed. Conformance was checked three ways:
+- Go tests replay each module's connect sequence over a real socket.
+- The dev server replays it with the modules' own client libraries (hyperdeck-connection 3.1.0, osc.js 2.4) against the test server, including playback.
+- The real Companion's status and variables were read through its HTTP API while CuTePi played.
+
+| # | Issue | Root cause (verified) | Fix | Verified |
+|---|---|---|---|---|
+| C1 | HyperDeck connection failed every 5 s | Remote listeners were off. Once on, the library's first command after the greeting (`watchdog: period: 6`) answered `100 unknown command`, so the library drops the connection | `watchdog` implemented (idle clients closed after the period plus 2 s) | Library connects and stays up through pings (14 s hold) |
+| C2 | Multi-line commands misread | The library sends `notify:` followed by param lines and a blank line. Each line was run as its own command | Multi-line command reader | `notify` set: 200, subscription applied |
+| C3 | Connect reads answered with wrong codes | `device info` answered 201 (library wants 204 with `slot count`); `remote` 200 (wants 210); no `slot info` (202) or `configuration` (211). Any mismatch aborts the module's init | Studio Mini replies for all of them; greeting model "HyperDeck Studio Mini", protocol 1.11 | Library init sequence completes; module auto-selects Studio Mini |
+| C4 | No transport feedback in Companion | Pushes went out as `500 transport info` (500 is the connect banner, which the library ignores). Transport notifications are 508 | 508 transport, 502 slot (clip list changed), 510 remote, 511 configuration, 513 display timecode; reply always before its notification | Companion `status/speed/clipId/clipName` follow play, pause and stop |
+| C5 | Clip list out of order in Companion | Clip ids were cue positions. The library keys clips by id, so they come out sorted by id, not in play order (this sheet plays 1, 3, 4, 2, 5, 6) | Clip ids are 1…N in play order, as on a deck's timeline | Clips listed in sheet order; `goto clip 2` selects the sheet's 2nd row |
+| C6 | Companion Play reset a cue's programmed rate | Play sends `speed: 100`, which set the rate to 1.0 on a 0.45× cue | Speed is a percentage of the cue's own rate | Timecode advances at 0.45×, reported speed 100 |
+| C7 | `loop: true` shown while idle; Companion Play turned the saved loop default off | `Loop()` reports the last pipeline after stop. The deck `loop:` flag persisted to config | Loop reported only while playing; deck loop is per clip (`SetClipLoop`), and only `true` is applied | Idle `loop: false`; config untouched |
+| C8 | Momentary "clip none, speed 45" at every deck play | The cue position was attached after the load bumped the state | `LoadOpts.CuePos` installs it with the pipeline; pushes debounced one tick | First push already carries clip 2, speed 100 |
+| C9 | QLab module stuck in "No Workspaces"/Error | CuTePi sent no replies at all over TCP | QLab 5 workspace emulation (`routes/qlabws.go`): replies for the full handshake, cue list with every key the module reads, playhead, running cue, and `/update` pushes | Module status OK; `r_name/r_stat/e_secs/r_left` follow playback; `n_name` follows the selection |
+| C10 | QLab module threw `Cannot read properties of undefined (reading 'pctElapsed')` | Module bug: it dereferences its old copy of a paused cue while first loading the list. A held still was reported paused | Held-at-end clips report running (`gsp.HeldAtEnd`); lists never carry `isPaused` (the next `valuesForKeys` does) | No module errors in the Companion log since |
+| C11 | Each GO pushed an update for every cue, twice | The cue-sheet version also moves on selection and last-played stamps | Only cues whose shown content changed are pushed; the list only on add/remove/reorder | GO → only the running cue and the playhead |
+| C12 | QLab elapsed/percent wrong for trimmed cues | Measured from the file start | Measured through the trimmed span, in cue time | 0 % at the in-point, rising at the cue's rate |
+
+Not changed:
+- One HyperDeck client at a time, as designed (§12.8). A second controller gets `120`; Companion retries every 5 s.
+- The module's "play range" read sends `device info` (a library bug) and gets rejected. The module tolerates this.
+- The race detector can't run on the Pi: ThreadSanitizer doesn't support its 39-bit address space.
+
+## Round 3 — playback engine and web UI (2026-09-30)
+
+### New video output: one hardware layer per cue
+
+The test Pi (Raspberry Pi 4, HDMI at 1920×1080 60 Hz) now shows every cue on its own display plane (`kmssink` on a
+shared DRM handle, the service as DRM master). The display hardware stacks and blends the layers. Measured on the wall
+by reading the kernel's plane state (frames = `FB_ID` changes):
+
+| Check | Before | Now |
+|---|---|---|
+| 1080p30 film, steady | ~16 fps | **30.0 fps** |
+| 1 s ESC fade | freezes 1.4 s, then cuts | **1.0 s smooth fade, film holds 30 fps** |
+| Colour during fades | hue shifts (brightness offset) | alpha over black: colours scale evenly |
+| Full-colour image fade | banded left-to-right, then cut | smooth plane fade |
+| Crossfade (fade and stop others) | hard cut, or fade to black then start | new cue under, old fades over it: 2.0 s, 28–30 fps |
+| Rotate 90°/270° + mirror | not applied at all | portrait 606×1080, **30 fps** |
+| Rotate 180°, mirror | not applied | display hardware, 30 fps |
+| Opacity 50 %, box 50 % at (10 %, 10 %) | n/a | alpha 32768, 960×540 at (192,108), 30 fps |
+| Test pattern SMPTE | 320×240 in a corner | full screen, 8 % CPU |
+| Test pattern Blink | — | alternates at the display's 59.9 Hz |
+
+### Deviations found and fixed
+
+| # | Issue | Root cause (verified) | Fix |
+|---|---|---|---|
+| D23 | Console text and cursor on HDMI after start; after a panic the wall showed the console | The active VT stayed in text mode: fbcon draws login prompt, kernel messages and cursor | `ClaimWallConsole`: VT to graphics mode at startup, framebuffer blanked; text mode restored on clean exit. Verified: 0 non-zero framebuffer bytes after writing to `tty1` (25,848 with the service stopped) |
+| D24 | Fade and stop did not fade | `videobalance` on DMA buffers: about 2 fps once brightness ≠ 0, and each set blocked ~450 ms | Hardware plane alpha (above); fbdev fallback got an async brightness writer |
+| D25 | Full-colour images fade badly, and fades shift colour | Still re-rendered per step and interrupted mid-paint; brightness offset instead of a scale | Plane alpha |
+| D26 | Test patterns never change | `videotestsrc` `pattern` set with a Go string, which GObject silently ignores for an enum | `SetArg`. Verified: Red, Green and Blue read (255,0,0), (0,250,0), (0,0,255) |
+| D27 | Test patterns not full screen | No caps: default 320×240 | Generated at the display's size and rate |
+| D28 | Rotate and mirror do nothing | Same enum bug on `videoflip` `method`; a prewarmed cue also never got its geometry | `SetArg`; geometry from the cue's own options at build time |
+| D29 | Fade and stop others hard-cut | The GO path ignored `fadeOut`; the other path faded to black, then started | Crossfade on every path (§6.5 of DESIGN.md) |
+| D30 | Slideshow doesn't advance, wrong timing, fades and shuffle | Member cue timers ended slides early and the runner quit; fade to black plus sleep; duplicate runners; shuffle only once | Runner rewritten: group owns timing, crossfades, one run at a time, reshuffle per pass. Verified: 2.0 s cadence, loops, Stop and a second start cancel it |
+| D31 | Header Pause did nothing | The NOW bar was replaced every second, so a click straddling the swap was lost; paused state was invisible | Bar updates in place and holds refreshes while pressed; PAUSED state shown. Verified 6/6 slow presses |
+| D32 | Theme selector on every Settings tab | The first tab lacked Bootstrap's `active` class, so its pane was never hidden | Class added |
+| D33 | Your 10 s Fade In entry was refused | Parser only took `1:05.000` or seconds | Unit forms (`1m5s`, `10s`, `500ms`, …); every number field is validated text |
+| D34 | Stop left "test showing" set | `Stop()` kept the stopped pipeline and did not clear the flag | Cleared |
+| D35 | A tool opening the DRM device first broke playback | Plane writes need DRM master, taken lazily | The wall is opened at startup with an explicit `SET_MASTER` |
+| D36 | gsp test hang (the old O8) | Tests used a real display sink and fought the service for HDMI | Package tests default to `fakesink` |
+
+### Also done
+- Cue number step setting (default 1); right-click and menu **Sort by cue number** and **Renumber cues**.
+- Test-pattern resolution/frame-rate label (remembered); unmistakable Tests on/off state on every client; the live
+  pattern is marked in the picker.
+- Opacity and position/size (px or %) in the Video tab, carried through show export/import.
+- Windows 95 / XP / 7 themes draw modals as windows.
+- DESIGN.md: §2, §5.1, §5.2, §5.4, §5.5, §6.1, §6.4, §6.5, §6.9, §12.5, §12.10, and the A/V sync test signal (§12.11,
+  later phase). AGENTS.md: how to measure video on planes; DRM master rule.
+
+### Suites
+p9 10/10, p11 3/3, p13 6/6. p6b 16/17 and p7 13/14: the two failures are my test thresholds (request bound during a GO
+burst; the new "Nothing uploaded" wording), not behaviour. Go: every package passes.
+
+### Open / follow-up
+- **A 60 fps clip loses frames while it fades.** Every alpha write is its own display commit, and so is every frame
+  `kmssink` shows. A small in-app compositor that commits frame and alpha together would remove this; that means
+  writing our own sink.
+- **Panic holding image appears ~300 ms after the cut**, black in between. Keeping it prerolled on an invisible layer
+  would make it instant.
+- **Background refresh traffic (O2):** 4 requests per second per client while playing.
+
+## Open findings (not fixed; need a decision)
+
+### O1 — 1080p video plays at about half frame rate; video fades are choppy (major)
+
+1. **Causes:**
+   - (a) The video stem does colour conversion, scaling and flips **in software**. On a Pi 4, 1080p runs at about 16 fps on HDMI. In an isolated `gst-launch` run, the same chain manages 23.8 fps even to a fake sink, while hardware `v4l2convert → RGB16` alone does 59.6 fps. The clip is 30 fps.
+   - (b) `videobalance` out of passthrough modifies frames in place in uncached DMA memory from `v4l2convert`. Throughput falls to about 2 fps during a fade, so a fade shows 1–3 steps.
+   - (c) The `fbdevsink` copy cost.
+2. **Verification:**
+   - The framebuffer frame-count sampler checks out: the synthetic 30 fps clip reads 30.3.
+   - bbb 1080p30 via the service: 16.6 fps. A replica of the software chain: 15.9. Hardware-only chain: more than twice that (a is confirmed).
+   - `videobalance brightness=-0.3`: system-memory frames lose about 10% (21 → 19 fps); hardware-decoder frames lose about 90% (9–24 → 1.8–2.2 fps) (b is confirmed).
+   - `v4l2convert` has no cached I/O mode on this driver: `rw` isn't supported and `userptr` fails its pool.
+   - **Round 2 — `kmssink` measurement:** the display runs 1920×1080 at **60 Hz**. The hardware decoder feeding `kmssink` directly played the same 1080p30 clip at **29.8 fps average with 0 dropped frames**, against about 16 today, including with a plane `alpha` property set. The display controller scales, converts and presents in step with the display's refresh, with no CPU copy. Whether the plane alpha really dims the picture was not confirmed: the kernel's display state didn't show it, and there is no HDMI capture here.
+3. **Proposed fix (not applied; changes the pipeline architecture). Preferred: switch the wall from `fbdevsink` to `kmssink`:**
+   - hardware-decoded video goes to `kmssink` without software conversion;
+   - fades use the plane's `alpha` over black instead of `videobalance`;
+   - rotation and flips use the plane `rotation` property where the driver supports it;
+   - the framebuffer stays black underneath (blank it once at start).
+   - This needs rework of the warm-slot relink and the blanking code, plus a check of the alpha fade on the monitor.
+   - Fallback plan if `kmssink` can't be used:
+   - On hardware-decoded files, let `v4l2convert` do format conversion and scaling straight to the wall format (RGB16, 1920×1080). Keep the software stages only when rotation or flip is set.
+   - For the fade to black, do not run `videobalance` on DMA buffers. Options:
+     - Blank-fade through the framebuffer.
+     - A cheap copy into system memory only while a fade runs (about 13 fps during the fade).
+     - Accept a short cross-dissolve to black at the sink.
+   - Needs care with the warm-slot relink (`warm-vf-tail`).
+4. **Related:**
+   - DESIGN.md sets no frame-rate target. See question Q1.
+   - 1080p60 content would be worse.
+   - The fade-in path has the same `videobalance` cost.
+
+### O2 — Background refresh traffic during playback
+
+While a clip plays, a second client makes about 28 HTTP requests in 2s. These are `/api/nowplaying`, `/api/cuesheet/status`, `/api/schedule/next`, `/mediapool` and `/api/audio/devices`, each triggered by a WebSocket `sync`.
+
+1. **Causes:**
+   - (a) Every sync makes each client re-fetch several fragments.
+   - (b) Syncs fire on every position tick.
+2. **Verification:** count `sync` messages versus requests.
+3. **Fix:** carry state versions in the sync message and fetch only what changed.
+4. **Related:** DESIGN §6.7 "no polling" is met when idle (0 requests).
+
+### O3 — Same-name upload silently replaces the file
+
+Resolved in round 2 (D21).
+
+### O4 — `error.html` is a full page even for htmx requests
+
+This is the root of D12; the clients now work around it. Fix: return plain text when `HX-Request` is set.
+
+### O5 — The ffprobe error message leaks a temp path
+
+Strip the directory from the message.
+
+### O6 — Deleting a group with Ctrl+Backspace while its inspector is open
+
+A harmless 404 appears in the console, and the page corrects itself.
+
+### O7 — Panic cut to the holding image takes 300–400ms (image load)
+
+During that time a partial dip from a running fade is visible. Fix: keep the holding image prerolled.
+
+### O8 — Flaky gsp test
+
+`TestStateVersionBumpsOnPlaybackOperations` hung once. It has not reproduced.
+
+## Questions: behaviour not specified in the .md files (answered 2026-09-29 — see Round 2)
+
+The answers will go into DESIGN.md.
+
+- **Q1:** What frame rate and fade quality are required for 1080p30 and 1080p60 on the Pi 4? (See O1.)
+- **Q2:** The GO tooltip says "Space / Enter", but Enter does not fire GO. Which is intended?
+- **Q3:** Should the inline cell editor cancel on Escape? Today it stays open and saves on blur (D4).
+- **Q4:** Is there an upper bound for PreWait, PostWait and duration? `99999999` is accepted today (D5).
+- **Q5:** The default ESC fade is 1000ms in §6.9, but the baseline uses 500ms. Confirm the default.
+- **Q6:** Should the context-menu contents shown today be the specified ones?
+  - Cue: Colour, Fade-stop others, Auto-continue, New group, Delete. §5.4 lists only colour and delete.
+  - Group: Inspector, Collapse, Colour, New group, Delete group.
+  - Blank sheet: New group.
+  - Pool tile: Add, Refresh thumbnail, Analyse, Set as holding image, Add to test patterns, Delete (with a confirm dialog).
+- **Q7:** Should these current behaviours be documented as intended?
+  - F8 jumps to the next broken cue.
+  - Escape closes context menus.
+  - Double-clicking a pool tile adds a cue.
+  - Duplicate cue numbers get " (2)" on append import.
+  - Success toasts appear.
+  - Invalid times return 400.
+  - Show import writes the `show_imported` audit event.
+  - The Settings tabs beyond §5.6.
+- **Q8:** For a same-name upload, should the file be replaced (today), renamed or refused?
+- **Q9:** When media is deleted, should it also be unpinned from test patterns and cleared as the holding image (today)?
+- **Q10:** Show mode hides the pool, inspector and Tests button, but the transport stays live. Is that intended?
+
+## Changes made in round 2 (uncommitted)
+
+- `ctp/ctp.go`, `ctp/groups.go` and `ctp/export.go`: cue-number uniqueness (D20); `GetCue` no longer logs "no rows".
+- `routes/api.go` and `routes/groups.go`: `rejectCueNum` (200 plus the `cueNumRejected` event).
+- `routes/upload.go`: `/upload/check`, `onConflict`, `X-Upload-Result`.
+- `public/src/ui.js`: conflict dialog, upload summary, cue-number tooltip, F8 removed.
+- `public/src/dropzone.js`: single file picker, conflict choice, JSON errors.
+- `public/src/dnd.js`: conflict choice.
+- `templates/cueeditcol.html`: Escape cancels.
+- `templates/mediainfo.html` and `templates/settingsModal.html`: Space only, no F8.
+- `public/css/comp/dropzone.css` and `cuesheet.css`: dialog, tooltip, empty-cell target.
+- Tests: `TestCueNumbersStayUnique`, `TestUploadNameConflictChoices`; the existing replace test now sends `onConflict=replace`.
+- `DESIGN.md`: §2 frame rate; §5.3, §5.4, §5.6, §5.7; new §5.10 Show / Edit mode and §5.11 Feedback.
+
+## Changes made in round 1 (uncommitted)
+
+- `routes/origin.go`, `logs/logs.go` and `logs/logs_test.go`: the 421 now explains itself, and a new log code `RTE-E229` was added.
+- `gsp/gsp.go`: `brightWorker` (D19), `blankWall` calls (D17), Hold for stills (D18a), `IsStill`.
+- `gsp/blank.go` and `gsp/blank_test.go`: new.
+- `routes/api.go`: shared `fadeStop` (D16), Hold on direct play (D18a).
+- `routes/playback_test.go`: `TestDirectPlayImageHolds`.
+- `templates/mediainfo.html`: NOW bar falls back to the filename.
+- `templates/testModal.html`: the picker is rebuilt on open (D18b).
+- `DESIGN.md` §6.9: holding-image notes, fade-out and blanking notes.
+- `AGENTS.md`: proxy and `allowed_hosts` notes.
+- **Test server config (not in git):** `allowed_hosts` now includes `cutepi-test.drevilish.com`.
+
+## State left behind
+
+- **Test server:** baseline restored (6 cues, group, `escFadeMs=500`, no custom test-pattern pins). Test uploads (`t_clip.mp4`, `t_tone.wav`) and their thumbnails were removed. The service runs the latest build. The HyperDeck (9993), OSC UDP and OSC TCP (53000) listeners are **on**, so the Companion connections work; turn them off in Settings › Network if not wanted.
+- **Dev server:** `/tmp/shot` harness removed. Playwright stays installed, as allowed.

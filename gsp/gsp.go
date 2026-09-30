@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,13 +47,22 @@ type manager struct {
 	rotation     int     // 0|90|180|270 clockwise degrees
 	flip         string  // none|h|v mirror ("", none = off)
 	fadeLevel    float64 // shared audio/video envelope, 0..1
+	opacity      float64 // cue opacity 0..1 on the KMS wall
 	fadeSerial   uint64  // cancels an earlier ramp on the same pipeline
 	starting     bool
 	brightEl     *gst.Element  // per-video-branch "videobalance" element (last wins)
+	brightBusy   bool          // a brightWorker goroutine is applying fadeLevel to brightEl
+	still        bool          // the loaded file is a still image: one frame, so brightness needs a re-render to show
+	stillDirty   bool          // a brightness change is waiting for the re-render goroutine
+	stillBusy    bool          // the re-render goroutine is running (its EOS echoes are not cue ends)
+	stillEnded   bool          // the still's genuine end-of-stream has been handled
 	cuePos       int           // cue position associated with the active clip (0 = not a cue)
 	onCueEnd     func(pos int) // invoked (in a goroutine) when an active cue reaches its end
 	gen          uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
+	halts        uint64        // bumped by every operator Stop/Panic call, whether or not a pipeline was running
+	loads        uint64        // bumped whenever a new pipeline is installed (swap)
 	paused       bool          // operator pause intent: Pause sets it, Play/swap clear it.
+	heldEnd      bool          // parked on the last frame by hold (paused is set too)
 	testShowing  bool          // a test pattern (not a file) is on the wall
 	warm         *gst.Pipeline // prebuilt+prerolled next cue; see Warm. Audio-only callers
 	warmFile     string        // only, since a prerolled video pipeline paints its
@@ -65,8 +75,32 @@ var (
 	initOnce sync.Once
 )
 
+// jpegRankOverride demotes the Pi's hardware JPEG decoder. On Raspberry Pi
+// hardware decodebin otherwise picks v4l2jpegdec, whose firmware path is
+// unreliable (buffer-pool activation fails or stalls silently), so JPEG
+// stills and MJPEG video would intermittently never preroll. Rank 0 routes
+// JPEG through software jpegdec. Harmless where the element doesn't exist.
+const jpegRankOverride = "v4l2jpegdec:0"
+
+// applyDecoderRanks sets GST_PLUGIN_FEATURE_RANK before gst.Init reads it,
+// appending the JPEG override unless the operator's own value already
+// ranks v4l2jpegdec (theirs wins).
+func applyDecoderRanks() {
+	cur := os.Getenv("GST_PLUGIN_FEATURE_RANK")
+	if strings.Contains(cur, "v4l2jpegdec") {
+		return
+	}
+	if cur != "" {
+		cur += ","
+	}
+	if err := os.Setenv("GST_PLUGIN_FEATURE_RANK", cur+jpegRankOverride); err != nil {
+		logs.Printf(logs.GSPPipeDebug, "gsp: setting GST_PLUGIN_FEATURE_RANK: %v", err)
+	}
+}
+
 func gstInit() {
 	initOnce.Do(func() {
+		applyDecoderRanks()
 		gst.Init(nil)
 		// Bus watches (EOS/error handling in watchAndPlay/watchWarm) only
 		// dispatch on a running GLib main loop — without it a finished cue
@@ -74,10 +108,10 @@ func gstInit() {
 		go glib.NewMainLoop(glib.MainContextDefault(), false).Run()
 		// Position ticker: while a clip is playing, push one sync per
 		// displayed second over the WebSocket so connected clients advance
-		// their progress clock WITHOUT HTTP polling (the pollers are now the
-		// WS-disconnected fallback only). CurrentPosition bumps the version
-		// when the displayed second changes and stays silent while paused/
-		// stopped/idle, so the broadcast only fires on a real change.
+		// their progress clock without HTTP polling. CurrentPosition bumps
+		// the version when the displayed second changes and stays silent
+		// while paused/stopped/idle, so the broadcast only fires on a real
+		// change.
 		go func() {
 			for range time.Tick(time.Second) {
 				before := StateVersion()
@@ -90,9 +124,6 @@ func gstInit() {
 	})
 }
 
-// bump increments the change counter the Now Playing poller relies on. It is
-// called only when something the widget displays (filename, play state,
-// position) actually changes.
 // bump coalescer: playback state changes arrive in bursts (a 500ms fade
 // steps ~50 times, a cue swap bumps several times). Every bump is one WS
 // broadcast, and every broadcast makes connected clients re-fetch their
@@ -104,7 +135,7 @@ var (
 	bumpTimer   *time.Timer
 )
 
-// broadcastAsap sends at most one "sync" broadcast per 100ms window;
+// broadcastSoon sends at most one "sync" broadcast per 100ms window;
 // trailing edge, so the newest version always lands.
 func broadcastSoon() {
 	bumpTimerMu.Lock()
@@ -122,6 +153,9 @@ func broadcastSoon() {
 
 // Realtime rule: nothing but playback is prioritized — the deck can't spend CPU on bursts that don't change pixels.
 
+// bump increments the change counter the Now Playing refresher compares
+// against. Called only when something the widget displays (filename, play
+// state, position) actually changes.
 func (m *manager) bump() {
 	m.mu.Lock()
 	m.version++
@@ -149,20 +183,53 @@ func Generation() uint64 {
 	return mgr.gen
 }
 
-// swap atomically stops/releases the current pipeline (if any) and installs
-// newPipeline as the active one, under the manager lock.
+// Halts counts operator Stop/Panic calls. Unlike Generation it is not moved
+// by a clip ending or a fade finishing, so a queued action (fade-then-play)
+// can tell "the operator halted playback while I waited" from "my own fade
+// completed".
+func Halts() uint64 {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	return mgr.halts
+}
+
+// Loads counts pipeline installs: it moves when a new clip takes over, and
+// only then.
+func Loads() uint64 {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	return mgr.loads
+}
+
+// swap atomically installs newPipeline as the active one under the manager
+// lock, then stops/releases the previous pipeline (and any warm slot) after
+// the lock is dropped: SetState(NULL) blocks on GStreamer teardown, and
+// holding mu through it stalled every API call and the position readout.
+// The old pipeline is fully retired before swap returns, so it is never
+// still outputting when the caller starts the new one.
 func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadOpts) {
 	if !opts.KeepBackground {
 		stopBackground() // a new playback decision always kills the soundtrack
 	}
 	m.mu.Lock()
-	m.dropWarm() // a warm slot from a previous decision is somebody else's memory
+	retire := []*gst.Pipeline{m.takeWarm()} // a warm slot from a previous decision is somebody else's memory
+	var out *outgoing
 	if m.pipeline != nil && m.pipeline != newPipeline {
-		retirePipeline(m.pipeline)
+		if opts.Crossfade > 0 && layerOf(m.pipeline) != nil {
+			// Crossfade: the old cue keeps playing on its own layer and
+			// fades away over the new one (which starts underneath).
+			out = &outgoing{p: m.pipeline, volumeEl: m.volumeEl, gain: m.effectiveGain(),
+				level: m.fadeLevel, curve: opts.FadeCurve, done: make(chan struct{})}
+		} else {
+			retire = append(retire, m.pipeline)
+		}
 	}
 	m.clearPlayback()
 	m.pipeline = newPipeline
 	m.currentFile = currentFile
+	m.cuePos = opts.CuePos // with the pipeline, so no reader sees a cue-less load
+	m.still = isStillFile(currentFile)
+	m.stillEnded = false
 	m.inPoint = opts.InPoint
 	m.outPoint = opts.OutPoint
 	m.hold = opts.Hold
@@ -182,10 +249,17 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	if m.fadeIn > 0 {
 		m.fadeLevel = 0
 	}
+	m.opacity = opacityOf(opts)
 	m.starting = true
 	m.paused = false
 	m.gen++
+	m.loads++
 	m.mu.Unlock()
+	if out != nil {
+		awaitIncoming(newPipeline, out)
+		go fadeOutgoing(out, opts.Crossfade)
+	}
+	retireAll(retire...)
 	broadcastSoon()
 }
 
@@ -194,6 +268,8 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 // version so clients re-render. Callers must hold m.mu.
 func (m *manager) clearPlayback() {
 	m.currentFile = ""
+	m.still = false
+	m.stillEnded = false
 	m.inPoint = 0
 	m.outPoint = 0
 	m.hold = false
@@ -204,6 +280,7 @@ func (m *manager) clearPlayback() {
 	m.panEl = nil
 	m.starting = false
 	m.paused = false
+	m.heldEnd = false
 	m.testShowing = false
 	m.fadeSerial++
 	m.cuePos = 0
@@ -216,11 +293,12 @@ func (m *manager) clearPlayback() {
 func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 	m.mu.Lock()
 	if m.pipeline == p {
-		retirePipeline(p)
 		m.pipeline = nil
 		m.clearPlayback()
 		m.gen++
 		m.mu.Unlock()
+		retirePipeline(p) // outside mu: teardown blocks
+		blankWall(eosBlankDelay)
 		broadcastSoon()
 		return
 	}
@@ -232,6 +310,7 @@ func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 // the clip loops back to its in-point at end-of-stream, and the per-cue
 // master audio gain in dB (0 = 0dB). Playback volume is per-cue, never global.
 type LoadOpts struct {
+	CuePos         int     // cue sheet position this load plays (0 = direct playback)
 	InPoint        float64 // 0 = start of file
 	OutPoint       float64 // 0 = end of file
 	Hold           bool    // freeze last frame at end / trim-out
@@ -253,6 +332,15 @@ type LoadOpts struct {
 	// primed) and swap the real wall sink in at activation. Set by the opts
 	// builder so Warm-arms and their later fire compare equal by construction.
 	WarmPreroll bool
+	// Wall layer (KMS): opacity 0..1 (0 = unset = fully opaque) and the
+	// picture's box on the display — each "" (fill), pixels, or "N%".
+	Opacity                    float64
+	GeomX, GeomY, GeomW, GeomH string
+	// Crop per edge of the source picture: "", pixels, or "N%".
+	CropL, CropR, CropT, CropB string
+	// Crossfade: when > 0 (ms), whatever is on screen fades out OVER this
+	// cue instead of being cut: the new cue starts at once on a lower layer.
+	Crossfade int
 }
 
 func Play() {
@@ -267,10 +355,13 @@ func Play() {
 	}
 	mgr.mu.Lock()
 	mgr.paused = false
+	mgr.heldEnd = false
 	mgr.mu.Unlock()
 	_, state := p.GetState(gst.StateNull, 0)
 	if state == gst.StateNull {
-		startPlayback(p)
+		if err := startPlayback(p); err != nil {
+			logs.Printf(logs.GSPPipeStopped, "gsp: resume failed: %v", err)
+		}
 		mgr.bump()
 		return
 	}
@@ -294,9 +385,35 @@ func Play() {
 		seekAtRate(p, inPoint)
 	}
 
-	p.SetState(gst.StatePlaying)
+	setStateIfCurrent(p, gst.StatePlaying)
 	mgr.bump()
 }
+
+// setStateIfCurrent changes p's state and then re-checks that p is still
+// the active pipeline. Transport calls read the handle under mu but act on
+// it after unlocking (state changes can block, and bus callbacks take mu);
+// if a GO from another client swapped the pipeline in that window, the
+// retired pipeline would otherwise be resurrected — two pipelines on the
+// output. The loser is sent straight back to NULL.
+func setStateIfCurrent(p *gst.Pipeline, state gst.State) error {
+	err := p.SetState(state)
+	mgr.mu.Lock()
+	current := mgr.pipeline == p
+	mgr.mu.Unlock()
+	if !current {
+		_ = p.SetState(gst.StateNull)
+		return errPipelineReplaced
+	}
+	return err
+}
+
+// errPipelineReplaced: the pipeline lost the active slot mid-transition.
+var errPipelineReplaced = errors.New("gsp: pipeline replaced during state change")
+
+// stateQueryTimeout bounds state reads on the request path: an unbounded
+// GetState blocks for as long as an async change (e.g. a slow preroll)
+// takes — which can be forever — pinning the calling HTTP handler.
+const stateQueryTimeout = 2 * time.Second
 
 func Pause() {
 	mgr.mu.Lock()
@@ -305,10 +422,11 @@ func Pause() {
 	if p == nil {
 		return
 	}
-	if err := p.SetState(gst.StatePaused); err != nil {
+	if err := setStateIfCurrent(p, gst.StatePaused); err != nil {
 		logs.Printf(logs.GSPPauseErr, "gsp: error pausing: %v", err)
 	}
 	mgr.mu.Lock()
+	mgr.heldEnd = false
 	mgr.paused = true
 	mgr.mu.Unlock()
 	CurrentPosition()
@@ -322,18 +440,19 @@ func TogglePause() {
 	if p == nil {
 		return
 	}
-	stateChangeReturn, currentState := p.GetState(gst.StateNull, gst.ClockTimeNone)
+	stateChangeReturn, currentState := p.GetState(gst.StateNull, gst.ClockTime(stateQueryTimeout))
 	if stateChangeReturn != gst.StateChangeSuccess {
+		logs.Printf(logs.GSPToggleErr, "gsp: toggle pause ignored: pipeline state not settled (%v)", stateChangeReturn)
 		return
 	}
 	var err error
 	pausing := false
 	switch currentState {
 	case gst.StatePlaying:
-		err = p.SetState(gst.StatePaused)
+		err = setStateIfCurrent(p, gst.StatePaused)
 		pausing = true
 	case gst.StatePaused:
-		err = p.SetState(gst.StatePlaying)
+		err = setStateIfCurrent(p, gst.StatePlaying)
 	}
 	if err != nil {
 		logs.Printf(logs.GSPToggleErr, "gsp: error toggling pause: %v", err)
@@ -347,9 +466,11 @@ func TogglePause() {
 
 func Panic() {
 	stopBackground()
+	retireOutgoing()
 	mgr.mu.Lock()
+	mgr.halts++
+	retire := []*gst.Pipeline{mgr.pipeline}
 	if mgr.pipeline != nil {
-		retirePipeline(mgr.pipeline)
 		mgr.pipeline = nil
 		mgr.clearPlayback()
 		mgr.gen++
@@ -365,14 +486,18 @@ func Panic() {
 		mgr.testShowing = false
 		mgr.version++
 	}
-	mgr.dropWarm() // PANIC tears everything down, including the warm slot
+	retire = append(retire, mgr.takeWarm()) // PANIC tears everything down, including the warm slot
 	mgr.mu.Unlock()
+	retireAll(retire...)
+	blankWall(0)
 	broadcastSoon()
 }
 
 func Stop() {
 	stopBackground()
+	retireOutgoing()
 	mgr.mu.Lock()
+	mgr.halts++
 	p := mgr.pipeline
 	mgr.mu.Unlock()
 	if p == nil {
@@ -386,6 +511,7 @@ func Stop() {
 		mgr.testShowing = false
 		mgr.version++
 		mgr.mu.Unlock()
+		blankWall(0)
 		broadcastSoon()
 		return
 	}
@@ -408,17 +534,20 @@ func Stop() {
 	mgr.cuePos = 0
 	mgr.lastPos = 0
 	mgr.starting = false
-	mgr.dropWarm()
+	mgr.testShowing = false // a stopped pattern is off the wall (Tests button state)
+	warm := mgr.takeWarm()
 	mgr.gen++
 	mgr.version++
 	mgr.mu.Unlock()
+	retireAll(warm)
+	blankWall(0)
 	broadcastSoon()
 }
 
 // ShowTest loads and plays a GStreamer video-test-pattern.
 func ShowTest(pattern string) error {
 	gstInit()
-	newPipeline, err := buildPipeline(pipelineSpec{isTest: true, testPattern: pattern})
+	newPipeline, err := buildPipeline(pipelineSpec{isTest: true, testPattern: pattern, overlay: TestOverlay()})
 	if err != nil {
 		return err
 	}
@@ -426,8 +555,7 @@ func ShowTest(pattern string) error {
 	mgr.mu.Lock()
 	mgr.testShowing = true
 	mgr.mu.Unlock()
-	watchAndPlay(newPipeline)
-	return nil
+	return watchAndPlay(newPipeline)
 }
 
 // TestShowing reports whether a test pattern (rather than a file) is
@@ -442,7 +570,7 @@ func TestShowing() bool {
 // directory, replacing any currently active pipeline. Direct media playback
 // has no cue-specific hold policy but honours the configured loop default.
 func Load(filename string) error {
-	return LoadWithOpts(filename, LoadOpts{Loop: config.Loop()})
+	return LoadWithOpts(filename, LoadOpts{Loop: config.Loop(), Hold: isStillFile(filename)})
 }
 
 // LoadWithOpts loads filename with an optional trim window and hold policy.
@@ -458,29 +586,41 @@ func LoadWithOpts(filename string, opts LoadOpts) error {
 		return nil
 	}
 	mgr.mu.Lock()
-	mgr.dropWarm()
+	warm := mgr.takeWarm()
 	mgr.mu.Unlock()
-	newPipeline, err := buildPipeline(pipelineSpec{isTest: false, filename: filename})
+	retireAll(warm)
+	newPipeline, err := buildPipeline(pipelineSpec{isTest: false, filename: filename, opts: opts})
 	if err != nil {
 		return err
 	}
 	buildMS := time.Since(t0).Seconds() * 1000
 	mgr.swap(newPipeline, filename, opts)
 	start := time.Now()
-	watchAndPlay(newPipeline)
+	if err := watchAndPlay(newPipeline); err != nil {
+		return fmt.Errorf("loading %q: %w", filename, err)
+	}
 	logs.Printf(logs.GSPFireTiming, "cue load %q: build %.1fms + preroll %.1fms",
 		filename, buildMS, time.Since(start).Seconds()*1000)
 	return nil
 }
 
-func (m *manager) dropWarm() {
-	if m.warm == nil {
-		return
-	}
-	retirePipeline(m.warm)
+// takeWarm empties the warm slot and returns its pipeline (nil if none) for
+// the caller to retire AFTER releasing mu. Caller holds m.mu.
+func (m *manager) takeWarm() *gst.Pipeline {
+	p := m.warm
 	m.warm = nil
 	m.warmFile = ""
 	m.warmOpts = LoadOpts{}
+	return p
+}
+
+// retireAll retires every non-nil pipeline. Never call it holding mgr.mu.
+func retireAll(ps ...*gst.Pipeline) {
+	for _, p := range ps {
+		if p != nil {
+			retirePipeline(p)
+		}
+	}
 }
 
 // Warm prebuilds and prerolls the NEXT cue into a slot (deck-style double
@@ -494,12 +634,10 @@ func Warm(file string, opts LoadOpts) error {
 	gstInit()
 	mgr.mu.Lock()
 	buildGen := mgr.gen
-	if mgr.warm != nil {
-		retirePipeline(mgr.warm)
-		mgr.warm, mgr.warmFile, mgr.warmOpts = nil, "", LoadOpts{}
-	}
+	stale := mgr.takeWarm()
 	mgr.mu.Unlock()
-	p, err := buildPipeline(pipelineSpec{isTest: false, filename: file, warmSink: opts.WarmPreroll})
+	retireAll(stale)
+	p, err := buildPipeline(pipelineSpec{isTest: false, filename: file, warmSink: opts.WarmPreroll, opts: opts})
 	if err != nil {
 		return err
 	}
@@ -513,14 +651,18 @@ func Warm(file string, opts LoadOpts) error {
 	}
 	mgr.mu.Lock()
 	current := mgr.gen == buildGen
+	var displaced *gst.Pipeline
 	if current {
+		displaced = mgr.takeWarm() // a concurrent Warm may have filled it
 		mgr.warm = p
 		mgr.warmFile = file
 		mgr.warmOpts = opts
 	}
 	mgr.mu.Unlock()
+	retireAll(displaced)
 	if !current {
-		// A newer playback decision landed while we built — warm now.
+		// A newer playback decision landed while we built: this arm is
+		// stale, so it is retired rather than installed.
 		retirePipeline(p)
 		return nil
 	}
@@ -542,11 +684,12 @@ func watchWarm(p *gst.Pipeline) {
 		if msg.Type() == gst.MessageError {
 			logs.Printf(logs.GSPPipeDebug, "gsp: warm pipeline error debug: %s", msg.ParseError().DebugString())
 			mgr.mu.Lock()
+			var dead *gst.Pipeline
 			if mgr.warm == p {
-				retirePipeline(p)
-				mgr.warm, mgr.warmFile, mgr.warmOpts = nil, "", LoadOpts{}
+				dead = mgr.takeWarm()
 			}
 			mgr.mu.Unlock()
+			retireAll(dead)
 			return false
 		}
 		return true
@@ -566,30 +709,33 @@ func InstallWarm(file string, opts LoadOpts) bool {
 	if !ok {
 		return false
 	}
-	// Video/image warm builds sit on fakesink; relink the real wall sink in
-	// before anything plays. A failed relink is a caller-handled rebuild.
-	if opts.WarmPreroll && !warmWireVideo(p) {
-		logs.Printf(logs.GSPWarm, "warm pipeline wall relink failed: cold load")
-		mgr.mu.Lock()
+	// Warm builds preroll on fakesinks; relink the real audio device and
+	// wall sink in before anything plays. A failed relink is a
+	// caller-handled rebuild.
+	audioWired, aok := warmWireAudio(p)
+	if !aok || (opts.WarmPreroll && !warmWireVideo(p)) {
+		logs.Printf(logs.GSPWarm, "warm pipeline output relink failed: cold load")
 		retirePipeline(p)
-		mgr.mu.Unlock()
 		return false
 	}
 	// The relinked sink must re-preroll before the swap: the flush seek
 	// re-drives the decoders, and on big files that can exceed the fire
 	// budget while a cold load lands in ~0.5s. Bound it — a slow slot
 	// falls back to cold instead of stalling the GO past a second.
-	if opts.WarmPreroll && !warmReady(p, 400*time.Millisecond) {
+	if (opts.WarmPreroll || audioWired) && !warmReady(p, 400*time.Millisecond) {
 		logs.Printf(logs.GSPWarm, "warm pipeline re-preroll slow: cold load")
-		mgr.mu.Lock()
 		retirePipeline(p)
-		mgr.mu.Unlock()
 		return false
 	}
 	logs.Printf(logs.GSPWarm, "warm pipeline activated: %s", file)
 	// swap() owns the retire+install; give it the prerolled handle.
 	mgr.swap(p, file, opts)
-	watchAndPlay(p)
+	if err := watchAndPlay(p); err != nil {
+		// startPlayback already tore the slot down; report a miss so the
+		// caller retries with a cold build instead of claiming success.
+		logs.Printf(logs.GSPPipeStopped, "gsp: warm pipeline failed to start %q: %v (cold load)", file, err)
+		return false
+	}
 	return true
 }
 
@@ -738,6 +884,74 @@ func warmWireVideo(p *gst.Pipeline) bool {
 	return true
 }
 
+// warmWireAudio swaps the warm slot's audio fakesink for the real output
+// sink, tuned exactly like a cold build's (device, rate, channels). wired is
+// false when the slot has no audio branch. When there is no video branch to
+// relink, it also flush-seeks so the new sink prerolls (a fakesink that
+// already consumed the preroll buffer would otherwise starve it).
+func warmWireAudio(p *gst.Pipeline) (wired, ok bool) {
+	tail, _ := p.GetElementByName("warm-af-tail")
+	fake, _ := p.GetElementByName("warm-audio-sink")
+	if tail == nil || fake == nil {
+		return false, true
+	}
+	factory := "autoaudiosink"
+	if config.Audio().Device != "" {
+		factory = "alsasink"
+	}
+	sink, err := gst.NewElement(factory)
+	if err != nil {
+		return false, false
+	}
+	p.AddMany(sink)
+	fail := func() (bool, bool) {
+		sink.SetState(gst.StateNull)
+		p.Remove(sink)
+		return false, false
+	}
+	src := tail.GetStaticPad("src")
+	if src == nil {
+		return fail()
+	}
+	src.Unlink(fake.GetStaticPad("sink"))
+	if src.Link(sink.GetStaticPad("sink")) != gst.PadLinkOK {
+		return fail()
+	}
+	applyAudioSink(sink)
+	sink.SyncStateWithParent()
+	p.Remove(fake)
+	fake.SetState(gst.StateNull)
+	if v, _ := p.GetElementByName("warm-vf-tail"); v == nil {
+		p.SeekSimple(0, gst.FormatTime, gst.SeekFlagFlush)
+	}
+	return true, true
+}
+
+// linkExtraStream drains a secondary audio/video stream into a fakesink.
+// decodebin recreates pads after Stop -> Play, so an existing drain (named by
+// stream id) is relinked instead of rebuilt.
+func linkExtraStream(pipeline *gst.Pipeline, srcPad *gst.Pad, kind, streamID string) {
+	name := "extra-" + kind + "-" + streamID
+	if el, err := pipeline.GetElementByName(name); err == nil && el != nil {
+		srcPad.Link(el.GetStaticPad("sink"))
+		return
+	}
+	sink, err := gst.NewElement("fakesink")
+	if err != nil {
+		return
+	}
+	sink.Set("name", name)
+	// sync=true: the drained track keeps real time. Unsynced it ran as fast
+	// as the demuxer fed it, and the pipeline's position (the furthest sink)
+	// leapt ~20 s ahead on files with a second audio track — a jumping
+	// clock, a lying scrubber and early trim-out.
+	sink.Set("sync", true)
+	sink.Set("async", false)
+	pipeline.AddMany(sink)
+	sink.SyncStateWithParent()
+	srcPad.Link(sink.GetStaticPad("sink"))
+}
+
 func CurrentPlaying() string {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
@@ -831,6 +1045,14 @@ func IsPaused() bool {
 	return mgr.paused && mgr.pipeline != nil
 }
 
+// HeldAtEnd reports a clip parked on its last frame by hold (a still, or a
+// video with hold at end): IsPaused is true then too, but no operator paused.
+func HeldAtEnd() bool {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	return mgr.heldEnd && mgr.pipeline != nil
+}
+
 // Loop reports whether the active pipeline loops at end-of-stream. With no
 // pipeline loaded it reports the configured default so the settings/handlers
 // reflect what the next load will do.
@@ -845,12 +1067,27 @@ func Loop() bool {
 
 // SetLoop toggles loop-at-end for the currently loaded clip and persists it
 // as the default for future loads.
-func SetLoop(loop bool) {
+func SetLoop(loop bool) error {
 	mgr.mu.Lock()
 	mgr.loop = loop
 	mgr.mu.Unlock()
-	config.SetLoop(loop)
+	err := config.SetLoop(loop)
 	mgr.bump()
+	return err
+}
+
+// SetClipLoop toggles loop-at-end for the currently loaded clip only; the
+// persisted default is untouched (a deck's "play: loop:" is per playback).
+func SetClipLoop(loop bool) {
+	mgr.mu.Lock()
+	changed := mgr.pipeline != nil && mgr.loop != loop
+	if changed {
+		mgr.loop = loop
+	}
+	mgr.mu.Unlock()
+	if changed {
+		mgr.bump()
+	}
 }
 
 // Volume returns the active cue's playback gain in dB (0 = 0dB). With no
@@ -886,21 +1123,28 @@ func FadeAndStop(durMs int) {
 		Stop()
 		return
 	}
-	steps := 20
-	stepMs := time.Duration(durMs) * time.Millisecond / time.Duration(steps)
-	for i := 1; i <= steps; i++ {
-		time.Sleep(stepMs)
+	// Level from elapsed time: the fade takes exactly durMs however long
+	// each apply takes.
+	total := time.Duration(durMs) * time.Millisecond
+	start := time.Now()
+	for {
+		time.Sleep(fadeTick)
+		t := math.Min(1, float64(time.Since(start))/float64(total))
 		mgr.mu.Lock()
 		if mgr.pipeline != p || mgr.gen != gen || mgr.fadeSerial != serial {
 			mgr.mu.Unlock()
 			return
 		}
-		mgr.fadeLevel = startLevel * (1 - fadeShape(fadeCurve, float64(i)/float64(steps)))
+		mgr.fadeLevel = startLevel * (1 - fadeShape(fadeCurve, t))
 		mgr.applyGain()
-		if mgr.brightEl != nil {
-			mgr.brightEl.Set("brightness", mgr.fadeLevel-1)
-		}
+		mgr.applyBrightness()
 		mgr.mu.Unlock()
+		if t >= 1 {
+			break
+		}
+	}
+	if Layered() {
+		time.Sleep(2 * fadeTick) // the last alpha lands before the plane goes
 	}
 	mgr.clearIfCurrent(p)
 }
@@ -912,6 +1156,103 @@ func (m *manager) effectiveGain() float64 {
 	}
 	return dbToGain(dbClamp(m.volume+m.loudnessGain)) * m.fadeLevel
 }
+
+// applyBrightness drives the video fade level. A still is a single buffer
+// the sink has already shown, so a new brightness would never reach the
+// screen: re-render it. Caller holds mu.
+func (m *manager) applyBrightness() {
+	if kmsWall() != nil {
+		// Plane alpha over the black primary: a true fade (colours scale,
+		// never shift), no re-render, applied at the next vblank.
+		setLayerLevel(m.pipeline, m.fadeLevel)
+		return
+	}
+	if m.brightEl == nil {
+		return
+	}
+	if !m.still {
+		if !m.brightBusy {
+			m.brightBusy = true
+			go m.brightWorker()
+		}
+		return
+	}
+	m.brightEl.Set("brightness", m.fadeLevel-1)
+	if m.pipeline == nil {
+		return
+	}
+	m.stillDirty = true
+	if m.stillBusy {
+		return
+	}
+	m.stillBusy = true
+	go m.rerenderStill(m.pipeline)
+}
+
+// brightWorker applies the latest fade level to the video branch off the fade
+// clock. Setting videobalance's brightness blocks on the element's stream lock
+// for as long as a frame is being pushed downstream (hundreds of ms on a 1080p
+// clip running ahead of the sink), and doing it inline under mu stretched a
+// 500ms ESC fade to ~2s and stalled every status reader behind it. The audio
+// ramp and the fade deadline stay on time; video follows as fast as frames flow.
+func (m *manager) brightWorker() {
+	var lastEl *gst.Element
+	var last float64
+	for {
+		m.mu.Lock()
+		el, v := m.brightEl, m.fadeLevel-1
+		if el == nil || (el == lastEl && v == last) {
+			m.brightBusy = false
+			m.mu.Unlock()
+			return
+		}
+		m.mu.Unlock()
+		el.Set("brightness", v)
+		lastEl, last = el, v
+	}
+}
+
+// rerenderStill flush-seeks a still back to its only frame whenever the fade
+// level changed, paced by how fast the frame decodes. The seek makes the
+// source emit its frame (and an EOS) again; stillBusy keeps that echo from
+// counting as the cue ending a second time.
+func (m *manager) rerenderStill(p *gst.Pipeline) {
+	for {
+		m.mu.Lock()
+		if !m.stillDirty || m.pipeline != p {
+			m.stillDirty = false
+			m.mu.Unlock()
+			time.Sleep(150 * time.Millisecond) // let the last echo EOS land
+			m.mu.Lock()
+			if !m.stillDirty || m.pipeline != p {
+				m.stillBusy = false
+				m.mu.Unlock()
+				return
+			}
+		}
+		m.stillDirty = false
+		m.mu.Unlock()
+		p.SeekSimple(0, gst.FormatTime, gst.SeekFlagFlush|gst.SeekFlagAccurate)
+		// Wait for the sink to preroll the frame: a new flush before the
+		// decode finishes cancels it, and a ramp faster than the decode
+		// time would show nothing until the last step.
+		p.GetState(gst.StateNull, gst.ClockTime(time.Second))
+	}
+}
+
+// isStillFile reports whether name is a single-frame image.
+func isStillFile(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		return true
+	}
+	return false
+}
+
+// IsStill reports whether filename is a single-frame image. Direct playback
+// (no cue) holds such an image on the wall until Stop/Panic instead of
+// tearing it down on its first frame.
+func IsStill(filename string) bool { return isStillFile(filename) }
 
 func (m *manager) applyGain() {
 	if m.volumeEl != nil {
@@ -962,14 +1303,14 @@ func fadeIn(p *gst.Pipeline, gen uint64) {
 			mgr.mu.Unlock()
 			return
 		}
-		if state == gst.StatePlaying {
+		// A still ends (and holds, paused) the moment its one frame is
+		// out, so its fade clock cannot wait for PLAYING.
+		if state == gst.StatePlaying || mgr.still {
 			elapsed += delta
 		}
 		mgr.fadeLevel = fadeShape(mgr.fadeCurve, math.Min(1, float64(elapsed)/float64(duration)))
 		mgr.applyGain()
-		if mgr.brightEl != nil {
-			mgr.brightEl.Set("brightness", mgr.fadeLevel-1)
-		}
+		mgr.applyBrightness()
 		done := mgr.fadeLevel == 1
 		mgr.mu.Unlock()
 		if done {
@@ -1127,7 +1468,7 @@ func (m *manager) handleEnd(p *gst.Pipeline) bool {
 		if restart {
 			m.mu.Unlock()
 			seekAtRate(p, inPoint)
-			p.SetState(gst.StatePlaying)
+			setStateIfCurrent(p, gst.StatePlaying)
 			m.mu.Lock()
 			m.paused = false
 			m.mu.Unlock()
@@ -1138,9 +1479,10 @@ func (m *manager) handleEnd(p *gst.Pipeline) bool {
 	m.mu.Unlock()
 
 	if hold {
-		p.SetState(gst.StatePaused)
+		setStateIfCurrent(p, gst.StatePaused)
 		m.mu.Lock()
 		m.paused = true
+		m.heldEnd = true
 		m.mu.Unlock()
 		m.bump()
 	} else {
@@ -1174,7 +1516,7 @@ func loopSteps(remaining int) (restart bool, next int) {
 // end-of-stream (freezing the last frame or tearing down, per the hold
 // policy) and errors (always torn down). When an out-point is set, a
 // background goroutine polls the position and ends the clip there.
-func watchAndPlay(p *gst.Pipeline) {
+func watchAndPlay(p *gst.Pipeline) error {
 	p.GetPipelineBus().AddWatch(func(msg *gst.Message) bool {
 		// Identity precheck: if this pipeline was retired (replaced/stopped),
 		// unregister the watch by returning false. Without this the closure
@@ -1190,6 +1532,15 @@ func watchAndPlay(p *gst.Pipeline) {
 		}
 		switch msg.Type() {
 		case gst.MessageEOS:
+			mgr.mu.Lock()
+			echo := mgr.stillBusy && mgr.stillEnded && mgr.pipeline == p
+			if mgr.pipeline == p {
+				mgr.stillEnded = true
+			}
+			mgr.mu.Unlock()
+			if echo {
+				return true
+			}
 			mgr.handleEnd(p)
 			mgr.mu.Lock()
 			current := mgr.pipeline == p
@@ -1204,14 +1555,23 @@ func watchAndPlay(p *gst.Pipeline) {
 		}
 		return true
 	})
-	startPlayback(p)
+	return startPlayback(p)
 }
 
-func startPlayback(p *gst.Pipeline) {
+// prerollTimeout bounds the PAUSED preroll before a clip starts. Large 4K
+// files on SD/USB storage can take several seconds to preroll on a Pi, so
+// the budget is generous; exceeding it fails the load with an error the
+// caller surfaces (cue result, HTTP error) instead of dying silently.
+var prerollTimeout = 15 * time.Second
+
+// startPlayback prerolls p, applies the trim/rate seek and starts it. A nil
+// error with nothing started means p was superseded meanwhile (not a
+// failure: a newer decision owns the output).
+func startPlayback(p *gst.Pipeline) error {
 	mgr.mu.Lock()
 	if mgr.pipeline != p {
 		mgr.mu.Unlock()
-		return
+		return nil
 	}
 	gen := mgr.gen
 	mgr.starting = true
@@ -1221,24 +1581,27 @@ func startPlayback(p *gst.Pipeline) {
 	}
 	mgr.fadeSerial++
 	mgr.applyGain()
-	if mgr.brightEl != nil {
-		mgr.brightEl.Set("brightness", mgr.fadeLevel-1)
-	}
+	mgr.applyBrightness()
 	mgr.mu.Unlock()
 	// Preroll before seeking: no initial audio/frame leaks before the trim or
 	// rate is applied, and slow decoders need no guessed sleep duration.
 	p.SetState(gst.StatePaused)
-	result, _ := p.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
+	result, _ := p.GetState(gst.StateNull, gst.ClockTime(prerollTimeout))
 	mgr.mu.Lock()
 	current := mgr.pipeline == p && mgr.gen == gen
 	inPoint, rate, outPoint := mgr.inPoint, mgr.rate, mgr.outPoint
 	mgr.mu.Unlock()
 	if !current {
-		return
+		return nil
 	}
 	if result == gst.StateChangeFailure || result == gst.StateChangeAsync {
 		mgr.clearIfCurrent(p)
-		return
+		reason := "preroll failed"
+		if result == gst.StateChangeAsync {
+			reason = fmt.Sprintf("preroll did not finish within %v", prerollTimeout)
+		}
+		logs.Printf(logs.GSPPipeStopped, "gsp: %s", reason)
+		return errors.New("gsp: " + reason)
 	}
 	if inPoint > 0 || rate != 1 {
 		seekAtRate(p, inPoint)
@@ -1246,15 +1609,27 @@ func startPlayback(p *gst.Pipeline) {
 	mgr.mu.Lock()
 	if mgr.pipeline != p || mgr.gen != gen {
 		mgr.mu.Unlock()
-		return
+		return nil
 	}
 	mgr.starting = false
+	level := mgr.fadeLevel
 	mgr.mu.Unlock()
-	p.SetState(gst.StatePlaying)
+	// Prerolled: put the layer on screen, under anything fading out, and
+	// only now let the cues above it start fading away.
+	showLayer(p, level)
+	incomingShown(p)
+	if err := setStateIfCurrent(p, gst.StatePlaying); err != nil {
+		if errors.Is(err, errPipelineReplaced) {
+			return nil // superseded while starting; the newer decision owns output
+		}
+		mgr.clearIfCurrent(p)
+		return fmt.Errorf("gsp: starting playback: %w", err)
+	}
 	go fadeIn(p, gen)
 	if outPoint > 0 {
 		go watchTrim(p)
 	}
+	return nil
 }
 
 // retirePipeline tears down a pipeline that is no longer (or about to stop
@@ -1264,6 +1639,8 @@ func startPlayback(p *gst.Pipeline) {
 // would otherwise leak on every cue swap for the lifetime of the process.
 func retirePipeline(p *gst.Pipeline) {
 	p.SetState(gst.StateNull)
+	dropLayer(p)
+	incomingShown(p)
 	p.GetPipelineBus().Post(gst.NewApplicationMessage(p, gst.NewStructure("retire")))
 }
 
@@ -1300,6 +1677,8 @@ type pipelineSpec struct {
 	// warm-slot build may not display anything or its first frame would
 	// colour over the live cue (see Warm). Activation relinks the wall.
 	warmSink bool
+	opts     LoadOpts // the cue's playback options (geometry, rotation, …)
+	overlay  bool     // test pattern: print the display mode on it
 }
 
 // rotationMethod maps cue rotation degrees to a videoflip method.
@@ -1339,12 +1718,57 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	}
 
 	var src *gst.Element
+	var srcChain []*gst.Element // test patterns: sized to the display, optional mode label
 	if spec.isTest {
 		src, err = gst.NewElement("videotestsrc")
 		if err != nil {
 			return nil, err
 		}
-		src.Set("pattern", spec.testPattern)
+		// Enum property: SetArg parses the nick ("red", "checkers-1"); Set with
+		// a Go string is a type mismatch GObject ignores (every pattern then
+		// stayed the default SMPTE bars).
+		src.SetArg("pattern", spec.testPattern)
+		dw, dh, hz := DisplayMode()
+		if dw <= 0 || dh <= 0 {
+			dw, dh = 1920, 1080
+		}
+		rate := testPatternRate(spec.testPattern, hz)
+		caps, err := gst.NewElement("capsfilter")
+		if err != nil {
+			return nil, err
+		}
+		gw, gh := dw, dh
+		if spec.testPattern == "snow" {
+			// Random noise needs no native resolution; the display layer
+			// scales it up for free (1080p noise at 30 fps pins a core).
+			gw, gh = dw/3&^1, dh/3&^1
+		}
+		caps.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=I420,width=%d,height=%d,framerate=%d/1,pixel-aspect-ratio=1/1", gw, gh, rate)))
+		srcChain = append(srcChain, caps)
+		if spec.overlay {
+			txt, err := gst.NewElement("textoverlay")
+			if err != nil {
+				return nil, err
+			}
+			label := fmt.Sprintf("%d × %d", dw, dh)
+			if hz > 0 {
+				label += fmt.Sprintf(" @ %d Hz", hz)
+			}
+			txt.Set("text", label)
+			txt.Set("font-desc", "Sans Bold 40")
+			txt.SetArg("valignment", "top")
+			txt.SetArg("halignment", "left")
+			txt.Set("shaded-background", true)
+			// Plain raw video after the overlay: textoverlay then blends the
+			// text itself instead of offering an overlay-composition caps
+			// feature that the decodebin -> wall chain cannot link.
+			plain, err := gst.NewElement("capsfilter")
+			if err != nil {
+				return nil, err
+			}
+			plain.Set("caps", gst.NewCapsFromString("video/x-raw"))
+			srcChain = append(srcChain, txt, plain)
+		}
 	} else {
 		src, err = gst.NewElement("filesrc")
 		if err != nil {
@@ -1359,12 +1783,14 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		return nil, err
 	}
 
-	pipeline.AddMany(src, decodebin)
-	src.Link(decodebin)
+	pipeline.AddMany(append(append([]*gst.Element{src}, srcChain...), decodebin)...)
+	gst.ElementLinkMany(append(append([]*gst.Element{src}, srcChain...), decodebin)...)
 
 	// Connect to decodebin's pad-added signal, emitted whenever it finds a
 	// stream from the input and a way to decode it to raw format. decodebin
 	// adds a src-pad for the raw stream, which we link into a playback tail.
+	var primaryMu sync.Mutex
+	primary := map[string]string{}
 	decodebin.Connect("pad-added", func(self *gst.Element, srcPad *gst.Pad) {
 		var isAudio, isVideo bool
 		caps := srcPad.GetCurrentCaps()
@@ -1387,6 +1813,27 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			return
 		}
 
+		// Only the first audio and the first video stream get a real output
+		// chain. A file with several audio tracks (dual-language mp4, mp3 plus
+		// AC3) would otherwise build a second sink per stream: two sinks on one
+		// device fail to preroll and the whole cue never starts. Extra streams
+		// are drained into a fakesink so decodebin still sees every pad linked.
+		kind := "video"
+		if isAudio {
+			kind = "audio"
+		}
+		streamID := srcPad.GetStreamID()
+		primaryMu.Lock()
+		if primary[kind] == "" {
+			primary[kind] = streamID
+		}
+		isPrimary := primary[kind] == streamID
+		primaryMu.Unlock()
+		if !isPrimary {
+			linkExtraStream(pipeline, srcPad, kind, streamID)
+			return
+		}
+
 		var elementNames []string
 		queueName := "video-queue"
 		if isAudio {
@@ -1399,7 +1846,18 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			if audio := config.Audio(); !spec.isTest && !spec.warmSink && audio.Device != "" {
 				sink = "alsasink"
 			}
+			if spec.warmSink {
+				// Warm-slot audio prerolls into a fakesink: the real device
+				// is only opened at activation (warmWireAudio), so the slot
+				// can never hold a hw device the live cue owns, and the cue
+				// lands on the configured device/rate/channels like a cold
+				// load does.
+				sink = "fakesink"
+			}
 			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", sink}
+		} else if kmsWall() != nil {
+			// KMS wall: own display plane, hardware scaling/blending.
+			elementNames = kmsVideoTail(!spec.isTest && dmaBufUpstream(srcPad), spec.opts)
 		} else {
 			// Two videoflip stages (rotate, then mirror) so a cue can
 			// combine e.g. 90° with a horizontal mirror; method=none
@@ -1458,7 +1916,21 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 				setResolutionCaps(elements[i])
 			}
 		}
-		if spec.warmSink {
+		if isVideo && kmsWall() != nil {
+			fw, fh := capsSize(caps)
+			if err := configureKMSTail(pipeline, byFactory, spec.opts, fw, fh); err != nil {
+				msg := gst.NewErrorMessage(self, gst.NewGError(3, err), "no display layer", nil)
+				pipeline.GetPipelineBus().Post(msg)
+				return
+			}
+		}
+		if spec.warmSink && isAudio {
+			last := len(elements) - 1
+			elements[last-1].Set("name", "warm-af-tail")
+			elements[last].Set("name", "warm-audio-sink")
+			elements[last].Set("sync", false)
+		}
+		if spec.warmSink && isVideo {
 			if i := indexOfName(elementNames, "fakesink"); i > 0 {
 				// Relink anchors for install-time: whatever feeds the fake
 				// sink is the output edge (post-flip converter, or the
@@ -1501,7 +1973,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		// optional stages (the v4l2convert download, the wall-resolution
 		// capsfilter) shift indices, and positional wiring silently aimed
 		// every setting at the wrong element on hardware-decoded pipelines.
-		if isVideo {
+		if isVideo && kmsWall() == nil {
 			mgr.mu.Lock()
 			if mgr.pipeline == pipeline {
 				if el := firstByFactory(byFactory, "videobalance"); el != nil {
@@ -1519,10 +1991,10 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 				}
 				flips := byFactory["videoflip"]
 				if len(flips) > 0 {
-					flips[0].Set("method", rotationMethod(mgr.rotation))
+					flips[0].SetArg("method", rotationMethod(mgr.rotation))
 				}
 				if len(flips) > 1 {
-					flips[1].Set("method", flipMethod(mgr.flip))
+					flips[1].SetArg("method", flipMethod(mgr.flip))
 				}
 			}
 			mgr.mu.Unlock()

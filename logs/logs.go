@@ -210,33 +210,34 @@ const (
 
 // RTE - HTTP route actions (routes/api.go).
 const (
-	RTEPlay       = "RTE-E200" // POST /api/play
-	RTEPlayAlias  = "RTE-E201" // POST /api/cue/play (spacebar)
-	RTEPause      = "RTE-E202" // POST /api/pause
-	RTEToggle     = "RTE-E203" // POST /api/togglePause
-	RTEFadeOut    = "RTE-E204" // POST /api/fadeOut
-	RTEPanic      = "RTE-E205" // POST /api/panic
-	RTEClear      = "RTE-E206" // POST /api/clear (clear cuesheet)
-	RTEStop       = "RTE-E209" // POST /api/stop
-	RTETest       = "RTE-E210" // POST /api/test/*pattern
-	RTEDirect     = "RTE-E211" // POST /api/play/:filename (direct play)
-	RTELoad       = "RTE-E212" // POST /api/load/:filename
-	RTEAddCue     = "RTE-E213" // POST /api/cue/add
-	RTEDelete     = "RTE-E214" // DELETE /api/media/:filename
-	RTEDeleteBusy = "RTE-E215" // cannot delete currently playing file
-	RTECueNext    = "RTE-E216" // POST /api/cue/next
-	RTECuePrev    = "RTE-E217" // POST /api/cue/prev
-	RTECuePlay    = "RTE-E218" // POST /api/cue/:cuePos/play
-	RTEUp         = "RTE-E219" // POST /api/cue/:cuePos/move/up
-	RTEDown       = "RTE-E220" // POST /api/cue/:cuePos/move/down
-	RTEUse        = "RTE-E221" // POST /api/cue/:cuePos (selected)
-	RTEEdit       = "RTE-E222" // POST /api/cue/:cuePos/edit/:col
-	RTEUpdate     = "RTE-E223" // PUT /api/cue/:cuePos/edit/:col
-	RTERemove     = "RTE-E224" // DELETE /api/cue/:cuePos
-	RTERestart    = "RTE-E225" // POST /api/restart
-	RTEShutdown   = "RTE-E226" // POST /api/shutdown
-	RTEDeck       = "RTE-E227" // remote control action (HyperDeck/QLab)
-	RTEDeckErr    = "RTE-E228" // remote control error
+	RTEPlay        = "RTE-E200" // POST /api/play
+	RTEPlayAlias   = "RTE-E201" // POST /api/cue/play (spacebar)
+	RTEPause       = "RTE-E202" // POST /api/pause
+	RTEToggle      = "RTE-E203" // POST /api/togglePause
+	RTEFadeOut     = "RTE-E204" // POST /api/fadeOut
+	RTEPanic       = "RTE-E205" // POST /api/panic
+	RTEClear       = "RTE-E206" // POST /api/clear (clear cuesheet)
+	RTEStop        = "RTE-E209" // POST /api/stop
+	RTETest        = "RTE-E210" // POST /api/test/*pattern
+	RTEDirect      = "RTE-E211" // POST /api/play/:filename (direct play)
+	RTELoad        = "RTE-E212" // POST /api/load/:filename
+	RTEAddCue      = "RTE-E213" // POST /api/cue/add
+	RTEDelete      = "RTE-E214" // DELETE /api/media/:filename
+	RTEDeleteBusy  = "RTE-E215" // cannot delete currently playing file
+	RTECueNext     = "RTE-E216" // POST /api/cue/next
+	RTECuePrev     = "RTE-E217" // POST /api/cue/prev
+	RTECuePlay     = "RTE-E218" // POST /api/cue/:cuePos/play
+	RTEUp          = "RTE-E219" // POST /api/cue/:cuePos/move/up
+	RTEDown        = "RTE-E220" // POST /api/cue/:cuePos/move/down
+	RTEUse         = "RTE-E221" // POST /api/cue/:cuePos (selected)
+	RTEEdit        = "RTE-E222" // POST /api/cue/:cuePos/edit/:col
+	RTEUpdate      = "RTE-E223" // PUT /api/cue/:cuePos/edit/:col
+	RTERemove      = "RTE-E224" // DELETE /api/cue/:cuePos
+	RTERestart     = "RTE-E225" // POST /api/restart
+	RTEShutdown    = "RTE-E226" // POST /api/shutdown
+	RTEDeck        = "RTE-E227" // remote control action (HyperDeck/QLab)
+	RTEDeckErr     = "RTE-E228" // remote control error
+	RTEHostRefused = "RTE-E229" // request Host not in the DNS-rebinding allow-list
 )
 
 // NET - network startup info (network.go).
