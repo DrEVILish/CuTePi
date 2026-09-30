@@ -292,7 +292,7 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/seek", func(c *gin.Context) {
 		seconds, err := strconv.ParseFloat(c.PostForm("position"), 64)
 		if err != nil || math.IsNaN(seconds) {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "position must be a number of seconds"})
+			respondError(c, http.StatusBadRequest, "position must be a number of seconds")
 			return
 		}
 		gsp.Seek(seconds)
@@ -305,7 +305,7 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/volume", func(c *gin.Context) {
 		v, err := strconv.ParseFloat(c.PostForm("volume"), 64)
 		if err != nil || math.IsNaN(v) {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "volume must be a number"})
+			respondError(c, http.StatusBadRequest, "volume must be a number")
 			return
 		}
 		applied := gsp.SetVolume(v)
@@ -346,9 +346,7 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/panic", func(c *gin.Context) {
 		logs.Printf(logs.RTEPanic, "!!PANIC!!")
 		if err := remotePanic(); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.Status(http.StatusOK)
@@ -357,9 +355,7 @@ func Api(rg *gin.RouterGroup) {
 		logs.Printf(logs.RTEClear, "Clear CueSheet")
 		err := ctp.ClearCueSheet()
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -413,7 +409,7 @@ func Api(rg *gin.RouterGroup) {
 			pattern = lastTestPattern
 			if err := gsp.ShowTest(pattern); err != nil {
 				logs.Printf(logs.RTETest, "show test failed pattern=%q error=%v", pattern, err)
-				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+				respondError(c, http.StatusInternalServerError, err.Error())
 				return
 			}
 			logs.Printf(logs.RTETest, "Show test pattern=%q", pattern)
@@ -434,7 +430,7 @@ func Api(rg *gin.RouterGroup) {
 		lastTestPattern = pattern
 		if err := gsp.ShowTest(pattern); err != nil {
 			logs.Printf(logs.RTETest, "show test failed pattern=%q error=%v", pattern, err)
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		logs.Printf(logs.RTETest, "Show test pattern=%q", pattern)
@@ -508,7 +504,7 @@ func Api(rg *gin.RouterGroup) {
 		}
 		if err := gsp.LoadWithOpts(filename, gsp.LoadOpts{Loop: config.Loop(), LoudnessGain: gain, Hold: gsp.IsStill(filename)}); err != nil {
 			logs.Printf(logs.RTEDirect, "direct play failed filename=%q error=%v", filename, err)
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		gsp.Play()
@@ -531,9 +527,7 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		if err := gsp.LoadWithOpts(filename, gsp.LoadOpts{Loop: config.Loop(), LoudnessGain: gain, Hold: gsp.IsStill(filename)}); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.Status(http.StatusOK)
@@ -555,9 +549,7 @@ func Api(rg *gin.RouterGroup) {
 		}
 		if err != nil {
 			logs.Printf(logs.RTEAddCue, "add cue failed filename=%q position=%q error=%v", filename, cuePos, err)
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -580,9 +572,7 @@ func Api(rg *gin.RouterGroup) {
 		}
 		err := ctp.Delete(filename)
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// The pool row is gone either way; a file that can't be removed is
@@ -602,9 +592,7 @@ func Api(rg *gin.RouterGroup) {
 		// leave a stale tile.
 		mediapool, err := mediapoolView()
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.HTML(http.StatusOK, "mediapool.html", gin.H{
@@ -617,9 +605,7 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/media/:filename/refreshThumbnail", func(c *gin.Context) {
 		filename := c.Param("filename")
 		if err := ctp.RequestThumbnailRefresh(filename); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.Status(http.StatusOK)
@@ -630,9 +616,7 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/media/:filename/analyse", func(c *gin.Context) {
 		filename := c.Param("filename")
 		if err := ctp.RequestWaveformAnalysis(filename); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.Status(http.StatusOK)
@@ -662,9 +646,7 @@ func Api(rg *gin.RouterGroup) {
 		peaks, err := media.GeneratePeaksWindow(src, from, to, bins)
 		if err != nil {
 			logs.PrintfWarn("WAVE", "window %v-%v of %s: %v", from, to, filename, err)
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.JSON(http.StatusOK, peaks)
@@ -713,7 +695,7 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/cue/selectall", func(c *gin.Context) {
 		units, err := ctp.SelectUnits()
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// Ids: +cuePos for cues, -groupID for headers (same as the persisted set).
@@ -741,7 +723,7 @@ func Api(rg *gin.RouterGroup) {
 			anchor, set = set[0], set[1:]
 		}
 		if err := ctp.SetGroupSelection(anchor, set); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -760,14 +742,14 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		if err := ctp.BulkEdit(body.Op, body.Value, body.Positions); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// Deleting whole groups (§5.4): folder, subgroups and every member
 		// cue. Runs after the cue op so one request covers a mixed set.
 		for _, gid := range body.Groups {
 			if err := ctp.DeleteGroupWithCues(gid); err != nil {
-				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+				respondError(c, http.StatusInternalServerError, err.Error())
 				return
 			}
 		}
@@ -785,7 +767,7 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		if _, err := ctp.BulkGroupNewAt(body.Positions, body.At); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -812,7 +794,7 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		if err := ctp.SheetDrop(body.Cues, intOrZero(body.Group), body.BeforeKind, body.BeforeID, body.Join, body.ForceTop, body.JoinFirst, body.Parent, body.After); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -841,7 +823,7 @@ func Api(rg *gin.RouterGroup) {
 	// Sort the sheet by cue number (§12.5), group blocks kept together.
 	rg.POST("/cue/sort", func(c *gin.Context) {
 		if err := ctp.SortSheetByCueNumber(); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -850,7 +832,7 @@ func Api(rg *gin.RouterGroup) {
 	// §12.5) — explicit operator action, rewrites hand-set numbers.
 	rg.POST("/cue/renumber", func(c *gin.Context) {
 		if err := ctp.RenumberSheet(); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -973,13 +955,13 @@ func Api(rg *gin.RouterGroup) {
 			RemoteOSCBind        string `json:"remoteOscBind" form:"remoteOscBind"`
 		}
 		if err := c.ShouldBind(&body); err != nil {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		if raw := strings.TrimSpace(body.EscFade); raw != "" {
 			ms, err := ctp.ParseTime(raw)
 			if err != nil {
-				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "ESC fade-out time: " + err.Error()})
+				respondError(c, http.StatusBadRequest, "ESC fade-out time: "+err.Error())
 				return
 			}
 			body.EscFadeMs = &ms
@@ -1038,7 +1020,7 @@ func Api(rg *gin.RouterGroup) {
 			_, verr = config.ValidateRemote(remote)
 		}
 		if verr != nil {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": verr.Error()})
+			respondError(c, http.StatusBadRequest, verr.Error())
 			return
 		}
 
@@ -1048,7 +1030,7 @@ func Api(rg *gin.RouterGroup) {
 			if err == nil {
 				return false
 			}
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": "saving settings: " + err.Error()})
+			respondError(c, http.StatusInternalServerError, "saving settings: "+err.Error())
 			return true
 		}
 		portChanged := body.Port > 0 && body.Port != config.Port()
@@ -1121,7 +1103,7 @@ func Api(rg *gin.RouterGroup) {
 		logs.Printf(logs.RTERestart, "Server restart requested")
 		if err := restartServer(300 * time.Millisecond); err != nil {
 			logs.Printf(logs.RTERestart, "restart failed: %v", err)
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.Status(http.StatusOK)
@@ -1141,9 +1123,7 @@ func Api(rg *gin.RouterGroup) {
 			err = ctp.SelectStep(1)
 		}
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		awardsSelectionSync()
@@ -1158,9 +1138,7 @@ func Api(rg *gin.RouterGroup) {
 			err = ctp.SelectStep(-1)
 		}
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		awardsSelectionSync()
@@ -1175,9 +1153,7 @@ func Api(rg *gin.RouterGroup) {
 		cuePos := c.Param("cuePos")
 		logs.Printf(logs.RTECuePlay, "Play Cue%s", cuePos)
 		if err := FireCue(cuePos); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.Status(http.StatusOK)
@@ -1190,9 +1166,7 @@ func Api(rg *gin.RouterGroup) {
 	// transports; only the render is HTTP-specific.
 	rg.POST("/cue/selected/play", func(c *gin.Context) {
 		if err := FireSelected(); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// The body is the cuesheet partial: the GO button swaps it (live
@@ -1240,9 +1214,7 @@ func Api(rg *gin.RouterGroup) {
 			case outErr != nil:
 				msg = fmt.Sprintf("invalid trim Out %q (use hh:mm:ss.mmm)", out)
 			}
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{
-				"error": msg,
-			})
+			respondError(c, http.StatusBadRequest, msg)
 			return
 		}
 		loop := c.PostForm("loop") != ""
@@ -1311,12 +1283,12 @@ func Api(rg *gin.RouterGroup) {
 					}
 				}
 				if mask == 0 {
-					c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "pick at least one schedule day"})
+					respondError(c, http.StatusBadRequest, "pick at least one schedule day")
 					return
 				}
 				hh, mm, ss, terr := splitHhMmSs(strings.TrimSpace(c.PostForm("schedule_time")))
 				if terr != nil {
-					c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "invalid schedule time: " + terr.Error()})
+					respondError(c, http.StatusBadRequest, "invalid schedule time: "+terr.Error())
 					return
 				}
 				fields["schedule_enabled"] = "1"
@@ -1325,14 +1297,12 @@ func Api(rg *gin.RouterGroup) {
 			}
 		}
 		if err := ctp.UpdateCueFields(cuePos, fields); err != nil {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		cue, err := ctp.GetCue(cuePos)
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if gsp.CurrentCuePos() == cue.CuePos {
@@ -1359,11 +1329,11 @@ func Api(rg *gin.RouterGroup) {
 		cuePos := c.Param("cuePos")
 		filename := strings.TrimSpace(c.PostForm("filename"))
 		if filename == "" {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "a replacement media file is required"})
+			respondError(c, http.StatusBadRequest, "a replacement media file is required")
 			return
 		}
 		if err := ctp.ReplaceCueMedia(cuePos, filename); err != nil {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		c.HTML(http.StatusOK, "cueinspector.html", inspectorData())
@@ -1378,9 +1348,7 @@ func Api(rg *gin.RouterGroup) {
 		logs.Printf(logs.RTEUp, "Move Cue Up%s", cuePos)
 		err := ctp.MoveSheetCue(mustInt(cuePos), -1)
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -1392,9 +1360,7 @@ func Api(rg *gin.RouterGroup) {
 		logs.Printf(logs.RTEDown, "Move Cue Down%s", cuePos)
 		err := ctp.MoveSheetCue(mustInt(cuePos), 1)
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -1441,9 +1407,7 @@ func Api(rg *gin.RouterGroup) {
 		}
 		err := ctp.SetCue(cuePos)
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		awardsSelectionSync()
@@ -1456,16 +1420,12 @@ func Api(rg *gin.RouterGroup) {
 		logs.Printf(logs.RTEEdit, "Edit%s of CueNo%s", col, cuePos)
 		cue, err := ctp.GetCue(cuePos)
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		val, err := ctp.CueColumnValue(cue, col)
 		if err != nil {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		validate := ""
@@ -1497,9 +1457,7 @@ func Api(rg *gin.RouterGroup) {
 			if errors.Is(err, ctp.ErrInvalidTimeFormat) {
 				status = http.StatusBadRequest
 			}
-			c.HTML(status, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, status, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -1510,9 +1468,7 @@ func Api(rg *gin.RouterGroup) {
 		err := ctp.RemoveCue(cuePos)
 		if err != nil {
 			logs.Printf(logs.RTERemove, "remove cue failed position=%q error=%v", cuePos, err)
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// Re-render the cuesheet so the deleted cue is removed from the DOM.
@@ -1541,7 +1497,7 @@ func Api(rg *gin.RouterGroup) {
 		// validation, which only applies to enabling.
 		if !body.Enabled {
 			if err := ctp.SetCueSchedule(cuePos, false, 1, 0); err != nil {
-				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+				respondError(c, http.StatusInternalServerError, err.Error())
 				return
 			}
 			c.HTML(http.StatusOK, "cueinspector.html", inspectorData())
@@ -1557,7 +1513,7 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		if err := ctp.SetCueSchedule(cuePos, body.Enabled, body.Day, hh*3600+mm*60+ss); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.HTML(http.StatusOK, "cueinspector.html", inspectorData())

@@ -156,9 +156,12 @@ form.addEventListener("submit", async (e) => {
         const j = JSON.parse(xhr.responseText);
         if (j && j.error) reason = j.error;
       } catch (err) { /* not JSON */ }
+      // htmx requests get the reason as plain text; a full error.html page
+      // (non-htmx fallback) keeps it in its <pre>.
+      const body = (xhr.responseText || "").trim();
+      if (!reason && !body.startsWith("<")) reason = body.replace(/\s+/g, " ").slice(0, 300);
       if (!reason) try {
-        // error.html is a full page; the message lives in its <pre>.
-        const doc = new DOMParser().parseFromString(xhr.responseText || "", "text/html");
+        const doc = new DOMParser().parseFromString(body, "text/html");
         reason = (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim().slice(0, 300);
       } catch (err) { /* status alone still shows */ }
       setUploaderFeedback("Upload failed (" + xhr.status + ")" + (reason ? ": " + reason : ""), "text-danger");

@@ -46,7 +46,7 @@ func Show(rg *gin.RouterGroup) {
 	rg.GET("/show/export", func(c *gin.Context) {
 		cues, selected, err := ctp.ExportCues()
 		if err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 		if len(cues) == 0 {
@@ -55,7 +55,7 @@ func Show(rg *gin.RouterGroup) {
 		}
 		groups, err := ctp.ExportGroups()
 		if err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 
@@ -76,7 +76,7 @@ func Show(rg *gin.RouterGroup) {
 		}); err != nil {
 			logs.PrintfWarn("EXPORT", "show export failed: %v", err)
 			if !c.Writer.Written() {
-				c.String(http.StatusInternalServerError, err.Error())
+				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 				return
 			}
 			// Mid-stream: the 200 and part of the zip are already out, so an
@@ -101,7 +101,7 @@ func Show(rg *gin.RouterGroup) {
 		}
 		src, err := fh.Open()
 		if err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 		defer src.Close()
@@ -111,24 +111,24 @@ func Show(rg *gin.RouterGroup) {
 		// never occupies RAM on the Pi. Spooled under the data dir's tmp/,
 		// not /tmp, which is a RAM-backed tmpfs on current Raspberry Pi OS.
 		if err := os.MkdirAll(config.TmpDir(), 0o755); err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 		tmpZip, err := os.CreateTemp(config.TmpDir(), "show-*.ctp")
 		if err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 		zipPath := tmpZip.Name()
 		if _, err := io.Copy(tmpZip, src); err != nil {
 			tmpZip.Close()
 			os.Remove(zipPath)
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 		if err := tmpZip.Close(); err != nil {
 			os.Remove(zipPath)
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 		defer os.Remove(zipPath)
@@ -139,7 +139,7 @@ func Show(rg *gin.RouterGroup) {
 			if errors.Is(err, errShowTooLarge) {
 				status = http.StatusInsufficientStorage
 			}
-			c.String(status, "invalid .CTP file: "+err.Error())
+			c.String(status, "%s", redactPaths("invalid .CTP file: "+err.Error()))
 			return
 		}
 		defer removeMediaTemps(mediaFiles)
@@ -153,7 +153,7 @@ func Show(rg *gin.RouterGroup) {
 		// source must not leave a half-imported sheet.
 		registered, err := registeredFilenames(manifest.Cues)
 		if err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 		for _, cue := range manifest.Cues {
@@ -179,7 +179,7 @@ func Show(rg *gin.RouterGroup) {
 			}
 			delete(mediaFiles, cue.Filename) // importMedia owns (and cleans up) tmp now
 			if err := importMedia(cue.Filename, tmp); err != nil {
-				c.String(http.StatusUnprocessableEntity, fmt.Sprintf("imported media %q failed: %v", cue.Filename, err))
+				c.String(http.StatusUnprocessableEntity, "imported media %q failed: %v", cue.Filename, err)
 				return
 			}
 		}
@@ -191,7 +191,7 @@ func Show(rg *gin.RouterGroup) {
 		// behaviour.
 		idMap, err := ctp.ImportGroups(manifest.Groups)
 		if err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
+			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
 
@@ -199,7 +199,7 @@ func Show(rg *gin.RouterGroup) {
 		if mode == "append" {
 			if count, err := ctp.CueCount(); err != nil {
 				ctp.ImportGroupsRollback(idMap)
-				c.String(http.StatusInternalServerError, err.Error())
+				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 				return
 			} else {
 				appendedOffset = count
@@ -215,7 +215,7 @@ func Show(rg *gin.RouterGroup) {
 		if mode == "overwrite" {
 			if err := ctp.ClearCueSheet(); err != nil {
 				ctp.ImportGroupsRollback(idMap)
-				c.String(http.StatusInternalServerError, err.Error())
+				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 				return
 			}
 			appendedOffset = 0
@@ -233,7 +233,7 @@ func Show(rg *gin.RouterGroup) {
 				}
 				ctp.ImportGroupsRollback(idMap)
 				logs.Emit(logs.AuditEvent{Event: "import_failed", Pos: 0, Title: fmt.Sprintf("after %d cues: %v", inserted, err)})
-				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+				respondError(c, http.StatusInternalServerError, err.Error())
 				return
 			}
 			inserted++

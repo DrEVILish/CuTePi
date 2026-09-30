@@ -93,13 +93,13 @@ func freeMediaName(name string) string {
 func handleUpload(c *gin.Context) {
 	form, err := c.MultipartForm()
 	if err != nil {
-		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "invalid upload: " + err.Error()})
+		respondError(c, http.StatusBadRequest, "invalid upload: "+err.Error())
 		return
 	}
 
 	files := form.File["media"]
 	if len(files) == 0 {
-		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "no files uploaded"})
+		respondError(c, http.StatusBadRequest, "no files uploaded")
 		return
 	}
 
@@ -119,7 +119,7 @@ func handleUpload(c *gin.Context) {
 		}
 	case conflictReplace, conflictRename, conflictSkip:
 	default:
-		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "onConflict must be replace, rename or skip"})
+		respondError(c, http.StatusBadRequest, "onConflict must be replace, rename or skip")
 		return
 	}
 
@@ -153,9 +153,7 @@ func handleUpload(c *gin.Context) {
 		c.Header("X-Upload-Result", url.PathEscape(string(summary)))
 	}
 	if len(failures) > 0 {
-		c.HTML(http.StatusUnprocessableEntity, "error.html", gin.H{
-			"error": fmt.Sprintf("could not import %d of %d: %s", len(failures), len(files), strings.Join(failures, "; ")),
-		})
+		respondError(c, http.StatusUnprocessableEntity, fmt.Sprintf("could not import %d of %d: %s", len(failures), len(files), strings.Join(failures, "; ")))
 		return
 	}
 
@@ -165,7 +163,7 @@ func handleUpload(c *gin.Context) {
 	if c.GetHeader("HX-Request") != "" {
 		mediapool, err := mediapoolView()
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.HTML(http.StatusOK, "mediapool.html", gin.H{"Mediapool": mediapool})

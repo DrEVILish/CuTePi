@@ -22,14 +22,16 @@
     }
   }
 
-  // Server refusals are an error page (reason in its <pre>) or, for a name
-  // clash, JSON with an "error" field.
+  // Server refusals are plain text (htmx requests), an error page (reason in
+  // its <pre>) or, for a name clash, JSON with an "error" field.
   function uploadErrorText(status, text) {
     try {
       const j = JSON.parse(text);
       if (j && j.error) return j.error;
     } catch (err) { /* not JSON */ }
-    const doc = new DOMParser().parseFromString(text || "", "text/html");
+    const body = (text || "").trim();
+    if (body && !body.startsWith("<")) return body.replace(/\s+/g, " ").slice(0, 300);
+    const doc = new DOMParser().parseFromString(body, "text/html");
     return (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim().slice(0, 300) || ("server returned " + status);
   }
 

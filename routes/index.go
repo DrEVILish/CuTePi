@@ -769,7 +769,7 @@ func autoContinueFrom(endingPos int) {
 func renderCuesheet(c *gin.Context) {
 	cuesheet, err := ctp.GetCuesheet()
 	if err != nil {
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+		respondError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	enrichCuesheetWithPlayback(&cuesheet)
@@ -796,17 +796,13 @@ func Index(rg *gin.RouterGroup) {
 	rg.GET("/", func(c *gin.Context) {
 		mediapool, err := mediapoolView()
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		cuesheet, err := ctp.GetCuesheet()
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		enrichCuesheetWithPlayback(&cuesheet)
@@ -833,9 +829,7 @@ func Index(rg *gin.RouterGroup) {
 	rg.GET("/mediapool", func(c *gin.Context) {
 		mediapool, err := mediapoolView()
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-				"error": err.Error(),
-			})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.HTML(http.StatusOK, "mediapool.html", gin.H{
@@ -852,7 +846,12 @@ func Index(rg *gin.RouterGroup) {
 // exactly as it was: a file being replaced (same name re-uploaded) is parked
 // aside first and restored if the move or registration fails, so live cues
 // never lose their source to a failed import.
-func importMedia(filename, srcPath string) error {
+//
+// The returned error is user-facing (upload, youtube and show-import
+// responses): the staging path is rewritten to filename and server
+// directories are stripped, so no temp/media path leaks (O5).
+func importMedia(filename, srcPath string) (err error) {
+	defer func() { err = importError(err, filename, srcPath) }()
 	meta, err := media.Probe(srcPath)
 	if err != nil {
 		os.Remove(srcPath)

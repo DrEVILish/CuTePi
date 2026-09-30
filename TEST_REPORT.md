@@ -384,11 +384,28 @@ Resolved in round 2 (D21).
 
 ### O4 — `error.html` is a full page even for htmx requests
 
-This is the root of D12; the clients now work around it. Fix: return plain text when `HX-Request` is set.
+Resolved (2026-09-30). Every handler now reports failures through one helper,
+`respondError` (`routes/errors.go`): htmx requests (`HX-Request` set) get the
+bare message as `text/plain; charset=utf-8` with the same status, and normal
+navigations still get the full `error.html` page. The clients (`ui.js`,
+`dropzone.js`, `dnd.js`) show a plain-text body as-is and keep the `<pre>`
+extraction as a fallback for HTML bodies. Verified with Go tests
+(`routes/errors_test.go`) and with curl against the service: `POST /api/volume`
+with `volume=loud` returns `400 text/plain` "volume must be a number" with
+`HX-Request`, and the HTML page without it.
 
 ### O5 — The ffprobe error message leaks a temp path
 
-Strip the directory from the message.
+Resolved (2026-09-30). `importMedia` (the shared upload, YouTube and show-import
+path) now rewrites its error: the staging path and temp name (`upload-*.ext`)
+become the user's file name, and `redactPaths` strips the temp, media,
+thumbnail, database and working directories. The same redaction applies to
+every `respondError` message, the YouTube stream's error line and the
+plain-text errors from show import/export. Verified with Go tests and with curl:
+uploading 2 kB of random bytes as `o5-probe-test.mp4` returns `422` "could not
+import 1 of 1: "o5-probe-test.mp4": media: ffprobe failed for
+"o5-probe-test.mp4": exit status 1", with no directory. Nothing was left in the
+media pool or `tmp/`.
 
 ### O6 — Deleting a group with Ctrl+Backspace while its inspector is open
 

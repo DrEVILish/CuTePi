@@ -39,7 +39,7 @@ func handleYoutubeDownload(c *gin.Context) {
 	logs.Printf(logs.YDLRequest, "stage=request method=%s path=%s url=%q", c.Request.Method, c.Request.URL.Path, url)
 	if url == "" {
 		logs.Printf(logs.YDLFailed, "stage=validate reason=empty_url")
-		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "no URL provided"})
+		respondError(c, http.StatusBadRequest, "no URL provided")
 		return
 	}
 
@@ -60,7 +60,7 @@ func handleYoutubeDownload(c *gin.Context) {
 	stage := func(s string) { writeLine(map[string]any{"stage": s}) }
 	fail := func(code string, msg string) {
 		logs.PrintfWarn(code, "url=%q error=%s", url, msg)
-		writeLine(map[string]any{"error": msg})
+		writeLine(map[string]any{"error": redactPaths(msg)})
 	}
 
 	stage("resolving")
@@ -288,24 +288,24 @@ func handleYoutubeRename(c *gin.Context) {
 	old := strings.TrimSpace(c.PostForm("old"))
 	name := strings.TrimSpace(c.PostForm("name"))
 	if old == "" || name == "" {
-		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "original and new names are required"})
+		respondError(c, http.StatusBadRequest, "original and new names are required")
 		return
 	}
 	base := filepath.Base(name)
 	if base == "." || base == ".." || base == "" || strings.HasPrefix(base, ".") {
-		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "invalid filename"})
+		respondError(c, http.StatusBadRequest, "invalid filename")
 		return
 	}
 	if base == old {
 		oldPath := filepath.Join(config.MediaLocation(), old)
 		if _, err := os.Stat(oldPath); err != nil {
-			c.HTML(http.StatusNotFound, "error.html", gin.H{"error": "source file not found on disk"})
+			respondError(c, http.StatusNotFound, "source file not found on disk")
 			return
 		}
 		// No-op: no rename to make, just refresh the pool.
 		mediapool, err := mediapoolView()
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		c.HTML(http.StatusOK, "mediapool.html", gin.H{"Mediapool": mediapool})
@@ -317,40 +317,40 @@ func handleYoutubeRename(c *gin.Context) {
 	// The new name must still be a media type the pool plays: renaming
 	// clip.mp4 to clip.txt would register an unplayable item.
 	if media.KindFromExtension(base) != media.KindFromExtension(filepath.Base(old)) {
-		c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": fmt.Sprintf("%q must keep the %s file type", base, filepath.Ext(old))})
+		respondError(c, http.StatusBadRequest, fmt.Sprintf("%q must keep the %s file type", base, filepath.Ext(old)))
 		return
 	}
 	if gsp.CurrentPlaying() == filepath.Base(old) {
-		c.HTML(http.StatusConflict, "error.html", gin.H{"error": "can't rename the clip that is playing"})
+		respondError(c, http.StatusConflict, "can't rename the clip that is playing")
 		return
 	}
 	mediaDir := config.MediaLocation()
 	oldPath := filepath.Join(mediaDir, base)
 	oldFile := filepath.Join(mediaDir, filepath.Base(old))
 	if _, err := os.Stat(oldFile); err != nil {
-		c.HTML(http.StatusNotFound, "error.html", gin.H{"error": "source file not found on disk"})
+		respondError(c, http.StatusNotFound, "source file not found on disk")
 		return
 	}
 	if _, err := os.Stat(oldPath); err == nil {
-		c.HTML(http.StatusConflict, "error.html", gin.H{"error": fmt.Sprintf("a file named %q already exists", base)})
+		respondError(c, http.StatusConflict, fmt.Sprintf("a file named %q already exists", base))
 		return
 	}
 	if err := os.Rename(oldFile, oldPath); err != nil {
 		logs.PrintfWarn(logs.YDLRename, "old=%q new=%q error=%v", old, base, err)
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": "could not rename file on disk: " + err.Error()})
+		respondError(c, http.StatusInternalServerError, "could not rename file on disk: "+err.Error())
 		return
 	}
 	if err := ctp.RenameMedia(filepath.Base(old), base); err != nil {
 		// Roll the file back so DB and disk stay consistent.
 		_ = os.Rename(oldPath, oldFile)
 		logs.PrintfWarn(logs.YDLRename, "old=%q new=%q revert=%t error=%v", old, base, true, err)
-		c.HTML(http.StatusConflict, "error.html", gin.H{"error": err.Error()})
+		respondError(c, http.StatusConflict, err.Error())
 		return
 	}
 	logs.Printf(logs.YDLRename, "old=%q new=%q done", old, base)
 	mediapool, err := mediapoolView()
 	if err != nil {
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+		respondError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.HTML(http.StatusOK, "mediapool.html", gin.H{"Mediapool": mediapool})

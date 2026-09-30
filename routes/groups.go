@@ -135,7 +135,7 @@ func Groups(rg *gin.RouterGroup) {
 		parent, _ := strconv.Atoi(c.PostForm("parentGroupID"))
 		id, err := ctp.CreateGroup(name, parent)
 		if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// The new group is the selection, so the operator renames it
@@ -153,7 +153,7 @@ func Groups(rg *gin.RouterGroup) {
 			return
 		}
 		if err := ctp.DeleteGroupWithCues(id); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		awardsSelectionSync()
@@ -221,7 +221,7 @@ func Groups(rg *gin.RouterGroup) {
 			}
 			ms, perr := ctp.ParseTime(raw)
 			if perr != nil {
-				c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": perr.Error()})
+				respondError(c, http.StatusBadRequest, perr.Error())
 				return
 			}
 			*f.dst = ms
@@ -231,11 +231,11 @@ func Groups(rg *gin.RouterGroup) {
 			g.CueNum = prevNum
 			err = ctp.UpdateGroup(g)
 			if err != nil {
-				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+				respondError(c, http.StatusInternalServerError, err.Error())
 				return
 			}
 		} else if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -272,11 +272,11 @@ func Groups(rg *gin.RouterGroup) {
 		}
 		g.Name = strings.TrimSpace(c.PostForm("val"))
 		if g.Name == "" {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "a group name is required"})
+			respondError(c, http.StatusBadRequest, "a group name is required")
 			return
 		}
 		if err := ctp.UpdateGroup(g); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -293,7 +293,7 @@ func Groups(rg *gin.RouterGroup) {
 		before, _ := strconv.Atoi(c.PostForm("beforePos"))
 		beforeGroup, _ := strconv.Atoi(c.PostForm("beforeGroup"))
 		if err := ctp.MoveGroup(id, before, beforeGroup); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -315,11 +315,11 @@ func Groups(rg *gin.RouterGroup) {
 		}
 		g.Color = strings.TrimSpace(c.PostForm("color"))
 		if !ctp.ValidColor(g.Color) {
-			c.HTML(http.StatusBadRequest, "error.html", gin.H{"error": "invalid colour"})
+			respondError(c, http.StatusBadRequest, "invalid colour")
 			return
 		}
 		if err := ctp.UpdateGroup(g); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -338,7 +338,7 @@ func Groups(rg *gin.RouterGroup) {
 		}
 		g.Collapse = !g.Collapse
 		if err := ctp.UpdateGroup(g); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -389,7 +389,7 @@ func Groups(rg *gin.RouterGroup) {
 			}
 		}
 		if err := ctp.SetSelectedGroup(id); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		awardsSelectionSync()
@@ -439,7 +439,7 @@ func Groups(rg *gin.RouterGroup) {
 		if err := ctp.UpdateGroup(g); errors.Is(err, ctp.ErrDuplicateCueNum) {
 			rejectCueNum(c, err, `#cuesheet tr.cue-group-header[data-group-id="`+strconv.Itoa(id)+`"] .cue-num`, "")
 		} else if err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		renderCuesheet(c)
@@ -489,14 +489,14 @@ func Groups(rg *gin.RouterGroup) {
 			assign = ctp.SetCueGroupFirst
 		}
 		if err := assign(c.Param("cuePos"), groupID); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// Joining opens the group so the cue lands visibly (groupID 0 =
 		// release to top level: nothing to open).
 		if groupID != 0 {
 			if err := ctp.ExpandGroup(groupID); err != nil {
-				c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+				respondError(c, http.StatusInternalServerError, err.Error())
 				return
 			}
 		}
@@ -594,7 +594,7 @@ func renderGroupInspector(c *gin.Context, groupID int) {
 	}
 	data, err := groupInspectorData(groupID)
 	if err != nil {
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+		respondError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.HTML(http.StatusOK, "groupinspector.html", data)
@@ -688,7 +688,7 @@ func openSelGroup(c *gin.Context, open bool) {
 	if g.Collapse == open {
 		g.Collapse = !open
 		if err := ctp.UpdateGroup(g); err != nil {
-			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"error": err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}

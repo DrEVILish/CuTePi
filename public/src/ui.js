@@ -19,8 +19,8 @@ htmx.on("htmx:before:swap", (e) => {
 
 // Failed htmx requests are never swapped (above), so without this a failed
 // action (play, fade, group ops, ...) looks exactly like a no-op click.
-// Surface every 4xx/5xx as a dismissible toast, extracting the server's
-// message from the error.html body when present.
+// Surface every 4xx/5xx as a dismissible toast. htmx requests get the
+// server's message as plain text; an HTML body (error.html) keeps it in <pre>.
 htmx.on("htmx:response:error", (e) => {
   const ctx = e.detail?.ctx || {};
   // A group-inspector 404 is self-healing (the handler below falls back to
@@ -28,8 +28,10 @@ htmx.on("htmx:response:error", (e) => {
   if (ctx.response?.status === 404 && isInspectorTarget(ctx.target) &&
       /\/api\/group\/\d+\/inspector/.test(ctx.request?.action || "")) return;
   let detail = "";
-  try {
-    const doc = new DOMParser().parseFromString(ctx.text || "", "text/html");
+  const body = (ctx.text || "").trim();
+  if (body && !body.startsWith("<")) detail = body.replace(/\s+/g, " ");
+  else try {
+    const doc = new DOMParser().parseFromString(body, "text/html");
     detail = (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim();
   } catch (err) { /* body may be empty or non-HTML; status alone still shows */ }
   if (detail.length > 160) detail = detail.slice(0, 159) + "…";
