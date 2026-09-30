@@ -723,22 +723,23 @@ Companion side.
   loads and holds the configured image (full-frame), so screens never show dead black mid-show.
 - Fallback: holding image missing/unplayable → plain panic to black, logged
   as an error. The setting lives with the other panic/transport settings.
-- **Target: the holding image is on screen within 100 ms of the panic.** On the
-  KMS wall the image is kept **armed** (`gsp/panichold.go`): built, decoded and
-  presented on its own display plane at alpha 0, outside the visible stack. A
-  panic raises that plane above every layer at full alpha (two display commits),
-  mutes the running audio, then retires everything else underneath and adopts
-  the armed pipeline as the transport, the same state a cold load leaves. The
-  armed copy is then rebuilt for the next panic (about 230 ms).
+- **Target: the holding image is on screen within 50 ms of the panic, on
+  average.** On the KMS wall the image is kept **armed** (`gsp/panichold.go`):
+  built, decoded and presented on its own display plane at alpha 0, parked at
+  the top zpos (17) outside the visible stack. A panic mutes the running audio,
+  sets that plane's alpha to full (one display commit, landing on the next
+  refresh), then retires everything else underneath and adopts the armed
+  pipeline as the transport, the same state a cold load leaves. The armed copy
+  is then rebuilt for the next panic (about 230 ms).
 - Kept in step by a reconciler (`routes/panichold.go`): it re-checks the setting
   every 2 s and at once after the setting changes or a panic. If the file
   changed since it was armed (size or modification time), or the armed pipeline
   isn't ready, the panic takes the cold load path (~330 ms) and re-arms. Stills
   only; the fbdev wall always loads cold. The armed image holds one display
   plane while idle.
-- Measured on the Pi 4 (1080p60): picture 54–80 ms from the request (22–33 ms
-  inside the service), audio stream closed 69–93 ms; the cold path took
-  326–359 ms.
+- Measured on the Pi 4 (1080p60), 20 runs polling the armed plane: picture up
+  a mean 26 ms after the request (median 21, max 44; about 9 ms inside the
+  service); audio stream closed 20–49 ms. The cold path took 326–359 ms.
 
 ### 12.10 Test patterns (built-in + custom)
 

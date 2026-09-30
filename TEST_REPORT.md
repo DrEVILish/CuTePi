@@ -396,15 +396,19 @@ A harmless 404 appears in the console, and the page corrects itself.
 
 ### O7 — Panic cut to the holding image takes 300–400ms (image load)
 
-Resolved (2026-09-30), target under 100 ms. The holding image is kept armed on
-its own display plane at alpha 0; a panic raises it to the top at full alpha,
-mutes the audio, then tears the rest down underneath (DESIGN §12.9).
+Resolved (2026-09-30), first to under 100 ms, then to a mean under 50 ms. The
+holding image is kept armed on its own display plane at alpha 0, parked at the
+top zpos. A panic mutes the audio and sets that plane's alpha to full (one
+display commit), then tears the rest down underneath (DESIGN §12.9).
 
-| Measure (Pi 4, 1080p60, 10 ms plane poll) | Before | After |
-|---|---|---|
-| Panic request → holding image on top | 326–359 ms | **54–80 ms** (8 runs) |
-| Inside the service (panic call → plane shown) | — | 22–33 ms |
-| Panic request → HDMI audio stream closed | — | 69–93 ms (mute is applied just before) |
+| Measure (Pi 4, 1080p60, 10 ms plane poll) | Before | First cut (zpos + alpha) | Now (parked, alpha only) |
+|---|---|---|---|
+| Panic request → holding image up | 326–359 ms | 54–80 ms (8 runs) | **mean 26 ms**, median 21, max 44 (20 runs) |
+| Inside the service (panic call → commit done) | — | 22–33 ms | mean 9 ms, max 28 |
+| Panic request → HDMI audio stream closed | — | 69–93 ms | 20–49 ms (muted first) |
+
+The "now" figures poll only the armed plane. The first-cut figures polled six
+planes, which competed with the teardown commits and read about 30 ms late.
 
 Checked:
 - Two panics 0.5 s apart both used the armed image (re-arm about 230 ms).

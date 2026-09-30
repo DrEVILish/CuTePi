@@ -81,6 +81,8 @@ func ArmPanicHold(file string) {
 		retirePipeline(p)
 		return
 	}
+	// Parked at the top zpos while invisible: the cut is then one commit.
+	parkLayer(p)
 	standby.mu.Lock()
 	standby.p, standby.file, standby.stamp = p, file, stamp
 	standby.mu.Unlock()
@@ -116,16 +118,17 @@ func PanicToHold(file string) bool {
 		retirePipeline(p)
 		return false
 	}
-	// 1. Picture first: the armed plane goes above everything, fully on.
-	raiseLayer(p)
-	shown := time.Since(t0)
-	// 2. Silence what was playing, before the (slower) teardown.
+	// 1. Silence what was playing (microseconds, so it goes first).
 	mgr.mu.Lock()
 	mgr.halts++
 	if mgr.volumeEl != nil {
 		mgr.volumeEl.Set("volume", 0.0)
 	}
 	mgr.mu.Unlock()
+	// 2. Picture: the armed plane, parked on top, goes fully on (one
+	// display commit, landing on the next refresh).
+	raiseLayer(p)
+	shown := time.Since(t0)
 	stopBackground()
 	retireOutgoing()
 	// 3. Retire the rest underneath and adopt the standby as the transport.

@@ -28,6 +28,7 @@ type wallLayer struct {
 	sink    *gst.Element
 	opacity float64 // cue opacity 0..1 (multiplies every fade level)
 	visible bool    // part of the on-screen stack (not a warm/prerolling slot)
+	parked  bool    // invisible at the top zpos, ready to be raised (panic image)
 
 	// Alpha writes are commits that wait for the next vblank (~16 ms), so
 	// they run on the layer's own writer: callers (fade loops holding the
@@ -190,9 +191,33 @@ func showLayer(p *gst.Pipeline, level float64) {
 	setLayerLevel(p, level)
 }
 
+// zposTop is the highest plane zpos (the vc4 range is 1..17). Visible
+// layers use 1..n with n at most one less than the planes, so a layer parked
+// here is above all of them.
+const zposTop = 17
+
+// parkLayer puts p's (invisible, alpha 0) layer at the top zpos, so raising
+// it later is a single alpha commit.
+func parkLayer(p *gst.Pipeline) bool {
+	w := kmsWall()
+	l := layerOf(p)
+	if w == nil || l == nil {
+		return false
+	}
+	if err := w.set(l.plane, "zpos", zposTop); err != nil {
+		logs.Printf(logs.GSPPipeDebug, "gsp: park plane at zpos %d: %v", zposTop, err)
+		return false
+	}
+	layersMu.Lock()
+	l.parked = true
+	layersMu.Unlock()
+	return true
+}
+
 // raiseLayer puts p's layer on screen ABOVE every other layer at full
 // opacity, written directly (not through the paced writer) so it lands on
-// the next refreshes: the panic cut.
+// the next refresh: the panic cut. A parked layer is already on top, so it
+// takes one commit (alpha); otherwise zpos goes first.
 func raiseLayer(p *gst.Pipeline) {
 	w := kmsWall()
 	l := layerOf(p)
@@ -211,9 +236,13 @@ func raiseLayer(p *gst.Pipeline) {
 	l.visible = true
 	stack = append(stack, l)
 	z := len(stack)
+	parked := l.parked
+	l.parked = false // restacks now own its zpos
 	layersMu.Unlock()
-	if err := w.set(l.plane, "zpos", uint64(z)); err != nil {
-		logs.Printf(logs.GSPPipeDebug, "gsp: plane zpos: %v", err)
+	if !parked {
+		if err := w.set(l.plane, "zpos", uint64(z)); err != nil {
+			logs.Printf(logs.GSPPipeDebug, "gsp: plane zpos: %v", err)
+		}
 	}
 	_ = w.setAlpha(l.plane, l.opacity)
 	l.post(l.opacity) // keep the writer's view in step
