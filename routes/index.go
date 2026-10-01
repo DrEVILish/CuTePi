@@ -857,6 +857,12 @@ func importMedia(filename, srcPath string) (err error) {
 		os.Remove(srcPath)
 		return err
 	}
+	// The playback engine must decode it, not just ffmpeg (§5.7): ffprobe
+	// reads formats this system's GStreamer may lack (ASF, AVIF, JPEG XL).
+	if err := gsp.CheckDecodable(srcPath); err != nil {
+		os.Remove(srcPath)
+		return fmt.Errorf("cannot be played: %w", err)
+	}
 	if meta.Kind == media.KindVideo || meta.Kind == media.KindAudio {
 		if err := media.VerifyPlayable(srcPath); err != nil {
 			os.Remove(srcPath)

@@ -14,7 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"CuTePi/config"
-	"CuTePi/media"
 )
 
 func Upload(rg *gin.RouterGroup) {
@@ -180,9 +179,8 @@ func saveUploadedFile(fh *multipart.FileHeader, filename string) error {
 	if filename == "" || filename == "." || filename == string(filepath.Separator) {
 		return fmt.Errorf("invalid filename")
 	}
-	if media.KindFromExtension(filename) == media.KindUnknown {
-		return fmt.Errorf("unsupported media type")
-	}
+	// No extension allow-list: ffprobe and the decode check below decide
+	// (§2, any codec GStreamer can decode plays).
 
 	src, err := fh.Open()
 	if err != nil {

@@ -480,7 +480,9 @@ func kmsVideoTail(dmabuf bool, opts LoadOpts) []string {
 		names = append(names, "videocrop", "videoflip", "videoconvert")
 	} else {
 		if !dmabuf {
-			names = append(names, "videoconvert")
+			// Converted frames are limited to layouts the display can
+			// allocate (kmsSysmemCaps).
+			names = append(names, "videoconvert", "capsfilter")
 		}
 		// On decoder frames videocrop only attaches crop metadata: the plane
 		// scans out the sub-rectangle, no pixels are copied (measured 30 fps).
@@ -491,6 +493,14 @@ func kmsVideoTail(dmabuf bool, opts LoadOpts) []string {
 	}
 	return append(names, "kmssink")
 }
+
+// kmsSysmemCaps are the layouts a software-converted frame may take on its
+// way to a display plane. The planes also list 4:2:2 and 4:4:4 YUV, but the
+// kernel cannot allocate dumb buffers for them ("failed to activate
+// bufferpool": DNxHR and ProRes 422 never prerolled, codec corpus).
+// videoconvert picks the least lossy of these, so 4:2:0 sources pass through
+// unconverted and 4:2:2/4:4:4 sources go to RGB with full chroma.
+const kmsSysmemCaps = "video/x-raw,format={I420,YV12,NV12,NV21,BGRx,BGRA,RGBx,RGBA,xRGB,ARGB,xBGR,ABGR,RGB16}"
 
 // frameLayout is how a frame is cropped and sized for its box on the wall.
 type frameLayout struct {
@@ -606,6 +616,8 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 		if cf := firstByFactory(byFactory, "capsfilter"); cf != nil && lay.preW > 0 && lay.preH > 0 {
 			cf.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=I420,width=%d,height=%d,pixel-aspect-ratio=1/1", lay.preW, lay.preH)))
 		}
+	} else if cf := firstByFactory(byFactory, "capsfilter"); cf != nil {
+		cf.Set("caps", gst.NewCapsFromString(kmsSysmemCaps))
 	}
 	if vc := firstByFactory(byFactory, "videocrop"); vc != nil {
 		vc.Set("left", lay.cropL)

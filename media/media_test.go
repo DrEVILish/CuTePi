@@ -18,6 +18,16 @@ func TestKindFromExtension(t *testing.T) {
 		"song.WAV":     KindAudio,
 		"photo.jpg":    KindImage,
 		"photo.PNG":    KindImage,
+		"show.ts":      KindVideo,
+		"old.mpg":      KindVideo,
+		"film.ogv":     KindVideo,
+		"talk.wmv":     KindVideo,
+		"voice.opus":   KindAudio,
+		"mix.ac3":      KindAudio,
+		"tape.aiff":    KindAudio,
+		"scan.tiff":    KindImage,
+		"still.jp2":    KindImage,
+		"pic.avif":     KindImage,
 		"document.pdf": KindUnknown,
 		"noext":        KindUnknown,
 	}
@@ -64,6 +74,10 @@ func TestIsImageFormat(t *testing.T) {
 	cases := map[string]bool{
 		"image2":                  true,
 		"png_pipe":                true,
+		"gif":                     true,
+		"tiff_pipe":               true,
+		"j2k_pipe":                true,
+		"jpegxl_pipe":             true,
 		"mov,mp4,m4a,3gp,3g2,mj2": false,
 		"wav":                     false,
 	}

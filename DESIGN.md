@@ -42,7 +42,18 @@ selection, settings).
   Decode is **hardware-first (V4L2 H.264 and HEVC on the Pi 4; HEVC only on the Pi 5) with software fallback** via
   GStreamer autoplugging; the hardware formats are fast paths, never the supported set. When a file is expected to play
   below full rate on the current hardware, **import warns** (media pool and inspector) but never refuses it (§5.7).
-- **Undecodable sources**: fail **immediately with an error surfaced to the user** at cue time; an **import-time probe** (`ffmpeg -v error -t 1`) rejects bad files early.
+- **Undecodable sources**: rejected **at import** with the reason, by the playback engine itself: the file must
+  preroll through GStreamer (`playbin` into fake sinks, same autoplugging and decoder ranks as playback,
+  `gsp.CheckDecodable`), then pass `ffmpeg -v error -t 1`. ffprobe reads formats this system's GStreamer may not play,
+  so a probe alone would accept files that only fail at cue time. Accepted files that still fail at cue time surface
+  the error to the user then. The file extension never decides (any extension imports if it decodes).
+- **Decoder ranks**: decoders that autoplugging would pick but that fail on the Pi are demoted
+  (`gsp.decoderRankOverrides`): `v4l2jpegdec` (unreliable firmware path; software `jpegdec` instead) and
+  `openjpegdec` (fails to negotiate JPEG 2000; `avdec_jpeg2000` instead).
+- **Codec test corpus**: `tools/codec-corpus/` generates 52 short files in many codecs and containers (video, audio,
+  image) with the Pi's own ffmpeg/GStreamer, probes how GStreamer decodes each (decoder, hardware or software, speed),
+  and runs each end to end through the live service (upload, play, output checked from outside). Results:
+  TEST_REPORT "Codec corpus".
 - **Cue trigger**: **SPACE = GO** and **ESC = fade out** (twice = panic) work from anywhere in the control UI —
   focused buttons, checkboxes, selects, sliders and open dialogs included — except while typing into a text field.
   Space never presses the focused control instead, and holding a key does not repeat GO or panic. (An open
@@ -297,8 +308,8 @@ Tabs, grouped by purpose:
 
 - Desktop: modal from the mediapool (or Drag and drop onto the pool). Mobile: standalone `/upload`. Both: drag-and-drop + file picker, multi-file, **no size limit** —
   before uploading, warn if the total exceeds the available disk space.
-  Any video, image or audio file is accepted; the import probe rejects
-  undecodable files (422). Metadata is extracted synchronously
+  Any video, image or audio file is accepted, whatever its extension; the import checks reject files the playback
+  engine cannot decode (422, with the reason — e.g. "this system has no GStreamer demuxer for video/x-ms-asf"). Metadata is extracted synchronously
   (validate-then-render: the pool only shows validated media); duration/resolution/codec failures reject the import.
   YouTube/URL via yt-dlp with stage logging.
   Uploads, deletions, and thumbnail changes broadcast a targeted WebSocket refresh.
@@ -379,7 +390,10 @@ assets (`gsp` test; skips when absent).
   opacity), zpos (stacking), position/size (render rectangle) and 0°/180°/mirror rotation — no CPU, at the display's
   refresh rate.
   - Video chain: `queue → kmssink` for hardware-decoded frames (DMABuf straight to the plane, no copy); `queue →
-    videoconvert → kmssink` for system-memory frames (software decode, stills, test patterns); 90°/270° add
+    videoconvert → capsfilter → kmssink` for system-memory frames (software decode, stills, test patterns). The
+    capsfilter limits converted frames to layouts the kernel can allocate as display buffers (4:2:0 YUV and RGB): the
+    planes also list 4:2:2/4:4:4 YUV, but allocating those fails, so DNxHR and ProRes 422 never prerolled; 4:2:2
+    sources now go to RGB with full chroma; 90°/270° add
     `v4l2convert → capsfilter(I420, on-screen size) → identity drop-allocation → videoflip`; Stretch adds a
     `capssetter` pixel-aspect rewrite.
   - Fades write the plane's alpha from elapsed time on a per-layer writer, one write per two refreshes: each alpha write

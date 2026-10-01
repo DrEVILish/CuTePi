@@ -191,7 +191,7 @@ func Probe(path string) (Metadata, error) {
 	}
 
 	switch {
-	case videoStream != nil && isImageFormat(parsed.Format.FormatName):
+	case videoStream != nil && (isImageFormat(parsed.Format.FormatName) || KindFromExtension(path) == KindImage):
 		meta.Kind = KindImage
 		meta.Codec = videoStream.CodecName
 		meta.Resolution = fmt.Sprintf("%dx%d", videoStream.Width, videoStream.Height)
@@ -313,8 +313,9 @@ func VerifyPlayable(path string) error {
 
 func isImageFormat(formatName string) bool {
 	for _, f := range strings.Split(formatName, ",") {
-		switch f {
-		case "image2", "png_pipe", "jpeg_pipe", "gif", "webp_pipe", "bmp_pipe":
+		// ffmpeg reads stills through image2 (by extension), gif, or one of
+		// its *_pipe image demuxers (png_pipe, tiff_pipe, j2k_pipe, ...).
+		if f == "image2" || f == "gif" || strings.HasSuffix(f, "_pipe") {
 			return true
 		}
 	}
@@ -474,15 +475,24 @@ func samplesToPeaks(raw []byte, peakBuckets int) []float64 {
 }
 
 // KindFromExtension makes a best-effort guess at a file's media kind from
-// its extension, used only for pre-validating uploads before ffprobe runs.
+// its extension. It never decides whether a file is accepted (ffprobe and the
+// decode check do, §2: any codec GStreamer can decode plays); it is a hint
+// for files whose container does not say (an AVIF still reports as an MP4
+// family container) and for choosing thumbnail and still handling before
+// metadata exists. Unknown extensions return KindUnknown.
 func KindFromExtension(filename string) Kind {
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v":
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".mp4", ".m4v", ".mkv", ".mov", ".qt", ".avi", ".webm", ".ts", ".m2ts", ".mts", ".m2t", ".mpg", ".mpeg",
+		".m2v", ".vob", ".ogv", ".wmv", ".asf", ".flv", ".3gp", ".3g2", ".mxf", ".dv", ".y4m", ".h264", ".264",
+		".h265", ".265", ".hevc", ".ivf", ".rm", ".rmvb", ".divx", ".f4v":
 		return KindVideo
-	case ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a":
+	case ".mp3", ".wav", ".flac", ".aac", ".ogg", ".oga", ".opus", ".m4a", ".m4b", ".ac3", ".eac3", ".ec3",
+		".dts", ".aif", ".aiff", ".aifc", ".wma", ".mka", ".amr", ".alac", ".ape", ".wv", ".mp2", ".au", ".caf",
+		".w64", ".tta", ".spx":
 		return KindAudio
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+	case ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".apng", ".gif", ".webp", ".bmp", ".dib", ".tif", ".tiff",
+		".jp2", ".j2k", ".jpf", ".jpx", ".jxl", ".avif", ".heic", ".heif", ".tga", ".ppm", ".pgm", ".pbm",
+		".pnm", ".pcx", ".ico", ".exr", ".hdr", ".qoi", ".sgi", ".dpx":
 		return KindImage
 	default:
 		return KindUnknown

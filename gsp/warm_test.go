@@ -180,7 +180,7 @@ func TestWarmVideoPrewarmAndRelink(t *testing.T) {
 	// Video-only MJPEG: no audio branch (this CI box has no audio device —
 	// audio preroll fails for env reasons). On Pi hardware decodebin would
 	// pick v4l2jpegdec, whose firmware path is unreliable; gstInit demotes
-	// it (jpegRankOverride) so JPEG goes through software jpegdec here and
+	// it (decoderRankOverrides) so JPEG goes through software jpegdec here and
 	// in production alike.
 	if err := runCmd("ffmpeg", "-v", "error",
 		"-f", "lavfi", "-i", "color=c=gray:size=64x64:rate=10:duration=2",

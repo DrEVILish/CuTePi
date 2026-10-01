@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 
 	"CuTePi/config"
 	"CuTePi/logs"
+	"CuTePi/media"
 	"CuTePi/ws"
 )
 
@@ -75,25 +75,37 @@ var (
 	initOnce sync.Once
 )
 
-// jpegRankOverride demotes the Pi's hardware JPEG decoder. On Raspberry Pi
-// hardware decodebin otherwise picks v4l2jpegdec, whose firmware path is
-// unreliable (buffer-pool activation fails or stalls silently), so JPEG
-// stills and MJPEG video would intermittently never preroll. Rank 0 routes
-// JPEG through software jpegdec. Harmless where the element doesn't exist.
-const jpegRankOverride = "v4l2jpegdec:0"
+// decoderRankOverrides demote decoders that autoplugging would otherwise
+// pick but that fail on this platform, so decodebin falls through to a
+// working one. Harmless where an element doesn't exist.
+//   - v4l2jpegdec: the Pi's hardware JPEG decoder. Its firmware path is
+//     unreliable (buffer-pool activation fails or stalls silently), so JPEG
+//     stills and MJPEG video would intermittently never preroll; software
+//     jpegdec takes over.
+//   - openjpegdec: fails to negotiate JPEG 2000 output on the Pi ("Failed to
+//     negociate OpenJPEG data", codec corpus); avdec_jpeg2000 decodes it.
+var decoderRankOverrides = []string{"v4l2jpegdec:0", "openjpegdec:0"}
 
 // applyDecoderRanks sets GST_PLUGIN_FEATURE_RANK before gst.Init reads it,
-// appending the JPEG override unless the operator's own value already
-// ranks v4l2jpegdec (theirs wins).
+// appending each override unless the operator's own value already ranks
+// that element (theirs wins).
 func applyDecoderRanks() {
 	cur := os.Getenv("GST_PLUGIN_FEATURE_RANK")
-	if strings.Contains(cur, "v4l2jpegdec") {
+	val := cur
+	for _, o := range decoderRankOverrides {
+		name, _, _ := strings.Cut(o, ":")
+		if strings.Contains(cur, name) {
+			continue
+		}
+		if val != "" {
+			val += ","
+		}
+		val += o
+	}
+	if val == cur {
 		return
 	}
-	if cur != "" {
-		cur += ","
-	}
-	if err := os.Setenv("GST_PLUGIN_FEATURE_RANK", cur+jpegRankOverride); err != nil {
+	if err := os.Setenv("GST_PLUGIN_FEATURE_RANK", val); err != nil {
 		logs.Printf(logs.GSPPipeDebug, "gsp: setting GST_PLUGIN_FEATURE_RANK: %v", err)
 	}
 }
@@ -1240,13 +1252,10 @@ func (m *manager) rerenderStill(p *gst.Pipeline) {
 	}
 }
 
-// isStillFile reports whether name is a single-frame image.
+// isStillFile reports whether name is a single-frame image (the same
+// extension list import uses, media.KindFromExtension).
 func isStillFile(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
-		return true
-	}
-	return false
+	return media.KindFromExtension(name) == media.KindImage
 }
 
 // IsStill reports whether filename is a single-frame image. Direct playback

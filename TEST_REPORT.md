@@ -247,6 +247,171 @@ Fixed for all three states: a cue, a group, and nothing selected.
 | D39 | Space/ESC ignored after clicking a button or in dialogs; Space re-pressed the focused button | Key handler treated focus on any button, select or input as "not plain" | Only text entry blocks them; Space never presses the focused control; no auto-repeat | Keys suite 4/4 |
 | New | Fit options and crop | — | Fill width, Fill height, Fill (cover), plus crop L/R/T/B in px or %; hardware crop via the plane's source rectangle | Plane SRC/CRTC rects exact, 30 fps each |
 
+## Codec corpus (2026-10-01)
+
+CuTePi must play any codec the user provides (DESIGN §2), so playback is tested against a corpus of many codecs, not
+only H.264/HEVC test clips. `tools/codec-corpus/make.sh` generates 52 five-second files with the Pi's own ffmpeg and
+GStreamer (nothing installed) into `/root/cutepi-testmedia` (359 MB, outside the media pool):
+- **video (24):** H.264 (720p50, 1080p30/60, interlaced, High 10, vertical), HEVC (1080p30/60, Main 10, 2160p30),
+  VP8, VP9, AV1, MPEG-2 (1080i), MPEG-4 ASP, ProRes 422 HQ and 4444 with alpha, DNxHR HQ, MJPEG, Theora, WMV2,
+  FFV1, QuickTime Animation, HAP;
+- **audio (12):** AAC, MP3, Opus, Vorbis, FLAC 96 kHz/24-bit, PCM 16- and 24-bit, AC-3 5.1, E-AC-3 5.1, ALAC,
+  AIFF mono 22 kHz, WMA;
+- **image (16):** JPEG (baseline, progressive, 4000×3000), PNG (8-bit, 16-bit, RGBA, portrait), WebP (lossy and
+  lossless), GIF (still and animated), BMP, TIFF, JPEG 2000, AVIF, JPEG XL.
+
+Two checks, both run on the test server:
+1. `probe.py` decodes each file through GStreamer as the service does (playbin, same decoder ranks) into fake sinks
+   and records the decoder chosen, hardware or software, and decode speed (decoder capacity, not display rate).
+2. `service.py` runs each file end to end through the live service: upload as the web UI does, play, then check the
+   output from outside the process (a visible display plane for video and images; a running HDMI PCM stream for
+   audio), stop, delete.
+
+### Findings and fixes
+
+| # | Finding | Root cause (verified) | Fix | Verified |
+|---|---|---|---|---|
+| K1 | 13 of 52 files refused at upload: `.ts .mpg .ogv .wmv .opus .ac3 .eac3 .aiff .wma .tiff .jp2 .jxl .avif` | An extension allow-list (`media.KindFromExtension`) gated uploads before any probe, contradicting "any codec" | The extension no longer decides; the kind list is broadened and only used as a hint; images are recognised by ffmpeg's image demuxers (`image2`, `gif`, `*_pipe`) or the extension | all 13 import (4 then refused by K4 with a reason) |
+| K2 | TIFF, JPEG 2000 etc. would not have been held as stills | Playback's still check had its own six-extension list | `gsp.isStillFile` uses the same list as import | stills hold |
+| K3 | JPEG 2000 fails to decode | `openjpegdec` fails to negotiate its output on the Pi | Demoted (`gsp.decoderRankOverrides`); `avdec_jpeg2000` decodes it | probe: plays |
+| K4 | WMA/WMV, AVIF and JPEG XL imported (ffmpeg reads them) but could never play | Import verified with ffmpeg; this system's GStreamer has no ASF demuxer and no AVIF or JPEG XL decoder | Import also prerolls the file through GStreamer (`gsp.CheckDecodable`) and refuses with the reason | refused at upload: "this system has no GStreamer demuxer for video/x-ms-asf" etc. |
+| K5 | DNxHR HQ and ProRes 422 HQ (4:2:2) imported but never reached the screen | On the KMS wall `videoconvert` chose a 4:2:2 layout the plane lists but the kernel cannot allocate ("failed to activate bufferpool") | Converted frames limited to 4:2:0 YUV and RGB (`kmsSysmemCaps`); 4:2:2 goes to RGB, full chroma | both on screen 1920×1080 |
+
+End to end through the service: **37 of 52** before the fixes, **48 of 52** after. The 4 remaining are refused at
+import with the reason.
+
+### Open (decisions)
+
+- **WMV / WMA** need GStreamer's ASF demuxer (Debian package `gstreamer1.0-plugins-ugly`); the decoders
+  (`avdec_wmv2`, `avdec_wmav1`) are already installed. Installing it is a deployment decision (AGENTS.md: no extra
+  packages on the test server without approval).
+- **AVIF and JPEG XL stills** have no GStreamer decoder on this system. Options: install decoder plugins if Debian
+  ships them for this GStreamer, or convert such stills losslessly to PNG at import with the Pi's ffmpeg (which reads
+  both).
+- **AV1 1080p30** decodes at 28 fps in software (`av1dec`, libaom), below its 30 fps. The much faster dav1d decoder is
+  in this ffmpeg but not exposed to GStreamer (`dav1ddec`/`avdec_libdav1d` absent). Needs the GStreamer dav1d plugin
+  (a package decision); meanwhile the planned import warning (DESIGN §5.7) will flag it.
+- **Waveform/loudness analysis** fails (ffmpeg exit 254) for PCM audio inside `.mov` (ProRes, DNxHR files). Playback is
+  unaffected; the waveform display and loudness gain are missing for those files.
+
+### Decode probe (`probe.py`): decoder and capacity per file
+
+Speed is decoding as fast as possible into fake sinks, no display.
+
+| File | Codecs | Format | Decoder | HW | Decode speed | Result |
+|---|---|---|---|---|---|---|
+| audio_aac_48k_stereo.m4a | aac | 48000 Hz 2ch | avdec_aac | no | 10× real time | ok |
+| audio_ac3_5.1.ac3 | ac3 | 48000 Hz 6ch | avdec_ac3 | no | 14× real time | ok |
+| audio_alac_44k1.m4a | alac | 44100 Hz 2ch | avdec_alac | no | 15× real time | ok |
+| audio_eac3_5.1.eac3 | eac3 | 48000 Hz 6ch | avdec_eac3 | no | 14× real time | ok |
+| audio_flac_96k_24bit.flac | flac | 96000 Hz 2ch | flacdec | no | 37× real time | ok |
+| audio_mp3_44k1_stereo.mp3 | mp3 | 44100 Hz 2ch | mpg123audiodec | no | 35× real time | ok |
+| audio_opus_48k_stereo.opus | opus | 48000 Hz 2ch | opusdec | no | 26× real time | ok |
+| audio_pcm_mono_22k05.aiff | pcm_s16be | 22050 Hz 1ch | - | no | 45× real time | ok |
+| audio_pcm_s16_48k.wav | pcm_s16le | 48000 Hz 2ch | - | no | 44× real time | ok |
+| audio_pcm_s24_96k.wav | pcm_s24le | 96000 Hz 2ch | - | no | 43× real time | ok |
+| audio_vorbis_48k_stereo.ogg | vorbis | 48000 Hz 2ch | vorbisdec | no | 36× real time | ok |
+| audio_wma_44k1.wma | wmav1 | 44100 Hz 2ch | - | no | - | **fails**: Missing element: Advanced Streaming Format (ASF) demuxer |
+| image_avif_1920x1080.avif | av1 Main | 1920x1080@1 | - | no | - | **fails**: ERROR: from element /GstPlayBin:playbin0/GstURIDecodeBin:uridecodebin0/GstDecodeBin:decodebin0/GstQTDemux:qtdemux0: This file contains no playable streams. |
+| image_bmp_1920x1080.bmp | bmp | 1920x1080@25 | gdkpixbufdec | no | 161 ms | ok |
+| image_gif_1920x1080.gif | gif | 1920x1080@1 | avdec_gif | no | 366 ms | ok |
+| image_gif_animated.gif | gif | 640x360@10 | avdec_gif | no | 432 ms | ok |
+| image_jpeg2000_1920x1080.jp2 | jpeg2000 0 | 1920x1080@25 | avdec_jpeg2000 | no | 747 ms | ok |
+| image_jpeg_1920x1080.jpg | mjpeg Baseline | 1920x1080@25 | jpegdec | no | 169 ms | ok |
+| image_jpeg_4000x3000.jpg | mjpeg Baseline | 4000x3000@25 | jpegdec | no | 193 ms | ok |
+| image_jpeg_progressive.jpg | mjpeg Baseline | 1920x1080@25 | jpegdec | no | 132 ms | ok |
+| image_jxl_1920x1080.jxl | jpegxl | 1920x1080@25 | - | no | - | **fails**: ERROR: from element /GstPlayBin:playbin0/GstURIDecodeBin:uridecodebin0/GstDecodeBin:decodebin0/GstTypeFindElement:typefind: Could not determine type of stream. |
+| image_png_16bit.png | png | 1920x1080@25 16-bit | pngdec | no | 206 ms | ok |
+| image_png_1920x1080.png | png | 1920x1080@25 | pngdec | no | 148 ms | ok |
+| image_png_portrait_1080x1920.png | png | 1080x1920@25 | pngdec | no | 148 ms | ok |
+| image_png_rgba_transparent.png | png | 1920x1080@25 | pngdec | no | 156 ms | ok |
+| image_tiff_1920x1080.tiff | tiff | 1920x1080@25 | gdkpixbufdec | no | 201 ms | ok |
+| image_webp_1920x1080.webp | webp | 1920x1080@25 | webpdec | no | 148 ms | ok |
+| image_webp_lossless.webp | webp | 1920x1080@25 | webpdec | no | 169 ms | ok |
+| video_av1_1080p30_opus.mkv | av1 Main + opus | 1920x1080@30 48000 Hz 1ch | av1dec, opusdec | no | 28 fps (BELOW at 30 fps) | ok |
+| video_dnxhr_hq_1080p25_pcm.mov | dnxhd DNXHR HQ + pcm_s16le | 1920x1080@25 48000 Hz 1ch | avdec_dnxhd | no | 109 fps (OK at 25 fps) | ok |
+| video_ffv1_1080p25_flac.mkv | ffv1 + flac | 1920x1080@25 48000 Hz 1ch | avdec_ffv1, flacdec | no | 78 fps (OK at 25 fps) | ok |
+| video_h264_1080p25_interlaced.ts | h264 High + ac3 | 1920x1080@25i 48000 Hz 1ch | avdec_ac3, v4l2h264dec | yes | 54 fps (OK at 25 fps) | ok |
+| video_h264_1080p30_aac.mp4 | h264 High + aac | 1920x1080@30 48000 Hz 1ch | avdec_aac, v4l2h264dec | yes | 71 fps (OK at 30 fps) | ok |
+| video_h264_1080p60_aac.mp4 | h264 High + aac | 1920x1080@60 48000 Hz 1ch | avdec_aac, v4l2h264dec | yes | 72 fps (OK at 60 fps) | ok |
+| video_h264_720p50_mp3.mkv | h264 High + mp3 | 1280x720@50 48000 Hz 1ch | mpg123audiodec, v4l2h264dec | yes | 154 fps (OK at 50 fps) | ok |
+| video_h264_high10_1080p30.mkv | h264 High 10 + aac | 1920x1080@30 10-bit 48000 Hz 1ch | avdec_aac, avdec_h264 | no | 56 fps (OK at 30 fps) | ok |
+| video_h264_vertical_1080x1920.mp4 | h264 High + aac | 1080x1920@30 48000 Hz 1ch | avdec_aac, v4l2h264dec | yes | 70 fps (OK at 30 fps) | ok |
+| video_hap_1080p25.mov | hap | 1920x1080@25 | avdec_hap | no | 97 fps (OK at 25 fps) | ok |
+| video_hevc_1080p30_aac.mp4 | hevc Main + aac | 1920x1080@30 48000 Hz 1ch | avdec_aac, v4l2slh265dec | yes | 177 fps (OK at 30 fps) | ok |
+| video_hevc_1080p60_aac.mp4 | hevc Main + aac | 1920x1080@60 48000 Hz 1ch | avdec_aac, v4l2slh265dec | yes | 226 fps (OK at 60 fps) | ok |
+| video_hevc_2160p30_aac.mp4 | hevc Main + aac | 3840x2160@30 48000 Hz 1ch | avdec_aac, v4l2slh265dec | yes | 67 fps (OK at 30 fps) | ok |
+| video_hevc_main10_1080p30.mkv | hevc Main 10 + aac | 1920x1080@30 10-bit 48000 Hz 1ch | avdec_aac, v4l2slh265dec | yes | 166 fps (OK at 30 fps) | ok |
+| video_mjpeg_1080p30_pcm.avi | mjpeg Baseline + pcm_s16le | 1920x1080@30 48000 Hz 1ch | jpegdec | no | 101 fps (OK at 30 fps) | ok |
+| video_mpeg2_1080i25_ac3.mpg | mpeg2video Main + ac3 | 1920x1080@25i 48000 Hz 1ch | avdec_ac3, avdec_mpeg2video | no | 103 fps (OK at 25 fps) | ok |
+| video_mpeg4asp_720p30_mp3.avi | mpeg4 Simple Profile + mp3 | 1280x720@30 48000 Hz 1ch | avdec_mpeg4, mpg123audiodec | no | 189 fps (OK at 30 fps) | ok |
+| video_prores422hq_1080p25_pcm.mov | prores HQ + pcm_s24le | 1920x1080@25 10-bit 48000 Hz 1ch | avdec_prores | no | 71 fps (OK at 25 fps) | ok |
+| video_prores4444_1080p25_alpha.mov | prores 4444 | 1920x1080@25 12-bit | avdec_prores | no | 46 fps (OK at 25 fps) | ok |
+| video_qtrle_720p25_animation.mov | qtrle | 1280x720@25 | avdec_qtrle | no | 152 fps (OK at 25 fps) | ok |
+| video_theora_720p30_vorbis.ogv | theora + vorbis | 1280x720@30 48000 Hz 1ch | theoradec, vorbisdec | no | 120 fps (OK at 30 fps) | ok |
+| video_vp8_720p30_vorbis.webm | vp8 0 + vorbis | 1280x720@30 44100 Hz 1ch | vorbisdec, vp8dec | no | 196 fps (OK at 30 fps) | ok |
+| video_vp9_1080p30_opus.webm | vp9 Profile 0 + opus | 1920x1080@30 48000 Hz 1ch | opusdec, vp9dec | no | 115 fps (OK at 30 fps) | ok |
+| video_wmv2_720p30_wma.wmv | wmv2 + wmav1 | 1280x720@30 48000 Hz 1ch | - | no | - | **fails**: Missing element: Advanced Streaming Format (ASF) demuxer |
+
+### End to end through the service (`service.py`), after the fixes
+
+| File | Import | Play | Output | Result |
+|---|---|---|---|---|
+| audio_aac_48k_stereo.m4a | ok | ok | HDMI audio running | ok |
+| audio_ac3_5.1.ac3 | ok | ok | HDMI audio running | ok |
+| audio_alac_44k1.m4a | ok | ok | HDMI audio running | ok |
+| audio_eac3_5.1.eac3 | ok | ok | HDMI audio running | ok |
+| audio_flac_96k_24bit.flac | ok | ok | HDMI audio running | ok |
+| audio_mp3_44k1_stereo.mp3 | ok | ok | HDMI audio running | ok |
+| audio_opus_48k_stereo.opus | ok | ok | HDMI audio running | ok |
+| audio_pcm_mono_22k05.aiff | ok | ok | HDMI audio running | ok |
+| audio_pcm_s16_48k.wav | ok | ok | HDMI audio running | ok |
+| audio_pcm_s24_96k.wav | ok | ok | HDMI audio running | ok |
+| audio_vorbis_48k_stereo.ogg | ok | ok | HDMI audio running | ok |
+| audio_wma_44k1.wma | refused 422: could not import 1 of 1: "audio_wma_44k1.wma": cannot be played: this system has no GStreamer demuxer for video/x-ms-asf | - | - | **fails** |
+| image_avif_1920x1080.avif | refused 422: could not import 1 of 1: "image_avif_1920x1080.avif": cannot be played: GStreamer cannot decode it: This file contains n | - | - | **fails** |
+| image_bmp_1920x1080.bmp | ok | ok | on screen 1920x1080 | ok |
+| image_gif_1920x1080.gif | ok | ok | on screen 1920x1080 | ok |
+| image_gif_animated.gif | ok | ok | on screen 1920x1080 | ok |
+| image_jpeg2000_1920x1080.jp2 | ok | ok | on screen 1920x1080 | ok |
+| image_jpeg_1920x1080.jpg | ok | ok | on screen 1920x1080 | ok |
+| image_jpeg_4000x3000.jpg | ok | ok | on screen 1440x1080 | ok |
+| image_jpeg_progressive.jpg | ok | ok | on screen 1920x1080 | ok |
+| image_jxl_1920x1080.jxl | refused 422: could not import 1 of 1: "image_jxl_1920x1080.jxl": cannot be played: GStreamer cannot decode it: Could not determine ty | - | - | **fails** |
+| image_png_16bit.png | ok | ok | on screen 1920x1080 | ok |
+| image_png_1920x1080.png | ok | ok | on screen 1920x1080 | ok |
+| image_png_portrait_1080x1920.png | ok | ok | on screen 607x1080 | ok |
+| image_png_rgba_transparent.png | ok | ok | on screen 1920x1080 | ok |
+| image_tiff_1920x1080.tiff | ok | ok | on screen 1920x1080 | ok |
+| image_webp_1920x1080.webp | ok | ok | on screen 1920x1080 | ok |
+| image_webp_lossless.webp | ok | ok | on screen 1920x1080 | ok |
+| video_av1_1080p30_opus.mkv | ok | ok | on screen 1920x1080 | ok |
+| video_dnxhr_hq_1080p25_pcm.mov | ok | ok | on screen 1920x1080 | ok |
+| video_ffv1_1080p25_flac.mkv | ok | ok | on screen 1920x1080 | ok |
+| video_h264_1080p25_interlaced.ts | ok | ok | on screen 1920x1080 | ok |
+| video_h264_1080p30_aac.mp4 | ok | ok | on screen 1920x1080 | ok |
+| video_h264_1080p60_aac.mp4 | ok | ok | on screen 1920x1080 | ok |
+| video_h264_720p50_mp3.mkv | ok | ok | on screen 1920x1080 | ok |
+| video_h264_high10_1080p30.mkv | ok | ok | on screen 1920x1080 | ok |
+| video_h264_vertical_1080x1920.mp4 | ok | ok | on screen 607x1080 | ok |
+| video_hap_1080p25.mov | ok | ok | on screen 1920x1080 | ok |
+| video_hevc_1080p30_aac.mp4 | ok | ok | on screen 1920x1080 | ok |
+| video_hevc_1080p60_aac.mp4 | ok | ok | on screen 1920x1080 | ok |
+| video_hevc_2160p30_aac.mp4 | ok | ok | on screen 1920x1080 | ok |
+| video_hevc_main10_1080p30.mkv | ok | ok | on screen 1920x1080 | ok |
+| video_mjpeg_1080p30_pcm.avi | ok | ok | on screen 1920x1080 | ok |
+| video_mpeg2_1080i25_ac3.mpg | ok | ok | on screen 1920x1080 | ok |
+| video_mpeg4asp_720p30_mp3.avi | ok | ok | on screen 1920x1080 | ok |
+| video_prores422hq_1080p25_pcm.mov | ok | ok | on screen 1920x1080 | ok |
+| video_prores4444_1080p25_alpha.mov | ok | ok | on screen 1920x1080 | ok |
+| video_qtrle_720p25_animation.mov | ok | ok | on screen 1920x1080 | ok |
+| video_theora_720p30_vorbis.ogv | ok | ok | on screen 1920x1080 | ok |
+| video_vp8_720p30_vorbis.webm | ok | ok | on screen 1920x1080 | ok |
+| video_vp9_1080p30_opus.webm | ok | ok | on screen 1920x1080 | ok |
+| video_wmv2_720p30_wma.wmv | refused 422: could not import 1 of 1: "video_wmv2_720p30_wma.wmv": cannot be played: this system has no GStreamer demuxer for video/x | - | - | **fails** |
+
+48 of 52 files import and play.
+
 ## Round 5 — Companion compatibility (2026-09-30)
 
 Target: the Companion instance at companion.drevilish.com (v5.0.4), with the connections **CuTePi-Hyperdeck** (bmd-hyperdeck 3.1.1, model HyperDeck Studio Mini) and **CuTePi-QLab** (figure53-qlab-advance 2.14.1, TCP 53000). Only CuTePi was changed. Conformance was checked three ways:
