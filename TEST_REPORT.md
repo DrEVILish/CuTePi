@@ -454,6 +454,45 @@ stills: no re-render on fades, no infinite hold; DESIGN §6.1.3). Then rerun thi
 software codecs' frame rate are what the GPU compositor wall is for (§6.1.1). Decisions for the user: APNG and
 animated WebP need a decoder this system lacks (or conversion at import).
 
+## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
+
+Pi 4 Model B Rev 1.5, KMS planes, live service; the full support set (94 files) rerun, then the slow-clip rows rerun
+with nothing else running. README table refreshed.
+
+| Change | Before | After |
+|---|---|---|
+| **Straight-alpha blending**: every wall layer gets `pixel blend mode` = Coverage when it claims its plane (`newWallLayer`, `blendCoverage`) | all alpha files blended as Pre-multiplied (edges too bright) | every alpha file that imports: plane AB24/AR24, blend **Coverage** |
+| **Animated images as timelines**: `media.ImageAnimation` reads the header (GIF second image descriptor, APNG acTL, WebP VP8X flag, loop count); `gsp.isStillFile` excludes animated images; image cues of an animated file hold their last frame; direct pool playback loops as the file says (`gsp.DirectOpts`); import records the animation length as the media duration | GIF treated as a still (extension only) | 25 fps GIF: 25.1 fps steady, 25–26 fps through both fades, with and without transparency |
+| **Fade pacing** (`wallLayer.writer`): the step grid counts from the start of each alpha write instead of sleeping two refreshes after the blocking commit; a layer showing a single-frame image, or a clip with no new frame for 0.5 s, steps every refresh; fade loops post every 8 ms (`fadeTick`), and fade teardown waits `alphaLand` (64 ms) for the last alpha | stills ~20 steps/s; video ~20 steps/s | stills **56–58 steps/s**; video and animated images **28–31 steps/s** (the designed 30) |
+
+**What it costs.** A 60 fps clip now shows about 31 fps while it fades (was 39–43), because opacity steps 30 times a
+second instead of 20: the CRTC takes 60 commits a second, shared by frames and alpha writes. Fade smoothness was
+kept over frames, per the output-quality rule (coarser fades were rejected). Steady play is unchanged: H.264 57–59.8,
+MJPEG/MPEG-2/MPEG-4/VP8/WMV2 58.6–60, FFV1 58.
+
+**A regression found and fixed in this round.** The first version judged "moving" by a new frame within four
+refreshes. A slow decoder (DNxHR at about 10 fps) looked still, so its fade-in stepped every refresh and took every
+commit; the clip fell behind its clock, the sink dropped its late frames, and it never recovered (DNxHR HQ 10.7 →
+0.3 fps). Now only a single-frame image (`still`, set when the layer is built) or a clip idle for 0.5 s steps every
+refresh. After the fix, measured with nothing else running: DNxHR HQ 13.7, DNxHR LB 12.6, VP9 35.1, HAP 22.7, HAP
+Alpha 18.1, Theora 44.3, qtrle 20.1 fps (all at or above the first batch).
+
+**Measurement notes.**
+- Running a Go build or test on the Pi during a measurement costs software-decoded clips frames (VP9 measured 26–29
+  fps that way, 35 quiet). Measurements are now taken with nothing else running.
+- qtrle with alpha (240 MB for 8 s, about 30 MB/s) is bound by reading the SD card: 2.7, 14.2, 6.7 and 42.8 fps on
+  consecutive runs, highest once the file sat in the page cache.
+- Stills reach 56–58 opacity steps a second, under the 59 criterion. A per-refresh trace of one still's fade: 113 of
+  about 120 refreshes got a new opacity; the rest are the ~3 refreshes before the fade-in's first write (the picture
+  is already on the plane at opacity 0, invisible) and 4 single-refresh gaps mid-fade (writer thread scheduling). The
+  GPU wall applies opacity on every output frame.
+- The 50 fps GIF stays decode-bound (0.3–0.5 fps on screen).
+
+**Still not Supported:** no video or image meets the 1080p60 + smooth-fade criterion on the KMS wall; the 17
+supported rows are audio. That is what the GPU compositor wall (DESIGN §6.1.1) is for.
+
+**Tests.** `media/animated_test.go` (still and animated GIF, PNG/APNG, WebP; loop counts) and the full Go suite pass.
+
 ## Round 5 — Companion compatibility (2026-09-30)
 
 Target: the Companion instance at companion.drevilish.com (v5.0.4), with the connections **CuTePi-Hyperdeck** (bmd-hyperdeck 3.1.1, model HyperDeck Studio Mini) and **CuTePi-QLab** (figure53-qlab-advance 2.14.1, TCP 53000). Only CuTePi was changed. Conformance was checked three ways:

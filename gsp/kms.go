@@ -33,6 +33,11 @@ const (
 	rotate180 = 1 << 2
 	reflectX  = 1 << 4
 	reflectY  = 1 << 5
+
+	// DRM "pixel blend mode" values (drm_blend.h). GStreamer frames carry
+	// straight (non-premultiplied) alpha, which is Coverage; the kernel's
+	// default, Pre-multiplied, brightens every semi-transparent pixel.
+	blendCoverage = 1
 )
 
 // ioctl request numbers (drm.h / drm_mode.h, 'd' = 0x64, _IOWR = 0xC0...).

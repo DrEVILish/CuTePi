@@ -50,3 +50,44 @@ func TestThemesComeOnlyFromFtlThemes(t *testing.T) {
 		t.Fatalf("GET /api/themes = %d, %d themes (want %d)", resp.Code, len(list), len(themes))
 	}
 }
+
+// Variants and tint come through from the manifest (ftl-themes contract:
+// palette variants; theme tint), and the picker markup has their fields.
+func TestThemeVariantsAndTint(t *testing.T) {
+	themes := Themes()
+	if len(themes) == 0 {
+		t.Skip("ftl-themes submodule not checked out")
+	}
+	var aero, plain *Theme
+	for i := range themes {
+		switch themes[i].Name {
+		case "win7-aero":
+			aero = &themes[i]
+		case "xbmc":
+			plain = &themes[i]
+		}
+	}
+	if aero == nil || plain == nil {
+		t.Fatal("win7-aero or xbmc missing from the manifest")
+	}
+	if aero.Tint == nil || aero.Tint.Token != "--aero-tint" || aero.Tint.Label == "" {
+		t.Errorf("win7-aero tint = %+v, want --aero-tint with a label", aero.Tint)
+	}
+	if len(aero.Variants) == 0 {
+		t.Error("win7-aero has no variants")
+	}
+	if plain.Tint != nil || len(plain.Variants) != 0 {
+		t.Errorf("xbmc should have no tint or variants: %+v", plain)
+	}
+	if !strings.Contains(string(ThemeMap()), `"--aero-tint"`) {
+		t.Error("theme map lacks the tint token the boot script applies")
+	}
+	for _, bad := range []*ThemeTint{
+		{Token: "--x;background:url(x)", Default: "#000000"},
+		{Token: "--x", Default: "red"},
+	} {
+		if validTint(bad) != nil {
+			t.Errorf("unsafe tint %+v accepted", bad)
+		}
+	}
+}

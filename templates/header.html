@@ -56,6 +56,19 @@
         if (link) link.href = THEMES[id].href + stamp;
         document.documentElement.dataset.theme = theme;
         document.documentElement.dataset.themeId = id;
+        // Sub-theme and tint, saved per theme in this browser (ftl-themes
+        // contract: palette variants; theme tint). ?variant= and ?tint=
+        // preview for this page view only, like ?theme=.
+        var t = THEMES[id], root = document.documentElement, v = "", c = "";
+        try {
+          v = localStorage.getItem("cutepi.theme.variant." + theme) || "";
+          c = localStorage.getItem("cutepi.theme.tint." + theme) || "";
+          var q = new URLSearchParams(location.search);
+          if (q.get("variant") !== null) v = q.get("variant");
+          if (q.get("tint")) c = q.get("tint");
+        } catch (_) {}
+        if (v && (t.variants || []).some(function (x) { return x.id === v; })) root.dataset.variant = v;
+        if (t.tint && /^#[0-9a-fA-F]{6}$/.test(c)) root.style.setProperty(t.tint.token, c);
       }());
     </script>
   </head>

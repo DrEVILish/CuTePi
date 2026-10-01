@@ -367,7 +367,9 @@ fetch("/api/themes", { headers: { Accept: "application/json" } })
   .then((list) => {
     if (Array.isArray(list)) {
       list.forEach((t) => {
-        if (t && t.id && t.name && t.href) appThemeMap[t.id] = { name: t.name, href: t.href, scheme: t.scheme };
+        if (t && t.id && t.name && t.href) {
+          appThemeMap[t.id] = { name: t.name, href: t.href, scheme: t.scheme, variants: t.variants || [], tint: t.tint || null };
+        }
       });
     }
   })
@@ -471,18 +473,107 @@ function applyAppTheme(id) {
     const v = (link.getAttribute("href") || "").split("?")[1];
     link.href = appThemeMap[id].href + (v ? "?" + v : "");
   }
+  // The outgoing theme's tint token must not linger on <html>.
+  const prev = appThemeMap[document.documentElement.dataset.themeId];
+  if (prev && prev.tint) document.documentElement.style.removeProperty(prev.tint.token);
   document.documentElement.dataset.theme = appThemeMap[id].name;
   document.documentElement.dataset.bsTheme = appThemeMap[id].scheme || "dark";
   document.documentElement.dataset.themeId = id;
   try {
     localStorage.setItem("cutepi.theme", id);
   } catch (e) {}
+  applyThemeVariant(themeStore("variant"));
+  applyThemeTint(themeStore("tint"));
+  themeControls();
 }
+
+// Sub-themes and tint (ftl-themes contract "Palette variants" and "Theme
+// tint"), saved per theme slug in this browser like the theme itself.
+function currentTheme() {
+  return appThemeMap[document.documentElement.dataset.themeId] || null;
+}
+function themeStore(kind, value) {
+  const key = "cutepi.theme." + kind + "." + document.documentElement.dataset.theme;
+  try {
+    if (value === undefined) return localStorage.getItem(key) || "";
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch (e) {}
+  return "";
+}
+function applyThemeVariant(v) {
+  const t = currentTheme();
+  const ok = t && v && (t.variants || []).some((x) => x.id === v);
+  if (ok) document.documentElement.dataset.variant = v;
+  else delete document.documentElement.dataset.variant;
+}
+function applyThemeTint(c) {
+  const t = currentTheme();
+  if (!t || !t.tint) return;
+  if (/^#[0-9a-fA-F]{6}$/.test(c || "")) document.documentElement.style.setProperty(t.tint.token, c);
+  else document.documentElement.style.removeProperty(t.tint.token);
+}
+// themeControls fills the Style and colour fields for the current theme and
+// hides each one the theme does not have.
+function themeControls() {
+  const t = currentTheme();
+  const vf = document.getElementById("settingsThemeVariantField");
+  const vs = document.getElementById("settingsThemeVariant");
+  if (vf && vs) {
+    const vars = (t && t.variants) || [];
+    vs.replaceChildren();
+    const std = document.createElement("option");
+    std.value = "";
+    std.textContent = "Standard";
+    vs.append(std);
+    vars.forEach((x) => {
+      const o = document.createElement("option");
+      o.value = x.id;
+      o.textContent = x.label;
+      vs.append(o);
+    });
+    vs.value = document.documentElement.dataset.variant || "";
+    vf.hidden = vars.length === 0;
+  }
+  const tf = document.getElementById("settingsThemeTintField");
+  const ti = document.getElementById("settingsThemeTint");
+  if (tf && ti) {
+    const tint = t && t.tint;
+    tf.hidden = !tint;
+    if (tint) {
+      const lbl = document.getElementById("settingsThemeTintLabel");
+      if (lbl) lbl.textContent = tint.label || "Colour";
+      ti.value = themeStore("tint") || tint.default;
+    }
+  }
+}
+window.cutepiThemeControls = themeControls;
 
 document.addEventListener("change", (e) => {
   if (e.target.id === "settingsTheme") {
     applyAppTheme(e.target.value);
+  } else if (e.target.id === "settingsThemeVariant") {
+    themeStore("variant", e.target.value);
+    applyThemeVariant(e.target.value);
+    // A variant may be a tint preset: choosing one clears the custom colour
+    // so the preset shows (contract "Theme tint", rule 3).
+    themeStore("tint", "");
+    applyThemeTint("");
+    themeControls();
+  } else if (e.target.id === "settingsThemeTint") {
+    themeStore("tint", e.target.value);
+    applyThemeTint(e.target.value);
   }
+});
+// Live preview while the colour is dragged; saved on change (above).
+document.addEventListener("input", (e) => {
+  if (e.target.id === "settingsThemeTint") applyThemeTint(e.target.value);
+});
+document.addEventListener("click", (e) => {
+  if (!(e.target instanceof Element) || !e.target.closest("#settingsThemeTintReset")) return;
+  themeStore("tint", "");
+  applyThemeTint("");
+  themeControls();
 });
 
 // Boot-time sprite + every swapped-in partial (the server renders the

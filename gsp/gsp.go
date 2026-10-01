@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -582,7 +583,25 @@ func TestShowing() bool {
 // directory, replacing any currently active pipeline. Direct media playback
 // has no cue-specific hold policy but honours the configured loop default.
 func Load(filename string) error {
-	return LoadWithOpts(filename, LoadOpts{Loop: config.Loop(), Hold: isStillFile(filename)})
+	return LoadWithOpts(filename, DirectOpts(filename, 0))
+}
+
+// DirectOpts are the load options for playing filename straight from the
+// media pool (no cue): the configured loop default; a still holds until
+// Stop/Panic; an animated image repeats as the file says (GIF/APNG/WebP
+// loop count) and then holds its last frame, as a browser shows it.
+func DirectOpts(filename string, gain float64) LoadOpts {
+	o := LoadOpts{Loop: config.Loop(), LoudnessGain: gain, Hold: isStillFile(filename)}
+	if a := animationOf(filename); a.Animated {
+		switch {
+		case a.LoopForever:
+			o.Loop, o.LoopCount = true, 0
+		case !o.Loop && a.Loops > 1:
+			o.Loop, o.LoopCount = true, a.Loops
+		}
+		o.Hold = true
+	}
+	return o
 }
 
 // LoadWithOpts loads filename with an optional trim window and hold policy.
@@ -1156,7 +1175,7 @@ func FadeAndStop(durMs int) {
 		}
 	}
 	if Layered() {
-		time.Sleep(2 * fadeTick) // the last alpha lands before the plane goes
+		time.Sleep(alphaLand) // the last alpha lands before the plane goes
 	}
 	mgr.clearIfCurrent(p)
 }
@@ -1253,10 +1272,25 @@ func (m *manager) rerenderStill(p *gst.Pipeline) {
 }
 
 // isStillFile reports whether name is a single-frame image (the same
-// extension list import uses, media.KindFromExtension).
+// extension list import uses, media.KindFromExtension). An animated GIF,
+// APNG or WebP is not a still: it plays as a timeline, so none of the
+// single-frame shortcuts (re-render on fades, infinite hold, armed panic
+// image) apply to it (§6.1.3).
 func isStillFile(name string) bool {
-	return media.KindFromExtension(name) == media.KindImage
+	return media.KindFromExtension(name) == media.KindImage && !animationOf(name).Animated
 }
+
+// animationOf reads the animation header of a media-pool file (microseconds:
+// header only).
+func animationOf(name string) media.Animation {
+	if media.KindFromExtension(name) != media.KindImage {
+		return media.Animation{}
+	}
+	return media.ImageAnimation(filepath.Join(config.MediaLocation(), name))
+}
+
+// IsAnimated reports whether filename is an animated image (GIF, APNG, WebP).
+func IsAnimated(filename string) bool { return animationOf(filename).Animated }
 
 // IsStill reports whether filename is a single-frame image. Direct playback
 // (no cue) holds such an image on the wall until Stop/Panic instead of
@@ -1927,7 +1961,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		}
 		if isVideo && kmsWall() != nil {
 			fw, fh := capsSize(caps)
-			if err := configureKMSTail(pipeline, byFactory, spec.opts, fw, fh); err != nil {
+			if err := configureKMSTail(pipeline, byFactory, spec.opts, fw, fh, !spec.isTest && isStillFile(spec.filename)); err != nil {
 				msg := gst.NewErrorMessage(self, gst.NewGError(3, err), "no display layer", nil)
 				pipeline.GetPipelineBus().Post(msg)
 				return

@@ -153,11 +153,20 @@ Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
 ### 5.1 Overall shell and themes
 
 Exactly 100vh: topbar (natural height) + content row (media pool | cuesheet panes) with no page-level scroll; only the panes scroll internally (`scrollbar-gutter: stable`).
-Themes come **only** from **ftl-themes** (git submodule `third_party/ftl-themes`, contract v4, tracking `main`);
-CuTePi ships no themes of its own. The picker lists the submodule's `dist/themes.json` (32 themes, default `ftl:xbmc`);
-each theme links its bundle `/ftl/themes/<slug>.css`, sets `html[data-theme=<slug>]`, and its icon sprite
+Themes come **only** from **ftl-themes** (git submodule `third_party/ftl-themes`, contract v4, v4.1, tracking
+`main`); CuTePi ships no themes of its own. The picker lists the submodule's `dist/themes.json` (34 themes, default
+`ftl:xbmc`); each theme links its bundle `/ftl/themes/<slug>.css`, sets `html[data-theme=<slug>]`, and its icon sprite
 `dist/icons/<slug>.svg`. The choice is browser-local (`localStorage` `cutepi.theme`); older saved values (`lcars`,
 `app:blue-future`) map to the ftl theme of the same name.
+- **Sub-themes and tint** (contract "Palette variants" and "Theme tint"). Beneath the theme, Settings › Appearance
+  offers **Style** (the theme's `variants`, plus Standard; sets `html[data-variant]`) and, for a theme that declares a
+  `tint`, a colour control labelled with the theme's own name for it (Win7 Aero: "Window Color", applied as the inline
+  custom property `tint.token` on `<html>`, live while dragging, with Default to clear it). Each field is hidden for
+  themes without it. Both are saved per theme slug in this browser (`cutepi.theme.variant.<slug>`,
+  `cutepi.theme.tint.<slug>`) and applied by the pre-paint boot script, so there is no flash. Choosing a Style clears
+  the custom colour, because a variant may be a tint preset. `?variant=` and `?tint=` preview for one page view, like
+  `?theme=`. A tint reaches the page only if its token is a custom-property name and its default a `#rrggbb` colour
+  (`routes.validTint`).
 - **Cascade**: Bootstrap (kept for its JavaScript and a few utilities) < ftl-themes (`@layer ui`) < CuTePi's own
   unlayered CSS. Bootstrap is imported into `@layer bootstrap` because v4 dropped the `ftl-` class prefix and 35 class
   names now match Bootstrap's.
@@ -400,10 +409,15 @@ assets (`gsp` test; skips when absent).
     sources now go to RGB with full chroma; 90°/270° add
     `v4l2convert → capsfilter(I420, on-screen size) → identity drop-allocation → videoflip`; Stretch adds a
     `capssetter` pixel-aspect rewrite.
-  - Fades write the plane's alpha from elapsed time on a per-layer writer, one write per two refreshes: each alpha write
-    is a display commit taking a vblank, as is each video frame, so a 30 fps clip keeps every frame through a fade
-    (measured 30 fps during a 1 s ESC fade). A 60 fps clip loses frames only while it fades. Alpha is blended over the
-    black primary plane, so colours scale evenly (no hue shift, no grey wash).
+  - Fades write the plane's alpha from elapsed time on a per-layer writer. Each alpha write is a display commit that
+    waits for a vblank, as is each video frame. The writer steps on a fixed grid counted from the start of each write
+    (the commit's own wait is part of the step): **every two refreshes (30 steps a second) while the layer's video is
+    moving** (a new frame within the last four refreshes, read from the sink's `stats.rendered`), so a 30 fps clip keeps
+    every frame through a fade; **every refresh (60 steps a second) for a layer showing no new frames** (a still, a
+    paused or held clip). Fade loops post levels every 8 ms (`fadeTick`) and the writer keeps only the latest, so a
+    fresh level waits at each vblank. A 60 fps clip shows about 31 fps while it fades (the CRTC takes 60 commits a
+    second in all). Alpha is blended over the black primary plane, so colours scale evenly (no hue shift, no grey
+    wash).
   - **Frame-rate limits (measured on the Pi 4 at 1080p60; TEST_REPORT O1)** — the reason for the GPU compositor.
     Each `kmssink` frame is a blocking `SetPlane` commit and each alpha write is another commit on the same CRTC. The
     driver serialises them, so the whole wall gets **60 commits a second**, shared by every plane and every alpha
@@ -554,9 +568,10 @@ conversion to an opaque format on the way.
 
 - The converted frame must reach the plane in an alpha format (ARGB8888/ABGR8888 and friends — `kmsSysmemCaps`
   lists them; `videoconvert` keeps alpha when the source has it, and 10/12-bit alpha sources go to 8-bit ARGB).
-- The plane's **`pixel blend mode` must be `Coverage`** (straight alpha) for these layers. The kernel default is
-  `Pre-multiplied`, which mis-blends straight-alpha frames; `kmssink`'s `plane-properties` sets it per layer, together
-  with the layer's own `alpha` (opacity/fades, unchanged).
+- The plane's **`pixel blend mode` is `Coverage`** (straight alpha). The kernel default is `Pre-multiplied`, which
+  mis-blends straight-alpha frames. `newWallLayer` sets Coverage on every layer when it claims the plane, beside its
+  rotation; opaque formats carry no alpha, so it changes nothing for them. The layer's own `alpha` (opacity, fades)
+  multiplies the file's alpha as before.
 - Layers beneath show through, as the display controller blends planes in `zpos` order; the black primary plane is the
   bottom.
 - Costs: alpha formats are 32-bit RGB, so 4:2:0 hardware-decoded video is never affected; alpha sources are software
@@ -568,26 +583,34 @@ alpha preserved. Same rules: no opaque conversion in the cue chain, background b
 
 **Animated images.** An animated image is a cue with a **timeline**, not a still:
 
-- Kind stays *image* in the media pool (thumbnail = first frame; a badge marks it animated with its frame rate and
-  length), but playback treats it like video: it runs from the first frame with its own frame timing, has a duration
-  (the sum of its frame delays, × loop count), and supports Loop, Hold (stop on the last frame), trim and seek.
-- The still-image shortcuts (§6.2 infinite hold, brightness re-render of the single frame in `applyBrightness`,
-  exemption from warm preroll, the armed panic holding image) apply only to **single-frame** images. A fade over an
-  animated image must not restart or freeze the animation. Single-frame vs animated is decided at import from the
-  frame count (ffprobe), stored with the media, not guessed from the extension (a `.gif` is often a still).
+- Kind stays *image* in the media pool (thumbnail = first frame), but playback treats it like video: it runs from the
+  first frame with its own frame timing, and its media duration is the sum of its frame delays (ffprobe's format
+  duration, recorded at import). A pool badge showing "animated" with the frame rate is planned.
+- Single-frame vs animated is read from the file header (`media.ImageAnimation`): a second GIF image descriptor,
+  an APNG `acTL` chunk before the first `IDAT`, the WebP `VP8X` animation flag, plus the loop count (GIF NETSCAPE2.0,
+  APNG `num_plays`, WebP `ANIM`). It costs microseconds, so playback decides at load without a probe or a stored
+  flag, and the extension never decides (a `.gif` is often a still; an APNG is often a `.png`).
+- The still-image shortcuts (§6.2 infinite hold, brightness re-render of the single frame in `applyBrightness`, the
+  armed panic holding image) apply only to **single-frame** images (`gsp.isStillFile`). A fade over an animated image
+  runs on the plane's alpha and never restarts or freezes the animation.
+- Looping: a **cue** follows its own Loop/loop count, like a video cue, so auto-continue and waits stay predictable;
+  an animated image cue holds its last frame when it ends (blank display duration = until stopped; a set duration =
+  until its timer). **Direct playback** from the pool (no cue) repeats as the file says (`gsp.DirectOpts`: loop count
+  0 = forever) and then holds the last frame, as a browser shows it.
 - Frame timing: GIF delays are in 1/100 s, so 25 fps (4/100) and 50 fps (2/100) are exact, and 60 fps cannot be
   stored. On a 60 Hz wall every frame is shown at its due refresh (a 25 fps animation repeats frames in a 2-3 cadence,
-  as any 25 fps video does). GIF's "0/100 s" and "1/100 s" delays are treated as 10/100 s, as browsers do.
+  as any 25 fps video does). Browsers treat GIF delays of 0 or 1/100 s as 10/100 s; whether `avdec_gif` does the
+  same is still to be checked.
 - Decoders: `avdec_gif` (animated GIF, palette transparency → RGBA). APNG and animated WebP need decoders that this
   GStreamer may lack (no `avdec_apng`; `webpdec` decodes stills only): import checks them like any file (§2,
   `gsp.CheckDecodable`), and if they are refused the gap is recorded in the codec table as unsupported, not hidden.
   Converting such files at import to a lossless intermediate is a fallback to decide with the user.
 
 **Measured on the KMS wall (2026-10-01, TEST_REPORT "Codec support: transparency and animated images").** Alpha
-reaches the planes for every alpha file that imports (AB24/AR24, VP9 alpha included), but every plane blends it as
-premultiplied, so semi-transparent pixels show too bright. A 25 fps animated GIF plays every frame, through the fades
-as well. A 50 fps 1080p GIF is decode-bound (`avdec_gif` about 37 fps). APNG and animated WebP are refused at import.
-Work to do: Coverage blend per alpha layer, and animated images as timelines.
+reaches the planes for every alpha file that imports (AB24/AR24, VP9 alpha included). The first run found every plane
+blending it as premultiplied; since 2026-10-02 every layer blends as Coverage (TEST_REPORT "Codec support round 2").
+A 25 fps animated GIF plays every frame, through the fades as well, now as a timeline rather than a still. A 50 fps
+1080p GIF is decode-bound (`avdec_gif` about 37 fps). APNG and animated WebP are refused at import.
 
 **Tests.** The codec support set includes every alpha codec in MOV and MKV, transparent stills and animated images
 (§8, `tools/codec-corpus/make-support.sh`), and the support test checks transparency and animation on the real

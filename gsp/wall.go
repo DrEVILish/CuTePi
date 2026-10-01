@@ -25,10 +25,11 @@ import (
 type wallLayer struct {
 	p       *gst.Pipeline
 	plane   *kmsPlane
-	sink    *gst.Element
-	opacity float64 // cue opacity 0..1 (multiplies every fade level)
-	visible bool    // part of the on-screen stack (not a warm/prerolling slot)
-	parked  bool    // invisible at the top zpos, ready to be raised (panic image)
+	sink    atomic.Pointer[gst.Element] // the layer's kmssink (set once the tail is built)
+	opacity float64                     // cue opacity 0..1 (multiplies every fade level)
+	visible bool                        // part of the on-screen stack (not a warm/prerolling slot)
+	parked  bool                        // invisible at the top zpos, ready to be raised (panic image)
+	still   atomic.Bool                 // shows a single-frame image: no video to share commits with
 
 	// Alpha writes are commits that wait for the next vblank (~16 ms), so
 	// they run on the layer's own writer: callers (fade loops holding the
@@ -48,6 +49,8 @@ func (l *wallLayer) post(alpha float64) {
 
 func (l *wallLayer) writer(w *KMSWall) {
 	last := -1.0
+	var lastFrames uint64
+	lastMove := time.Now() // a clip counts as moving from its start
 	for {
 		select {
 		case <-l.quit:
@@ -59,14 +62,57 @@ func (l *wallLayer) writer(w *KMSWall) {
 		if a == last || (math.Abs(a-last) < 1.0/400 && a != 0 && a != l.opacity) {
 			continue
 		}
+		start := time.Now()
 		_ = w.setAlpha(l.plane, a)
 		last = a
-		// Each alpha write is a display commit that takes a vblank, and so
-		// does every video frame kmssink shows. One alpha write per two
-		// refreshes (30 Hz at 60 Hz) leaves a 30 fps clip every frame it
-		// needs while fading (measured: 30 fps held through a 1 s fade).
-		time.Sleep(2 * w.framePeriod())
+		// Each alpha write is a display commit that waits for a vblank, and
+		// so does every video frame kmssink shows: the CRTC takes 60 commits
+		// a second in all. While the layer's video is moving, alpha steps on
+		// a grid of two refreshes (30 a second), leaving a 30 fps clip every
+		// frame it needs. A layer showing no new frames (a still, a paused or
+		// held clip) has nothing to share with, so it steps every refresh:
+		// a 60-step fade. The grid counts from the start of the write: the
+		// commit's own vblank wait is part of the step, not added to it
+		// (sleeping two refreshes after the blocking write gave 20 steps a
+		// second, codec support test).
+		// A clip counts as moving until it has shown no new frame for half a
+		// second (paused, held). Judging by a few refreshes instead starved
+		// slow decoders: a 10 fps clip looked still, its fade took every
+		// commit, and it never caught up with its clock (DNxHR 10.7 -> 0.3 fps).
+		step := w.framePeriod()
+		if n, ok := l.rendered(); ok && n != lastFrames {
+			lastFrames, lastMove = n, time.Now()
+		}
+		if !l.still.Load() && time.Since(lastMove) < 500*time.Millisecond {
+			step *= 2
+		}
+		if d := step - time.Since(start); d > 0 {
+			time.Sleep(d)
+		}
 	}
+}
+
+// rendered is the number of frames the layer's sink has shown (basesink
+// stats), read once per alpha step: no per-frame callback.
+func (l *wallLayer) rendered() (uint64, bool) {
+	sink := l.sink.Load()
+	if sink == nil {
+		return 0, false
+	}
+	v, err := sink.GetProperty("stats")
+	if err != nil {
+		return 0, false
+	}
+	st, ok := v.(*gst.Structure)
+	if !ok || st == nil {
+		return 0, false
+	}
+	r, err := st.GetValue("rendered")
+	if err != nil {
+		return 0, false
+	}
+	n, ok := r.(uint64)
+	return n, ok
 }
 
 var (
@@ -159,6 +205,11 @@ func newWallLayer(p *gst.Pipeline, opts LoadOpts) (*wallLayer, error) {
 	}
 	if err := w.set(plane, "rotation", bits); err != nil {
 		logs.Printf(logs.GSPPipeDebug, "gsp: plane rotation %d: %v", bits, err)
+	}
+	// Per-pixel alpha (ProRes 4444, PNG, GIF, ...) is straight alpha; opaque
+	// formats have none, so Coverage changes nothing for them (§6.1.3).
+	if err := w.set(plane, "pixel blend mode", blendCoverage); err != nil {
+		logs.Printf(logs.GSPPipeDebug, "gsp: plane blend mode: %v", err)
 	}
 	layersMu.Lock()
 	layers[p] = l
@@ -367,7 +418,7 @@ func fadeOutgoing(o *outgoing, durMs int) {
 			o.volumeEl.Set("volume", o.gain*k)
 		}
 		if t >= 1 {
-			time.Sleep(2 * fadeTick) // let the last alpha land before teardown
+			time.Sleep(alphaLand) // let the last alpha land before teardown
 			return
 		}
 	}
@@ -402,9 +453,18 @@ func retireOutgoing() {
 	}
 }
 
-// fadeTick paces fade loops at about the display refresh. Levels are
-// computed from elapsed time, so a fade always takes its stated duration.
-const fadeTick = 16 * time.Millisecond
+// fadeTick paces fade loops at twice the display refresh. Levels are
+// computed from elapsed time, so a fade always takes its stated duration;
+// each layer's alpha writer keeps only the latest level, so posting faster
+// than the refresh means a fresh level is waiting at every vblank (at 16 ms,
+// plus the loop's own work, levels came slower than 60 Hz and a still's
+// fade missed refreshes).
+const fadeTick = 8 * time.Millisecond
+
+// alphaLand is how long a fade waits after its last level before tearing
+// the layer down, so the final alpha (0) is on screen first: the writer may
+// be mid-step (up to two refreshes) plus the commit's own vblank wait.
+const alphaLand = 64 * time.Millisecond
 
 // wallRect resolves a cue's geometry (x, y, width, height; each "" for the
 // default, "N" or "Npx" for pixels, or "N%" of the display) to a rectangle.
@@ -589,7 +649,7 @@ func cropPx(v string, full int) int {
 
 // configureKMSTail wires the chain built from kmsVideoTail: plane, shared fd,
 // box, crop, rotation and stretch. srcW/srcH are the decoded frame size.
-func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts LoadOpts, srcW, srcH int) error {
+func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts LoadOpts, srcW, srcH int, still bool) error {
 	w := kmsWall()
 	sink := firstByFactory(byFactory, "kmssink")
 	if w == nil || sink == nil {
@@ -599,7 +659,8 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 	if err != nil {
 		return err
 	}
-	l.sink = sink
+	l.sink.Store(sink)
+	l.still.Store(still)
 	sink.Set("fd", w.fd)
 	sink.Set("plane-id", int(l.plane.id))
 	sink.Set("skip-vsync", true) // one vsync waiter per DRM fd: several sinks share it

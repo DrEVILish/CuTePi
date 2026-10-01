@@ -36,6 +36,19 @@
                 </select>
                 <div id="settingsThemeHelp" class="field-hint text-muted">Saved in this browser only. Each theme comes from ftl-themes and sets the layout as well as the colours.</div>
               </div>
+              <!-- Sub-theme and tint (ftl-themes contract: palette variants;
+                theme tint). Filled and shown by ui.js for themes that have them. -->
+              <div class="field" id="settingsThemeVariantField" hidden>
+                <label class="label" for="settingsThemeVariant">Style</label>
+                <select class="select" id="settingsThemeVariant"></select>
+              </div>
+              <div class="field" id="settingsThemeTintField" hidden>
+                <label class="label" for="settingsThemeTint" id="settingsThemeTintLabel">Colour</label>
+                <div class="settings-tint-row">
+                  <input type="color" class="input settings-short" id="settingsThemeTint">
+                  <button type="button" class="btn btn-sm" id="settingsThemeTintReset">Default</button>
+                </div>
+              </div>
             </div>
 
             <div class="tab-pane fade" id="settingsTabPlayback" role="tabpanel">
@@ -375,6 +388,7 @@
         document.getElementById("settingsGoAdvance").checked = !!s.goAdvance;
         document.getElementById("settingsTheme").value =
           document.documentElement.dataset.themeId;
+        if (window.cutepiThemeControls) window.cutepiThemeControls();
         var d = s.display || {};
         document.getElementById("settingsDisplayMode").textContent = s.displayMode || "unknown";
         document.getElementById("settingsDisplayEDID").checked = !!d.useEDID;

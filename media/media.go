@@ -252,6 +252,16 @@ func Probe(path string) (Metadata, error) {
 	if meta.Info != nil && meta.Kind != KindImage {
 		meta.Info.Duration, _ = strconv.ParseFloat(parsed.Format.Duration, 64)
 	}
+	// An animated image has a timeline (§6.1.3): its length is the sum of its
+	// frame delays, which ffprobe reports as the format duration.
+	if meta.Kind == KindImage && ImageAnimation(path).Animated {
+		if d, err := strconv.ParseFloat(parsed.Format.Duration, 64); err == nil && d > 0 {
+			meta.Duration = d
+			if meta.Info != nil {
+				meta.Info.Duration = d
+			}
+		}
+	}
 
 	// Images carry no duration in ffprobe's format section (a still frame
 	// has none); only time-based media must have one. Parsing AFTER the

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -33,6 +34,26 @@ type Theme struct {
 	// Scheme is "light" or "dark": how Bootstrap's data-bs-theme is set while
 	// the theme is active.
 	Scheme string `json:"scheme"`
+	// Variants are the theme's sub-themes (html[data-variant=<id>]), offered
+	// beneath it in the picker (contract "Palette variants").
+	Variants []ThemeVariant `json:"variants,omitempty"`
+	// Tint is the theme's user-chosen colour, if it declares one: the picker
+	// must then offer a colour control labelled Tint.Label (contract "Theme
+	// tint"), applied as an inline custom property on <html>.
+	Tint *ThemeTint `json:"tint,omitempty"`
+}
+
+// ThemeVariant is one palette variant of a theme.
+type ThemeVariant struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// ThemeTint is a theme's declared tint token.
+type ThemeTint struct {
+	Token   string `json:"token"`
+	Default string `json:"default"`
+	Label   string `json:"label"`
 }
 
 // DefaultThemeID is what an unset or unrecognised preference resolves to:
@@ -62,9 +83,11 @@ func Themes() []Theme {
 		return nil
 	}
 	var manifest []struct {
-		Slug   string `json:"slug"`
-		Label  string `json:"label"`
-		Scheme string `json:"scheme"`
+		Slug     string         `json:"slug"`
+		Label    string         `json:"label"`
+		Scheme   string         `json:"scheme"`
+		Variants []ThemeVariant `json:"variants"`
+		Tint     *ThemeTint     `json:"tint"`
 	}
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil
@@ -84,13 +107,30 @@ func Themes() []Theme {
 			Label: m.Label,
 			// v4 bundles wrap themselves in @layer ui; header.html orders
 			// the layers so the app's unlayered CSS always wins.
-			Href:   "/ftl/themes/" + m.Slug + ".css",
-			Scheme: scheme,
+			Href:     "/ftl/themes/" + m.Slug + ".css",
+			Scheme:   scheme,
+			Variants: m.Variants,
+			Tint:     validTint(m.Tint),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
 	return out
 }
+
+// validTint keeps a tint only if its token is a custom property name and its
+// default a #rrggbb colour: both are written into the page (an inline style
+// on <html>), so nothing else from the manifest reaches it.
+func validTint(t *ThemeTint) *ThemeTint {
+	if t == nil || !tokenRE.MatchString(t.Token) || !hexColorRE.MatchString(t.Default) {
+		return nil
+	}
+	return t
+}
+
+var (
+	tokenRE    = regexp.MustCompile(`^--[a-z0-9-]+$`)
+	hexColorRE = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+)
 
 // ThemeNames reports the valid data-theme values.
 func ThemeNames() []string {
@@ -101,13 +141,13 @@ func ThemeNames() []string {
 	return names
 }
 
-// ThemeMap is the id -> {name, href, scheme} map the pre-paint boot script
-// in header.html uses to pick a stylesheet before the first render, and that
-// ui.js reuses when the picker changes.
+// ThemeMap is the id -> {name, href, scheme, variants, tint} map the
+// pre-paint boot script in header.html uses to pick a stylesheet, variant and
+// tint before the first render, and that ui.js reuses when the picker changes.
 func ThemeMap() template.JS {
-	m := map[string]map[string]string{}
+	m := map[string]Theme{}
 	for _, t := range Themes() {
-		m[t.ID] = map[string]string{"name": t.Name, "href": t.Href, "scheme": t.Scheme}
+		m[t.ID] = t
 	}
 	data, err := json.Marshal(m)
 	if err != nil {

@@ -543,7 +543,10 @@ func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 			// A blank display duration means indefinitely: with no timer to
 			// end it and no hold to park it, a still would EOS-teardown on
 			// its first frame (the inspector promises "blank = indefinitely").
-			(strings.HasPrefix(cue.Mimetype, "image/") && cue.CueDuration == 0),
+			(strings.HasPrefix(cue.Mimetype, "image/") && cue.CueDuration == 0) ||
+			// An animated image shorter than its display duration stays on
+			// its last frame until the timer ends the cue, not black (§6.1.3).
+			(strings.HasPrefix(cue.Mimetype, "image/") && gsp.IsAnimated(cue.Filename)),
 		Loop:           cue.Loop,
 		LoopCount:      cue.LoopCount,
 		Volume:         cue.Volume,

@@ -502,7 +502,7 @@ func Api(rg *gin.RouterGroup) {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := gsp.LoadWithOpts(filename, gsp.LoadOpts{Loop: config.Loop(), LoudnessGain: gain, Hold: gsp.IsStill(filename)}); err != nil {
+		if err := gsp.LoadWithOpts(filename, gsp.DirectOpts(filename, gain)); err != nil {
 			logs.Printf(logs.RTEDirect, "direct play failed filename=%q error=%v", filename, err)
 			respondError(c, http.StatusInternalServerError, err.Error())
 			return
@@ -526,7 +526,7 @@ func Api(rg *gin.RouterGroup) {
 			c.String(http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := gsp.LoadWithOpts(filename, gsp.LoadOpts{Loop: config.Loop(), LoudnessGain: gain, Hold: gsp.IsStill(filename)}); err != nil {
+		if err := gsp.LoadWithOpts(filename, gsp.DirectOpts(filename, gain)); err != nil {
 			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
