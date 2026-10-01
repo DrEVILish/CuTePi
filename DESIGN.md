@@ -47,6 +47,10 @@ selection, settings).
   `gsp.CheckDecodable`), then pass `ffmpeg -v error -t 1`. ffprobe reads formats this system's GStreamer may not play,
   so a probe alone would accept files that only fail at cue time. Accepted files that still fail at cue time surface
   the error to the user then. The file extension never decides (any extension imports if it decodes).
+- **Transparency and animation**: CuTePi plays **video with an alpha channel** (ProRes 4444, QuickTime Animation,
+  PNG-in-MOV, CineForm RGBA, HAP Alpha, FFV1 and VP9 with alpha, …), **stills with transparency** (PNG, TIFF, WebP,
+  GIF) and **animated images** (animated GIF, APNG, animated WebP) — transparent areas show the layers beneath (black
+  when nothing is beneath), and animations play at their own frame timing. Design: §6.1.3; tests: §8.
 - **Decoder ranks**: decoders that autoplugging would pick but that fail on the Pi are demoted
   (`gsp.decoderRankOverrides`): `v4l2jpegdec` (unreliable firmware path; software `jpegdec` instead) and
   `openjpegdec` (fails to negotiate JPEG 2000; `avdec_jpeg2000` instead).
@@ -523,6 +527,73 @@ with the KMS plane wall as the default until the GPU wall covers everything it d
 4. Stills, test patterns, slideshow, warm preroll, panic holding image (armed pad).
 5. Measure against the plane wall on the same clips, then make the GPU wall the default.
 
+### 6.1.3 Transparency and animated images
+
+**Requirement.** Three kinds of media must play like any other cue (fades, opacity, geometry, panic, hold, loop):
+
+- **Video with an alpha channel**: ProRes 4444/4444 XQ with alpha, QuickTime Animation (qtrle ARGB), PNG video,
+  CineForm RGBA, HAP Alpha, FFV1 and VP9 with alpha (`yuva420p`), in MOV and in MKV wherever the container carries
+  the codec.
+- **Stills with transparency**: PNG (RGBA and palette with tRNS), TIFF, WebP and GIF (1-bit) transparency.
+- **Animated images**: animated GIF, APNG and animated WebP, played at the file's own frame delays, looping as the file
+  says (GIF/APNG loop count, 0 = forever) unless the cue's own Loop/Hold says otherwise.
+
+**What transparency means on the wall.** A transparent pixel shows whatever lies beneath it: lower cue layers (for
+example a lower-third graphic over a playing video, once simultaneous cues land, §6.1.2; during a crossfade, the
+outgoing cue), else the black background. Cue opacity and fades multiply the file's own alpha. The file's alpha is
+**straight** (not premultiplied) — that is how every decoder above hands it over — and must be blended as such:
+blending straight alpha as premultiplied brightens every semi-transparent edge and gradient.
+
+**Decode.** The decoders keep the alpha plane: `avdec_prores`/`avdec_qtrle`/`avdec_png`/`avdec_cfhd`/`avdec_hap`/
+`avdec_ffv1` output RGBA, ARGB, GBRA or `A444_10`-style formats; VP9/VP8 alpha travels as a Matroska side stream
+(BlockAdditional) and needs `matroskademux` → `codecalphademux` → `vp9alphadecodebin` (present on the Pi); stills
+decode through `pngdec`/`avdec_*`/`webpdec`, GIF through `avdec_gif`. The cue's video chain must not drop alpha: no
+conversion to an opaque format on the way.
+
+**KMS plane wall (current).** Per-pixel alpha is a plane feature:
+
+- The converted frame must reach the plane in an alpha format (ARGB8888/ABGR8888 and friends — `kmsSysmemCaps`
+  lists them; `videoconvert` keeps alpha when the source has it, and 10/12-bit alpha sources go to 8-bit ARGB).
+- The plane's **`pixel blend mode` must be `Coverage`** (straight alpha) for these layers. The kernel default is
+  `Pre-multiplied`, which mis-blends straight-alpha frames; `kmssink`'s `plane-properties` sets it per layer, together
+  with the layer's own `alpha` (opacity/fades, unchanged).
+- Layers beneath show through, as the display controller blends planes in `zpos` order; the black primary plane is the
+  bottom.
+- Costs: alpha formats are 32-bit RGB, so 4:2:0 hardware-decoded video is never affected; alpha sources are software
+  decoded and converted, so their frame rate is bound by the CPU as for any software codec (import warns, §5.7).
+
+**GPU compositor wall (§6.1.1).** `glvideomixerelement` blends each pad with straight alpha (source alpha × pad
+alpha) over the layers beneath, so alpha frames need only to arrive as RGBA through `glupload → glcolorconvert` with
+alpha preserved. Same rules: no opaque conversion in the cue chain, background black.
+
+**Animated images.** An animated image is a cue with a **timeline**, not a still:
+
+- Kind stays *image* in the media pool (thumbnail = first frame; a badge marks it animated with its frame rate and
+  length), but playback treats it like video: it runs from the first frame with its own frame timing, has a duration
+  (the sum of its frame delays, × loop count), and supports Loop, Hold (stop on the last frame), trim and seek.
+- The still-image shortcuts (§6.2 infinite hold, brightness re-render of the single frame in `applyBrightness`,
+  exemption from warm preroll, the armed panic holding image) apply only to **single-frame** images. A fade over an
+  animated image must not restart or freeze the animation. Single-frame vs animated is decided at import from the
+  frame count (ffprobe), stored with the media, not guessed from the extension (a `.gif` is often a still).
+- Frame timing: GIF delays are in 1/100 s, so 25 fps (4/100) and 50 fps (2/100) are exact, and 60 fps cannot be
+  stored. On a 60 Hz wall every frame is shown at its due refresh (a 25 fps animation repeats frames in a 2-3 cadence,
+  as any 25 fps video does). GIF's "0/100 s" and "1/100 s" delays are treated as 10/100 s, as browsers do.
+- Decoders: `avdec_gif` (animated GIF, palette transparency → RGBA). APNG and animated WebP need decoders that this
+  GStreamer may lack (no `avdec_apng`; `webpdec` decodes stills only): import checks them like any file (§2,
+  `gsp.CheckDecodable`), and if they are refused the gap is recorded in the codec table as unsupported, not hidden.
+  Converting such files at import to a lossless intermediate is a fallback to decide with the user.
+
+**Measured on the KMS wall (2026-10-01, TEST_REPORT "Codec support: transparency and animated images").** Alpha
+reaches the planes for every alpha file that imports (AB24/AR24, VP9 alpha included), but every plane blends it as
+premultiplied, so semi-transparent pixels show too bright. A 25 fps animated GIF plays every frame, through the fades
+as well. A 50 fps 1080p GIF is decode-bound (`avdec_gif` about 37 fps). APNG and animated WebP are refused at import.
+Work to do: Coverage blend per alpha layer, and animated images as timelines.
+
+**Tests.** The codec support set includes every alpha codec in MOV and MKV, transparent stills and animated images
+(§8, `tools/codec-corpus/make-support.sh`), and the support test checks transparency and animation on the real
+display: the plane's pixel format must carry alpha and its blend mode must be straight (Coverage), and an animated
+image must present every one of its frames at its own rate through the fades.
+
 ### 6.1.2 Simultaneous cues (planned, after §6.1.1)
 
 Several cues playing at once, each on its own layer, with one audio mixer (`audiomixer`) feeding the HDMI device;
@@ -676,6 +747,12 @@ moves the generation. Keep them consistent.
   sheet-interaction behaviour is verified manually; no browser harness
   exists (deliberate: the interaction bugs to date all lived in the server
   model, which the suite does cover).
+- Codec support (README "Codec support", `tools/codec-corpus/support.py`): every codec and container in the support
+  set is played through the live service with a 1 s fade in and out and measured from the kernel (frames latched
+  per refresh, opacity writes). The set covers video with alpha (`*_alpha`: ProRes 4444, qtrle, PNG, CineForm, HAP,
+  FFV1, VP9), transparent stills (PNG, TIFF, WebP, GIF) and animated images (GIF at 25 and 50 fps, with and without
+  transparency; APNG; animated WebP). Alpha files must reach the plane in an alpha format with straight-alpha blending;
+  animated images must present every frame at the file's rate.
 - Expected build process (until the build pipeline is confirmed): tidy the
   module, build every package, vet, then run the full test suite — and
   repeat that check before closing a session.

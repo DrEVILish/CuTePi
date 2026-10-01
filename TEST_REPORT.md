@@ -6,7 +6,7 @@
 - **UI:** driven with Playwright on the dev server (`192.168.10.162`), pointed at the test server. Nothing was installed on the test server.
 - **Picture:** measured from outside the process by sampling `/dev/fb0` (RGB565 luma trace, 20ms resolution) on the test server. The sampler's timestamps were merged with `MARK` lines from the UI scripts.
 - **Before each phase:** the baseline database and config were restored.
-- **Baseline:** 6 cues and a slideshow group "New Group" (2 members), `escFadeMs=500`, `panicHoldImage=test_blue_1080p.png`.
+- **Baseline:** 6 cues and a slideshow group "New Group" (2 members), `escFadeMs=1000` (the default), `panicHoldImage=test_blue_1080p.png`.
 - **Go tests:** `go test ./...` passes for every package, and `gofmt` and `go vet` are clean.
 
 ### Phases and results (all green after fixes)
@@ -412,6 +412,48 @@ Speed is decoding as fast as possible into fake sinks, no display.
 
 48 of 52 files import and play.
 
+## Codec support: transparency and animated images (2026-10-01)
+
+Raspberry Pi 4 Model B Rev 1.5, KMS display planes, 1080p60 HDMI, live service. The support set
+(`make-support.sh`) gained 13 alpha videos (`*_alpha`: ProRes 4444, qtrle ARGB, PNG, CineForm RGBA, HAP Alpha in MOV
+and MKV; FFV1 and VP9 with alpha in MKV), 4 transparent stills (PNG, TIFF, WebP, GIF) and 5 animated images (GIF at
+25 fps, 25 fps with transparency and 50 fps; APNG and animated WebP at 30 fps). Every alpha file uses one fixed mask:
+opaque left third, a ramp to transparent across the middle, transparent right third. `support.py` now also checks:
+alpha files must reach the plane in an alpha pixel format (read once from the DRM debugfs atomic state, at the end
+of steady play) with the plane's `pixel blend mode` set to Coverage (straight alpha); animated images must present
+every frame (≥ 98 % of the file's own rate) through the fades and steady play. Results are in the README table.
+Setting: ESC fade 1000 ms (the default) restored after the run.
+
+**Result: 0 of 21 supported.** What was measured:
+
+| Finding | Files | Measured |
+|---|---|---|
+| Alpha reaches the plane | every alpha file that imports (11 videos, 4 stills, animated alpha GIF) | Plane format AB24 or AR24 (8-bit RGBA with alpha), including VP9 alpha through `vp9alphadecodebin`. Nothing drops the alpha channel on the way. |
+| **Straight alpha blended as premultiplied** | all of them | Every plane keeps the kernel default `pixel blend mode` = Pre-multiplied. The decoders hand over straight alpha, so semi-transparent pixels (the ramp) show too bright. Fix: set Coverage per alpha layer through `kmssink plane-properties` (DESIGN §6.1.3). |
+| Animated GIF plays every frame | gif_anim (25 fps) | Steady 25.1 fps, fade in 25, fade out 25.6: the animation keeps running through the fades. Fails only on fade smoothness (below). |
+| Animated GIF with transparency | gif_anim_alpha | Steady 25.1 fps, fade in 21, fade out 24.4: loses a few frames while fading. |
+| 50 fps GIF decode-bound | gif_anim_50fps | `avdec_gif` decodes 1080p at about 37 fps (400 frames in 10.7 s, no sink). The cue falls behind its clock and the sink drops the late frames: 0.5 fps on screen. |
+| Fades on stills are coarse | every still, as in the opaque stills of the first batch | About 20 opacity steps a second (criterion 59), against 30 designed for the plane wall's alpha writer (one write per two refreshes). The cause is not yet traced. The GPU wall (§6.1.1) applies opacity on every output frame. |
+| Software alpha codecs too slow at 1080p60 | ProRes 4444 0.3 fps, CineForm 0 fps, PNG video 0 fps, VP9 alpha 0.8 fps, FFV1 11 fps, qtrle 14.5 fps, HAP 17.8 fps | CPU decode plus the conversion to RGBA for the plane. As for the opaque versions of these codecs. |
+| APNG refused at import | apng_anim.apng | No GStreamer APNG decoder (`avdec_apng` absent); the decode check times out (10 s). |
+| Animated WebP refused at import | webp_anim_30fps.webp | `webpdec` decodes stills only: "Internal data stream error". This ffmpeg cannot decode animated WebP either. |
+| HAP Alpha in MKV refused | hap_alpha.mkv | Same as hap.mkv: `matroskademux` has no codec-ID mapping for HAP (video/x-unknown). |
+| qtrle in MKV unreadable | qtrle_alpha.mkv (and qtrle.mkv) | ffmpeg's own decoder refuses it ("Unsupported colorspace: 0 bits/sample"): Matroska does not store the QuickTime bit depth that qtrle needs, so the container cannot really carry qtrle. |
+
+**Test-tool fixes in this batch.**
+- *Generating the GIFs rebooted the Pi twice.* A one-pass `split → palettegen → paletteuse` graph over an endless
+  `testsrc2` source buffers every 1080p frame, because palettegen emits its palette only at the end of the stream.
+  The source never ended, so memory filled up. GIFs are now made in two passes (palette to a file, then
+  `paletteuse`), with every source bounded by `duration=`. The generator was then run under `ulimit -v` as a guard.
+- `support.py` only scans `video/`, `image/` and `audio/`: the alpha mask beside them had been run as a test file.
+- `--only` takes a comma-separated list. Animated WebP is named with its rate (`*_anim_30fps`) because ffprobe cannot
+  count its frames.
+
+**Next.** On the KMS wall: Coverage blend mode for alpha layers, and animated images handled as timelines (not
+stills: no re-render on fades, no infinite hold; DESIGN §6.1.3). Then rerun this batch. The fade-step rate and the
+software codecs' frame rate are what the GPU compositor wall is for (§6.1.1). Decisions for the user: APNG and
+animated WebP need a decoder this system lacks (or conversion at import).
+
 ## Round 5 — Companion compatibility (2026-09-30)
 
 Target: the Companion instance at companion.drevilish.com (v5.0.4), with the connections **CuTePi-Hyperdeck** (bmd-hyperdeck 3.1.1, model HyperDeck Studio Mini) and **CuTePi-QLab** (figure53-qlab-advance 2.14.1, TCP 53000). Only CuTePi was changed. Conformance was checked three ways:
@@ -760,5 +802,5 @@ The answers will go into DESIGN.md.
 
 ## State left behind
 
-- **Test server:** baseline restored (6 cues, group, `escFadeMs=500`, no custom test-pattern pins). Test uploads (`t_clip.mp4`, `t_tone.wav`) and their thumbnails were removed. The service runs the latest build. The HyperDeck (9993), OSC UDP and OSC TCP (53000) listeners are **on**, so the Companion connections work; turn them off in Settings › Network if not wanted.
+- **Test server:** baseline restored (6 cues, group, `escFadeMs=1000`, no custom test-pattern pins). Test uploads (`t_clip.mp4`, `t_tone.wav`) and their thumbnails were removed. The service runs the latest build. The HyperDeck (9993), OSC UDP and OSC TCP (53000) listeners are **on**, so the Companion connections work; turn them off in Settings › Network if not wanted.
 - **Dev server:** `/tmp/shot` harness removed. Playwright stays installed, as allowed.

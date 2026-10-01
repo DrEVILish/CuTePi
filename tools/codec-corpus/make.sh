@@ -39,6 +39,20 @@ mk $V/video_mpeg2_1080i25_ac3.mpg         $(v 1920x1080 25) $A -c:v mpeg2video -
 mk $V/video_mpeg4asp_720p30_mp3.avi       $(v 1280x720 30)  $A -c:v mpeg4 -q:v 3 -c:a libmp3lame
 mk $V/video_prores422hq_1080p25_pcm.mov   $(v 1920x1080 25) $A -c:v prores_ks -profile:v 3 -c:a pcm_s24le
 mk $V/video_prores4444_1080p25_alpha.mov  $(v 1920x1080 25) -c:v prores_ks -profile:v 4 -pix_fmt yuva444p10le
+# ProRes: every profile (0 Proxy, 1 LT, 2 422, 3 422 HQ, 4 4444, 5 4444 XQ), plus 1080p60 and UHD.
+mk $V/video_prores_proxy_1080p25.mov      $(v 1920x1080 25) $A -c:v prores_ks -profile:v 0 -c:a pcm_s16le
+mk $V/video_prores_lt_1080p25.mov         $(v 1920x1080 25) $A -c:v prores_ks -profile:v 1 -c:a pcm_s16le
+mk $V/video_prores422_1080p25.mov         $(v 1920x1080 25) $A -c:v prores_ks -profile:v 2 -c:a pcm_s16le
+mk $V/video_prores4444xq_1080p25.mov      $(v 1920x1080 25) -c:v prores_ks -profile:v 5 -pix_fmt yuv444p10le
+mk $V/video_prores422hq_1080p60.mov       $(v 1920x1080 60) $A -c:v prores_ks -profile:v 3 -c:a pcm_s16le
+mk $V/video_prores422hq_2160p25.mov       $(v 3840x2160 25) $A -c:v prores_ks -profile:v 3 -c:a pcm_s16le
+# CineForm (GoPro CFHD): 4:2:2 10-bit at several qualities, RGB 12-bit, RGBA with alpha, 1080p60 and UHD.
+mk $V/video_cineform_422_1080p25.mov      $(v 1920x1080 25) $A -c:v cfhd -quality film1 -pix_fmt yuv422p10le -c:a pcm_s16le
+mk $V/video_cineform_422_low_1080p25.mov  $(v 1920x1080 25) -c:v cfhd -quality low -pix_fmt yuv422p10le
+mk $V/video_cineform_rgb12_1080p25.mov    $(v 1920x1080 25) -c:v cfhd -quality film1 -pix_fmt gbrp12le
+mk $V/video_cineform_rgba12_1080p25.mov   $(v 1920x1080 25) -c:v cfhd -quality film1 -pix_fmt gbrap12le
+mk $V/video_cineform_422_1080p60.mov      $(v 1920x1080 60) $A -c:v cfhd -quality film1 -pix_fmt yuv422p10le -c:a pcm_s16le
+mk $V/video_cineform_422_2160p25.mov      $(v 3840x2160 25) $A -c:v cfhd -quality film1 -pix_fmt yuv422p10le -c:a pcm_s16le
 mk $V/video_dnxhr_hq_1080p25_pcm.mov      $(v 1920x1080 25) $A -c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p -c:a pcm_s16le
 mk $V/video_mjpeg_1080p30_pcm.avi         $(v 1920x1080 30) $A -c:v mjpeg -q:v 3 -pix_fmt yuvj420p -c:a pcm_s16le
 mk $V/video_theora_720p30_vorbis.ogv      $(v 1280x720 30)  $A -c:v libtheora -q:v 7 -c:a libvorbis
