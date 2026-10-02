@@ -500,9 +500,33 @@ a mixer pad behind a pinned DMA_DRM capsfilter at parse time, so the harness lin
 | HEVC | 214.6 fps |
 | HEVC + HEVC | 138.4 fps |
 
-The spike's open point (H.264 + HEVC only 29 fps) is therefore not the H.264 frame layout and not the GPU: the same
-pair runs at 70 fps straight into the mixer, so the loss is in the cue → wall bridge. Pinning the decoder to NV12 or
-YU12 DMA_DRM caps fails at runtime (no frames), and is not needed.
+Headless, the bridge costs nothing either. A C harness rebuilt from the DESIGN bridge rules (cue pipeline → appsink
+answering the allocation query with video meta and a pool hint; a C thread per layer pulls, shallow-copies and pushes
+into the wall's appsrc; layers attach after preroll): H.264 80.0 fps, HEVC 207.8–216.6, H.264 + HEVC 70.9–72.5, every
+frame pulled and pushed. Two more bridge rules found: the cue's appsink must ask for `video/x-raw(memory:DMABuf)`
+(accepting anything, the HEVC decoder hands over SAND-tiled frames in system memory, which `glupload` refuses), and a
+layer's appsrc caps come from the cue's preroll sample.
+
+**On HDMI (real time, `glimagesink` GBM, service stopped for the test):** `glimagesink` presents with legacy page
+flips (`drm_mode_page_flip_ioctl`, one per presented frame; no atomic commits), so flips count presented frames.
+
+| Layers, through the bridge | Mixer output | Flips (presented) |
+|---|---|---|
+| HEVC | 57.8 fps | 60.0/s |
+| HEVC + HEVC | 57.0 | 58.8/s (longest gap 33 ms) |
+| H.264 | 55–56 | 18.7–22.3/s (gaps up to 0.9 s) |
+| H.264 + HEVC | 53–54 | 1.3–1.7/s |
+| H.264, sink drops nothing late (`qos=false max-lateness=-1`) | 42.5 | 42.7/s (every mixed frame shown) |
+| H.264 + HEVC, sink drops nothing late | 36.7 | 37.2/s |
+
+Without the bridge or the mixer, H.264 → `glupload` → `glimagesink` presents 59.8–60.0/s, with or without a
+`glcolorconvert` pass, and so does HEVC. Pushing cue frames ahead (unsynced appsink, bounded appsrc) instead of in real
+time, and a mixer latency of 50 or 150 ms, change nothing. So on the display the mixer pass for an H.264 layer takes
+about 23 ms (42 fps) where it took 12.5 ms headless, and the late frames are dropped by the sink; HEVC layers are not
+affected. Cause not yet found. Also seen, not yet investigated: software H.264 (`avdec_h264`) and hardware H.264
+copied to system memory, each straight into `glimagesink`, presented almost nothing (6 and 4 flips in 9 s).
+
+Pinning the decoder to NV12 or YU12 DMA_DRM caps fails at runtime (no frames), and is not needed.
 
 ## SD card and decode-path measurements (2026-10-02)
 
