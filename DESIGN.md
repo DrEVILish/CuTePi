@@ -501,7 +501,10 @@ wall pipeline (always running)                                    ▼
   buffer, so a mixer rendering into the ring is immune (measured: 0 allocations under the same load). For the same
   reason the wall's pacing source is a 16×16 live black frame scaled by its mixer pad, not a 1080p GPU-drawn one,
   and no other driver-owned 1080p render target sits in the per-frame path (hardware and ISP frames are sampled by
-  the mixer directly, `glcolorconvert` being a pass-through for them).
+  the mixer directly, `glcolorconvert` being a pass-through for them). Measured on HDMI through the complete chain
+  (TEST_REPORT "The mixer rendering straight into the ring"): H.264 60.0, H.264 + HEVC 60.0 and HEVC + HEVC 60.0
+  presented frames a second, every cue frame delivered. The allocation query is answered idempotently (it runs again
+  when a layer attaches) and the pool reuses ring slots as its buffers are freed.
 - **Every codec.** Hardware-decoded frames enter the GPU without copies: H.264 as DMABuf, HEVC as `DMA_DRM` NV12 with
   the Broadcom SAND128 modifier, which Mesa's V3D driver samples directly (this is what makes hardware HEVC usable).
   Software-decoded video does **not** go up from system memory: on V3D a `glupload` from system memory tiles every

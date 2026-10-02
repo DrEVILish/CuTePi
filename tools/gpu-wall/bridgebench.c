@@ -11,6 +11,8 @@
 #include <gst/video/video.h>
 #include <gst/gl/gl.h>
 #include <gst/gl/gstglfuncs.h>
+#include <gst/gl/gstglbufferpool.h>
+#include <gst/gl/gstglmemory.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
@@ -36,7 +38,7 @@ typedef struct { GstElement *sink; GstElement *src; int i; } Layer;
  * context as AB24 EGLImages. The GL thread draws each mixed frame into a free
  * ring buffer; a presenter thread page-flips it and waits for the flip, so
  * the GL thread never waits for vblank. */
-#define RING 3
+#define RING 4
 typedef struct { uint32_t handle, pitch, fb; int dmafd; EGLImageKHR img; GLuint tex, fbo; int fence; } RingBuf;
 static int use_fence = 1, copy_only = 0; static EGLDisplay gl_dpy;
 static PFNEGLCREATESYNCKHRPROC mksync; static PFNEGLDESTROYSYNCKHRPROC rmsync; static PFNEGLDUPNATIVEFENCEFDANDROIDPROC dupfence;
@@ -143,6 +145,109 @@ static gpointer present_thread(gpointer d) {
     shown = idx;
   }
 }
+
+/* ---- -ring: the mixer renders straight into the ring ----------------------
+ * A GstGLBufferPool whose buffers wrap the ring textures (EGLImages over the
+ * linear dumb buffers). Offered to the mixer in its allocation query, so its
+ * output lands in scan-out memory with no copy pass and no driver-owned
+ * 1080p render target (TEST_REPORT "The fresh-buffer mode"). */
+typedef struct { GstGLBufferPool parent; } RingPool;
+typedef struct { GstGLBufferPoolClass parent; } RingPoolClass;
+static GType ring_pool_get_type(void);
+G_DEFINE_TYPE(RingPool, ring_pool, GST_TYPE_GL_BUFFER_POOL)
+static int ring_used[RING]; static GstVideoInfo ring_vinfo; static GstSample *ring_sample[RING];
+static GstBufferPool *ring_pool_obj; static gboolean ring_imported;
+static GstFlowReturn ring_pool_alloc(GstBufferPool *pool, GstBuffer **out, GstBufferPoolAcquireParams *ap) {
+  int i; for (i = 0; i < RING && ring_used[i]; i++);
+  if (i >= RING) { fprintf(stderr, "ring pool: no more buffers\n"); return GST_FLOW_ERROR; }
+  GstGLContext *ctx = GST_GL_BUFFER_POOL(pool)->context;
+  GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_gl_handle(ctx, NULL, &ring_vinfo, 0, NULL,
+    GST_GL_TEXTURE_TARGET_2D, GST_GL_RGBA, GUINT_TO_POINTER(ring[i].tex), NULL, NULL);
+  GstBuffer *b = gst_buffer_new(); gpointer wd[1] = { GUINT_TO_POINTER(ring[i].tex) };
+  if (!gst_gl_memory_setup_buffer(gst_gl_memory_allocator_get_default(ctx), b, params, NULL, wd, 1)) {
+    fprintf(stderr, "ring pool: setup_buffer failed\n"); return GST_FLOW_ERROR;
+  }
+  gst_gl_allocation_params_free((GstGLAllocationParams *)params);
+  ring_used[i] = 1; *out = b; return GST_FLOW_OK;
+}
+static int ring_index_of(GstBuffer *b);
+static void ring_pool_free(GstBufferPool *pool, GstBuffer *b) {
+  int i = ring_index_of(b); if (i >= 0) ring_used[i] = 0;
+  GST_BUFFER_POOL_CLASS(ring_pool_parent_class)->free_buffer(pool, b);
+}
+static void ring_pool_class_init(RingPoolClass *k) { ((GstBufferPoolClass *)k)->alloc_buffer = ring_pool_alloc; ((GstBufferPoolClass *)k)->free_buffer = ring_pool_free; }
+static void ring_pool_init(RingPool *p) {}
+static int ring_index_of(GstBuffer *b) {
+  GstGLMemory *gm = (GstGLMemory *)gst_buffer_peek_memory(b, 0); guint t = gst_gl_memory_get_texture_id(gm);
+  for (int i = 0; i < RING; i++) if (ring[i].tex == t) return i;
+  return -1;
+}
+/* Mixer src pad: answer its allocation query with the ring pool. */
+static GstPadProbeReturn ring_allocq(GstPad *pad, GstPadProbeInfo *info, gpointer d) {
+  GstQuery *q = GST_PAD_PROBE_INFO_QUERY(info);
+  if (GST_QUERY_TYPE(q) != GST_QUERY_ALLOCATION) return GST_PAD_PROBE_OK;
+  GstCaps *caps; gst_query_parse_allocation(q, &caps, NULL);
+  if (!caps || !gst_video_info_from_caps(&ring_vinfo, caps)) return GST_PAD_PROBE_OK;
+  GstGLContext *ctx = NULL; g_object_get(d, "context", &ctx, NULL);
+  if (!ctx) { fprintf(stderr, "ring: mixer has no GL context yet\n"); return GST_PAD_PROBE_OK; }
+  if (!ring_imported) { gst_gl_context_thread_add(ctx, gl_setup, NULL); ring_imported = TRUE; } /* import the ring once */
+  if (!ring_pool_obj) {
+    ring_pool_obj = g_object_new(ring_pool_get_type(), NULL);
+    GST_GL_BUFFER_POOL(ring_pool_obj)->context = gst_object_ref(ctx);
+    GstStructure *cfg = gst_buffer_pool_get_config(ring_pool_obj);
+    gst_buffer_pool_config_set_params(cfg, caps, ring_vinfo.size, RING, RING);
+    gst_buffer_pool_config_add_option(cfg, GST_BUFFER_POOL_OPTION_VIDEO_META);
+    if (!gst_buffer_pool_set_config(ring_pool_obj, cfg)) fprintf(stderr, "ring: pool set_config refused\n");
+  }
+  gst_query_add_allocation_meta(q, GST_VIDEO_META_API_TYPE, NULL);
+  gst_query_add_allocation_pool(q, ring_pool_obj, ring_vinfo.size, RING, RING);
+  fprintf(stderr, "ring: pool offered to the mixer (%d buffers)\n", RING);
+  gst_object_unref(ctx);
+  return GST_PAD_PROBE_HANDLED;
+}
+/* On the GL thread: a native fence after the mixer's render of ring[cur_idx]. */
+static void gl_fence(GstGLContext *ctx, gpointer d) {
+  ring[cur_idx].fence = -1;
+  if (use_fence) {
+    EGLint at[] = { EGL_SYNC_NATIVE_FENCE_FD_ANDROID, EGL_NO_NATIVE_FENCE_FD_ANDROID, EGL_NONE };
+    EGLSyncKHR sy = mksync(gl_dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, at); glFlush();
+    ring[cur_idx].fence = dupfence(gl_dpy, sy); rmsync(gl_dpy, sy);
+  } else glFinish();
+}
+static gpointer ring_present_thread(gpointer d) {
+  int shown = -1; drmEventContext ev = { .version = 2, .page_flip_handler = flip_done };
+  for (;;) {
+    int idx = GPOINTER_TO_INT(g_async_queue_pop(ready_q)) - 1;
+    if (idx < 0) return NULL;
+    if (ring[idx].fence >= 0) { struct pollfd ff = { .fd = ring[idx].fence, .events = POLLIN }; poll(&ff, 1, 1000); close(ring[idx].fence); ring[idx].fence = -1; }
+    int done = 0;
+    if (!copy_only && drmModePageFlip(kfd, crtc_id, ring[idx].fb, DRM_MODE_PAGE_FLIP_EVENT, &done)) { perror("pageflip"); gst_sample_unref(ring_sample[idx]); ring_sample[idx] = NULL; continue; }
+    if (copy_only) g_usleep(16667); else { struct pollfd pf = { .fd = kfd, .events = POLLIN }; while (!done) { if (poll(&pf, 1, 100) > 0) drmHandleEvent(kfd, &ev); } }
+    presented++;
+    if (shown >= 0) { gst_sample_unref(ring_sample[shown]); ring_sample[shown] = NULL; } /* back to the pool */
+    shown = idx;
+  }
+}
+static int ring_run(GstElement *wall, GstElement *wout, double secs) {
+  if (!copy_only && drmModeSetCrtc(kfd, crtc_id, ring[0].fb, 0, 0, &conn_id, 1, &mode)) { perror("setcrtc"); return 2; }
+  ready_q = g_async_queue_new();
+  g_thread_new("present", ring_present_thread, NULL);
+  gint64 end = g_get_monotonic_time() + (gint64)(secs * G_USEC_PER_SEC);
+  GstGLContext *wctx = NULL;
+  while (g_get_monotonic_time() < end) {
+    GstSample *ws = gst_app_sink_try_pull_sample(GST_APP_SINK(wout), 100 * GST_MSECOND);
+    if (!ws) continue;
+    GstBuffer *b = gst_sample_get_buffer(ws); int idx = ring_index_of(b);
+    if (idx < 0) { static int warned; if (!warned++) fprintf(stderr, "ring: mixer output is not a ring buffer (pool not used)\n"); gst_sample_unref(ws); continue; }
+    if (!wctx) wctx = ((GstGLBaseMemory *)gst_buffer_peek_memory(b, 0))->context;
+    cur_idx = idx; gst_gl_context_thread_add(wctx, gl_fence, NULL);
+    gl_draws++;
+    ring_sample[idx] = ws; /* held until the buffer has left the screen */
+    g_async_queue_push(ready_q, GINT_TO_POINTER(idx + 1));
+  }
+  return 0;
+}
+
 static int kms_run(GstElement *wall, GstElement *wout, double secs) {
   GstSample *first = gst_app_sink_pull_sample(GST_APP_SINK(wout));
   if (!first) { fprintf(stderr, "kms: no first sample\n"); return 2; }
@@ -180,6 +285,10 @@ static void thread_cpu_report(void) {
     GstPad *sp = gst_element_get_static_pad(up, "src"); GstCaps *c = gst_pad_get_current_caps(sp);
     if (c) { GstStructure *st = gst_caps_get_structure(c, 0); fprintf(stderr, "layer %d upload: format %s target %s\n", i, gst_structure_get_string(st, "format"), gst_structure_get_string(st, "texture-target")); }
   }
+  if (g_wall) { GstElement *mx = gst_bin_get_by_name(GST_BIN(g_wall), "m");
+    for (int i = 0; mx && i < MAXL + 1; i++) { char pn[12]; snprintf(pn, sizeof pn, "sink_%d", i);
+      GstPad *sp = gst_element_get_static_pad(mx, pn); if (!sp) break; GstCaps *c = gst_pad_get_current_caps(sp);
+      if (c) { GstStructure *st = gst_caps_get_structure(c, 0); fprintf(stderr, "mixer %s: %s %s\n", pn, gst_structure_get_string(st, "format"), gst_structure_get_string(st, "texture-target")); } } }
   fprintf(stderr, "thread cpu:");
   while ((t = g_dir_read_name(d))) {
     gchar *path = g_strdup_printf("/proc/self/task/%s/stat", t), *buf = NULL;
@@ -230,7 +339,7 @@ static gpointer pump(gpointer data) {
 }
 int main(int argc, char **argv) {
   gst_init(&argc, &argv);
-  int qmax = 3, a = 1, display = 0, cuesync = 0, split = 0, kms = 0; long mixlat = 33000000; const char *dsink = "glimagesink sync=true";
+  int qmax = 3, a = 1, display = 0, cuesync = 0, split = 0, kms = 0, ringmode = 0, tiny = 0; long mixlat = 33000000; const char *dsink = "glimagesink sync=true";
   while (a < argc && argv[a][0] == '-') {
     if (!strcmp(argv[a], "-pool")) pool_min = atoi(argv[++a]);
     else if (!strcmp(argv[a], "-qmax")) qmax = atoi(argv[++a]);
@@ -239,6 +348,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[a], "-sink")) dsink = argv[++a];
     else if (!strcmp(argv[a], "-split")) split = 1;
     else if (!strcmp(argv[a], "-kms")) { kms = 1; display = 1; }
+    else if (!strcmp(argv[a], "-ring")) { kms = 1; display = 1; ringmode = 1; }
+    else if (!strcmp(argv[a], "-tiny")) tiny = 1;
     else if (!strcmp(argv[a], "-finish")) use_fence = 0;
     else if (!strcmp(argv[a], "-copy")) copy_mode = 1;
     else if (!strcmp(argv[a], "-target")) target = argv[++a];
@@ -251,10 +362,13 @@ int main(int argc, char **argv) {
    * 60 fps (bridge rule), glimagesink presents, every pipeline shares one
    * clock and base time so cue timestamps are wall timestamps. */
   GString *w = display ? g_string_new(NULL) : NULL;
-  if (display) g_string_printf(w,
-      "gltestsrc is-live=true pattern=black ! video/x-raw(memory:GLMemory),width=1920,height=1080,framerate=60/1 ! m.sink_0 "
-      "glvideomixerelement name=m background=black latency=%ld ! video/x-raw(memory:GLMemory),width=1920,height=1080,framerate=60/1,format=RGBA ! "
-      "identity name=wsink ! %s", mixlat, (split || kms) ? (kms ? "appsink name=wout sync=true max-buffers=2 drop=false" : "appsink name=wout sync=false max-buffers=2 drop=false") : dsink);
+  if (display) g_string_printf(w, "%s ! m.sink_0 "
+      "glvideomixerelement name=m background=black latency=%ld sink_0::width=1920 sink_0::height=1080 ! "
+      "video/x-raw(memory:GLMemory),width=1920,height=1080,framerate=60/1,format=RGBA ! "
+      "identity name=wsink ! %s",
+      tiny ? "videotestsrc is-live=true pattern=black ! video/x-raw,width=16,height=16,framerate=60/1 ! glupload ! glcolorconvert ! video/x-raw(memory:GLMemory),format=RGBA"
+           : "gltestsrc is-live=true pattern=black ! video/x-raw(memory:GLMemory),width=1920,height=1080,framerate=60/1",
+      mixlat, (split || kms) ? (kms ? (ringmode ? "appsink name=wout sync=true max-buffers=1 drop=false enable-last-sample=false" : "appsink name=wout sync=true max-buffers=2 drop=false") : "appsink name=wout sync=false max-buffers=2 drop=false") : dsink);
   else w = g_string_new(
       "glvideomixerelement name=m background=black ! "
       "video/x-raw(memory:GLMemory),width=1920,height=1080,format=RGBA ! fakesink name=wsink sync=false");
@@ -268,6 +382,10 @@ int main(int argc, char **argv) {
   if (!wall || err) { fprintf(stderr, "wall: %s\n", err ? err->message : "parse failed"); return 2; }
   g_wall = wall;
   GstElement *m = gst_bin_get_by_name(GST_BIN(wall), "m");
+  if (ringmode) {
+    if (kms_open()) return 2;
+    gst_pad_add_probe(gst_element_get_static_pad(m, "src"), GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM, ring_allocq, m, NULL);
+  }
   Layer L[MAXL]; GstElement *cue[MAXL];
   for (int i = 0; i < n; i++) {
     char nm[16]; snprintf(nm, sizeof nm, "out%d", i);
@@ -309,8 +427,8 @@ int main(int argc, char **argv) {
   gst_element_set_state(wall, GST_STATE_PLAYING);
   for (int i = 0; i < n; i++) { gst_element_set_state(cue[i], GST_STATE_PLAYING); g_thread_new("pump", pump, &L[i]); }
   if (kms) {
-    if (kms_open()) return 2;
-    int rc = kms_run(wall, gst_bin_get_by_name(GST_BIN(wall), "wout"), 9.0);
+    if (!ringmode && kms_open()) return 2;
+    int rc = ringmode ? ring_run(wall, gst_bin_get_by_name(GST_BIN(wall), "wout"), 9.0) : kms_run(wall, gst_bin_get_by_name(GST_BIN(wall), "wout"), 9.0);
     double s = (g_get_monotonic_time() - t0) / 1e6;
     printf("kms: mixer out %llu, drawn %llu, presented %llu in %.2f s;", (unsigned long long)mixed, (unsigned long long)gl_draws, (unsigned long long)presented, s);
     for (int i = 0; i < n; i++) printf(" layer %d pulled %llu pushed %llu;", i, (unsigned long long)pulled[i], (unsigned long long)pushed[i]);

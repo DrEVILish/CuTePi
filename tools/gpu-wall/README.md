@@ -59,6 +59,10 @@ Options:
   `/dev/dri/card1` (imported as EGLImages into the wall's GL context) and a presenter thread page-flips them, waiting
   on a native fence per buffer (`-finish` uses `glFinish` instead). Needs DRM master (stop `cutepi`). `-copyonly`
   does the copy pass without a display (no master needed; pacing is a sleep, so its numbers are only indicative).
+- `-ring`: the mixer renders straight into the ring: a `GstGLBufferPool` subclass wrapping the ring textures is
+  offered in the mixer's allocation query (probe on its src pad); no copy pass. Implies `-kms`; with `-copyonly` it
+  runs headless (no DRM master). `-tiny` replaces the 1080p `gltestsrc` pacing source with a 16×16 `videotestsrc`
+  scaled by its mixer pad (no driver-owned 1080p texture in the per-frame path).
 - `-copy`: the pump shallow-copies buffers as the spike did (default: ref and make writable).
 - `-target 2D|external-oes`: pin the upload texture target.
 - At exit the harness prints the negotiated upload format and target per layer, the number of distinct memory

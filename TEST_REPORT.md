@@ -595,8 +595,32 @@ Other findings from this round: the ISP route needs a pool hint of 32 buffers fr
 target (external-OES vs 2D) is not the switch; the kernel log shows one V3D MMU fault during the HDMI runs and CMA
 allocation failures for 3 MB frames earlier in the day (fragmentation; relevant to the ring buffers, which are CMA).
 
-Next: a GstGLBufferPool subclass whose buffers wrap the ring's EGLImages, offered to the mixer in the allocation
-query, so the mixer renders into the ring; then the HDMI cases again.
+**The mixer rendering straight into the ring (`bridgebench -ring -tiny`, 2026-10-02).** A `GstGLBufferPool`
+subclass hands the mixer buffers that wrap the four ring textures (EGLImages over linear dumb buffers), offered in the
+mixer's allocation query from a pad probe on its src pad; the wall appsink holds each mixed buffer until it has left the
+screen (one on screen, one in flight), a native fence per frame from the GL thread, page flips from the presenter
+thread; the pacing source is a 16×16 live black frame scaled by its mixer pad. On HDMI, service stopped for the runs:
+
+| Layers | Presented (flips/s over 5 s) | Refreshes over 20 ms |
+|---|---|---|
+| H.264 | **60.0** | 2 (longest 24 ms) |
+| H.264 + HEVC | **60.0** | 1 (longest 22 ms) |
+| HEVC + HEVC | **60.0** | 0 (longest 19 ms) |
+
+Every cue frame pulled and pushed (480 of 480). The H.264-on-HDMI problem is solved: no copy pass, no driver-owned
+render target, so the GPU work per frame is the mix alone. Two things found on the way: the mixer's allocation query
+runs more than once (a layer attaching renegotiates), so the pool must be offered idempotently and reuse ring slots
+freed with its buffers (the first version made a second pool, orphaned the first's textures and stalled H.264 after
+two frames); and the mixer samples the hardware decoders' frames as external-OES textures directly (`glcolorconvert`
+passes them through), which is why H.264 costs the mix alone now.
+
+**Software video through the ISP is not solved yet.** As 2D imports (NV12, or RGBA/BGRx straight from the ISP) the
+frames cost the GL thread about 23 ms of user CPU each (Mesa copies a linear 2D import into its tiled layout; 7.0 s
+of GL-thread CPU for 303 frames), the cue delivers 28–38 fps, and the NV12 variant still enters the allocation storm
+(1002 creates in one run, 57 in the next). NV12 forced to external-OES stalls at once in ring mode (1087 creates,
+one mixed frame). The H.264 decoder's frames are linear YU12 imported as external-OES and run at 60, so the ISP's
+YU12 output through the same path is the next thing to measure. A 3 s GPU load burst at start-up left H.264 at 38.8
+flips/s over a window that included the burst; a post-burst window is still to be measured.
 
 Pinning the decoder to NV12 or YU12 DMA_DRM caps fails at runtime (no frames), and is not needed.
 
