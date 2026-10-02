@@ -487,8 +487,22 @@ Real files (8 s, 1080p60), decode → route → mixer, one layer:
 - `glupload` and `glcolorconvert` accept every decoder format here (10/12-bit, 4:2:2, 4:4:4, alpha), so nothing
   fails to negotiate; the question was only speed. The ISP takes 8-bit YUV (I420, NV12, YUYV/UYVY) and RGB, not
   10-bit or planar 4:2:2, so those get a CPU repack first.
-- Still open: the ISP route for alpha sources, an ISP layer beside a hardware-decoded H.264 layer (they share the
-  VideoCore), and the H.264 NV12 hand-over from the spike.
+- Still open: the ISP route for alpha sources, and an ISP layer beside a hardware-decoded H.264 layer (they share the
+  VideoCore).
+
+**Hardware decoders into the mixer (no bridge)**, measured with a small C harness (`gst_parse_launch` refuses to link
+a mixer pad behind a pinned DMA_DRM capsfilter at parse time, so the harness links the pads without that check):
+
+| Layers | Mixer output |
+|---|---|
+| H.264 (default hand-over: DMA_DRM YU12, imported as one external texture) | 78.9 / 79.0 fps |
+| H.264 + HEVC | 70.3 / 71.6 fps |
+| HEVC | 214.6 fps |
+| HEVC + HEVC | 138.4 fps |
+
+The spike's open point (H.264 + HEVC only 29 fps) is therefore not the H.264 frame layout and not the GPU: the same
+pair runs at 70 fps straight into the mixer, so the loss is in the cue → wall bridge. Pinning the decoder to NV12 or
+YU12 DMA_DRM caps fails at runtime (no frames), and is not needed.
 
 ## SD card and decode-path measurements (2026-10-02)
 

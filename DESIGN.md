@@ -511,8 +511,9 @@ wall pipeline (always running)                                    ▼
   - Spike results on HDMI at 1080p60 through the full bridge: HEVC ×1 59.9 fps, HEVC + HEVC at 50 % 59.8 fps
     (cues decoding 60 fps each), 3–4 frames dropped at start-up only. **Open:** H.264 layers import as three-plane
     YU12 (the H.264 decoder's default DMABuf layout): H.264 ×1 57.9 fps (13 dropped), and H.264 + HEVC only 29 fps.
-    Next: get the H.264 decoder to hand over NV12 (it offers it) and measure; the direct pipeline without the bridge
-    reached 60 fps for H.264 + HEVC once running.
+    Measured since (2026-10-02, headless, no bridge): H.264 in that same YU12 layout 79 fps, H.264 + HEVC 70–72 fps,
+    so the 29 fps is lost in the bridge, not in the frame layout; NV12 is not needed. The bridge is the next thing to
+    fix.
 - **Cue → wall bridge (timestamps).** Each cue stays its own pipeline, so trim, seek, pause, rate, loop and warm
   preroll keep working per cue. All pipelines use the same system clock. A frame's running time in its cue pipeline
   maps to the wall pipeline exactly: `wall_rt = cue_rt + (cue_base_time − wall_base_time)`, re-read on every frame
