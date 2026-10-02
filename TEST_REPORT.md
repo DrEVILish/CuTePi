@@ -544,8 +544,26 @@ time. HEVC's per-frame GPU work (about 5 ms) still fits in a refresh, H.264's (a
 system-memory uploads (12–20 ms) fit even less. Earlier wording that the mixer pass "takes about 23 ms" on the display
 was an inference; what is measured is that the whole chain manages 42.5–43 fps.
 
-Next: present on its own GL context and thread (or a presenter of our own that page-flips the mixer's output), then
-rerun these cases. Until then the GPU wall has an open H.264-on-HDMI problem, which blocks making it the default.
+**Cause confirmed.** During the failing HDMI run (H.264 through bridge and mixer into `glimagesink`, no late drop) the
+single `gstglcontext` thread was sampled 100 times (`/proc/<pid>/task/<tid>/wchan` and `syscall`): 34–63 % in
+`poll_schedule_timeout` (ppoll: the page-flip wait) and about 27 % in `drm_syncobj_array_wait_timeout` (waiting for the
+GPU). For HEVC: 68–86 % in the flip wait, no GPU waits (it has time to spare). The present's wait for the next refresh
+and the H.264 layer's GPU work run one after the other on one thread and do not fit in a refresh.
+
+**Splitting the present off fails with stock elements:** a presenter pipeline given the wall's GL display and context
+(`glimagesink` then makes its own context and thread) crashes in `gbm_surface_lock_front_buffer`: GStreamer's GBM window
+does not support a second presenting context on the same display. `gldownload` can export the mixer's output as a
+DMABuf, but only as `AB24:0x0700000000000006` (Broadcom UIF tiling, not scan-out-able); asking for linear AB24
+negotiates and then logs "DMABuf export didn't work. Falling back to system memory" (a CPU readback).
+
+**Our own presenter is possible** (`tools/gpu-wall/lineartarget.c`): a 1920×1080 dumb buffer created on the HDMI card
+(no DRM master needed; the service kept running), exported as a DMABuf and imported on the render node as an AB24
+linear EGLImage, is a complete framebuffer for V3D. A clear reads back exactly through the dumb buffer's mapping (64,
+128, 191, 255), a textured draw lands correctly, and 600 full-screen 1080p draws take 4.95 ms each on average (worst
+8.89 ms, 202 fps) with a `glFinish` per frame. DESIGN §6.1.1 "Display" revised accordingly: the mixer's output goes
+into a ring of linear dumb buffers and the service presents them on a KMS plane from its own thread.
+
+Next: the same H.264 / H.264 + HEVC / HEVC + HEVC cases on HDMI through that presenter.
 
 Pinning the decoder to NV12 or YU12 DMA_DRM caps fails at runtime (no frames), and is not needed.
 

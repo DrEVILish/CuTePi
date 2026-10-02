@@ -475,11 +475,25 @@ wall pipeline (always running)                                    ▼
 - **Mixer element.** Use `glvideomixerelement` with one explicit `glupload → glcolorconvert` per input. The
   convenience `glvideomixer` bin inserts extra per-frame conversions and managed only 33–40 fps for a single 1080p
   layer; the bare element manages 87 fps (H.264, decoder-bound) to 176 fps (HEVC).
-- **Display.** `glimagesink` with the GBM window system (`GST_GL_PLATFORM=egl GST_GL_WINDOW=gbm`,
-  `GST_GL_GBM_DRM_DEVICE` = the HDMI card) renders the composited frame into scanout buffers and page-flips once per
-  refresh on the primary plane. It is the DRM master, so the service no longer opens the display itself in this mode
-  (the per-plane code in `gsp/kms.go` is not used). GPU buffers cannot go to our own overlay planes instead: V3D
-  renders in a tiled layout (UIF) that the display controller cannot scan out, and a CPU readback is too slow.
+- **Display (revised 2026-10-02: our own presenter on a KMS plane, not `glimagesink`).** The mixer runs on a GL
+  context on the render node (EGL surfaceless). Its output is drawn, in one more GPU pass, into a ring of **linear
+  dumb buffers** that the service creates on the HDMI card and imports on the render node as EGLImages (AB24, linear
+  modifier): V3D renders into them directly (framebuffer complete, pixels verified; a full-screen 1080p draw 4.95 ms,
+  worst 8.9 ms). The service, still the DRM master, puts each finished buffer on a display plane from its own thread,
+  as it does today. Why not `glimagesink` over GBM, as first planned:
+  - A present waits for the next refresh, and GStreamer GL elements that share a context run on its one thread, so
+    with `glimagesink` that wait blocks upload and mixing. Measured on HDMI: the GL thread spends 34–63 % of its time
+    in the page-flip wait and, for an H.264 layer, another ~27 % waiting for the GPU; H.264 through the mixer then
+    presents 43 fps (30 with the sink dropping late frames), H.264 + HEVC under 2 fps, while two HEVC layers hold 59.
+    Presenting from its own thread removes the wait from the GL thread.
+  - GStreamer's GBM window cannot run a second presenting context on the same display (crash in
+    `gbm_surface_lock_front_buffer`), so the present cannot simply move to another GL context.
+  - `gldownload` exports DMABufs only in V3D's tiled layout (Broadcom UIF, which the display controller cannot scan
+    out); asking it for linear AB24 silently falls back to a CPU readback.
+  - Keeping the service as DRM master keeps the panic holding image on its own plane above the wall (armed, 26 ms
+    mean, §12.9), so a panic still works if the GL pipeline stalls, and keeps the console handling and plane code.
+  The ring needs at least three buffers so the GPU never waits for the one being scanned out. Open: let the mixer
+  render straight into the ring (a buffer pool of imported dumb buffers) instead of the extra copy pass.
 - **Every codec.** Hardware-decoded frames enter the GPU without copies: H.264 as DMABuf, HEVC as `DMA_DRM` NV12 with
   the Broadcom SAND128 modifier, which Mesa's V3D driver samples directly (this is what makes hardware HEVC usable).
   Software-decoded video does **not** go up from system memory: on V3D a `glupload` from system memory tiles every
