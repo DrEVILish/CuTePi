@@ -84,6 +84,38 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 600; i++) { double a = now(); glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); glFinish(); double d = now() - a; if (d > worst) worst = d; }
   double t = now() - t0;
   printf("600 full-screen draws into the linear buffer: %.2f ms each on average, worst %.2f ms (%.0f fps)\n", t / 600 * 1000, worst * 1000, 600 / t);
+  /* -loop N: N frames round-robin into 3 ring buffers with glFlush only, each
+   * buffer reused once its fence (3 frames old) has signalled, like the
+   * presenter will. Count V3D BO creations from outside (ftrace). */
+  if (argc > 2 && !strcmp(argv[2], "-loop")) {
+    int N = argc > 3 ? atoi(argv[3]) : 600;
+    GLuint rtex[3], rfbo[3]; EGLSyncKHR fences[3] = { 0, 0, 0 };
+    PFNEGLCREATESYNCKHRPROC mksync = (void *)eglGetProcAddress("eglCreateSyncKHR");
+    PFNEGLCLIENTWAITSYNCKHRPROC waitsync = (void *)eglGetProcAddress("eglClientWaitSyncKHR");
+    PFNEGLDESTROYSYNCKHRPROC rmsync = (void *)eglGetProcAddress("eglDestroySyncKHR");
+    for (int i = 0; i < 3; i++) {
+      struct drm_mode_create_dumb c2 = { .width = W, .height = H, .bpp = 32 };
+      drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &c2); int dfd; drmPrimeHandleToFD(fd, c2.handle, DRM_CLOEXEC | DRM_RDWR, &dfd);
+      EGLint ia2[] = { EGL_WIDTH, W, EGL_HEIGHT, H, EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ABGR8888, EGL_DMA_BUF_PLANE0_FD_EXT, dfd,
+        EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0, EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)c2.pitch, EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, 0, EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, 0, EGL_NONE };
+      EGLImageKHR im = mkimg(dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, ia2);
+      glGenTextures(1, &rtex[i]); glBindTexture(GL_TEXTURE_2D, rtex[i]); bindimg(GL_TEXTURE_2D, im);
+      glGenFramebuffers(1, &rfbo[i]); glBindFramebuffer(GL_FRAMEBUFFER, rfbo[i]); glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rtex[i], 0);
+    }
+    double t1 = now();
+    for (int i = 0; i < N; i++) {
+      int r = i % 3;
+      if (fences[r]) { waitsync(dpy, fences[r], 0, 1000000000ull); rmsync(dpy, fences[r]); }
+      glBindFramebuffer(GL_FRAMEBUFFER, rfbo[r]); glViewport(0, 0, W, H);
+      glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+      glBindTexture(GL_TEXTURE_2D, stex); glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+      fences[r] = mksync(dpy, EGL_SYNC_FENCE_KHR, NULL); glFlush();
+      struct timespec ts = { 0, 16600000 }; nanosleep(&ts, NULL); /* paced like 60 Hz */
+    }
+    glFinish();
+    printf("loop: %d frames into 3 imported ring buffers in %.2f s\n", N, now() - t1);
+    return 0;
+  }
   int x = 700, y = 300; unsigned char *q = map + y * cd.pitch + x * 4, *e = src + ((H - 1 - y) * W + x) * 4;
   printf("pixel (%d,%d) = %u,%u,%u,%u; source %u,%u,%u,%u (rows may be flipped)\n", x, y, q[0], q[1], q[2], q[3], e[0], e[1], e[2], e[3]);
   return 0;

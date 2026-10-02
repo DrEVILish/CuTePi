@@ -492,8 +492,16 @@ wall pipeline (always running)                                    ▼
     out); asking it for linear AB24 silently falls back to a CPU readback.
   - Keeping the service as DRM master keeps the panic holding image on its own plane above the wall (armed, 26 ms
     mean, §12.9), so a panic still works if the GL pipeline stalls, and keeps the console handling and plane code.
-  The ring needs at least three buffers so the GPU never waits for the one being scanned out. Open: let the mixer
-  render straight into the ring (a buffer pool of imported dumb buffers) instead of the extra copy pass.
+  The ring needs at least three buffers so the GPU never waits for the one being scanned out. **The mixer renders
+  straight into the ring**, through a `GstGLBufferPool` subclass whose buffers wrap the ring's EGLImages, offered to
+  the mixer in the allocation query. This is required, not an optimisation: Mesa's v3d driver, asked to render into
+  one of its own textures while the GPU is still busy with it, allocates a fresh backing buffer instead of waiting,
+  at about 25 ms each (page allocation with direct reclaim), and the delay keeps the GPU busy, so one burst of load
+  locks the wall into a 15 fps mode for good (TEST_REPORT "The fresh-buffer mode"). It cannot replace an imported
+  buffer, so a mixer rendering into the ring is immune (measured: 0 allocations under the same load). For the same
+  reason the wall's pacing source is a 16×16 live black frame scaled by its mixer pad, not a 1080p GPU-drawn one,
+  and no other driver-owned 1080p render target sits in the per-frame path (hardware and ISP frames are sampled by
+  the mixer directly, `glcolorconvert` being a pass-through for them).
 - **Every codec.** Hardware-decoded frames enter the GPU without copies: H.264 as DMABuf, HEVC as `DMA_DRM` NV12 with
   the Broadcom SAND128 modifier, which Mesa's V3D driver samples directly (this is what makes hardware HEVC usable).
   Software-decoded video does **not** go up from system memory: on V3D a `glupload` from system memory tiles every
@@ -501,7 +509,8 @@ wall pipeline (always running)                                    ▼
   33 fps). It goes through the Pi's ISP instead: `videoconvert n-threads=4` (only when the decoder's format is not one
   the ISP takes: 10-bit, planar 4:2:2) → `v4l2convert` (ISP) writing **NV12 into DMABufs** → `glupload` imports the
   DMABuf without a copy. Measured: one layer 111 fps, two 97 fps, three 47 fps (the ISP converts about 140 1080p
-  frames a second); with real files MPEG-2 33 → 70 fps, DNxHR HQ 38 → 70, FFV1 46 → 79, VP9 43 → 62, ProRes 422
+  frames a second; the bridge's allocation answer must ask the ISP for 32 capture buffers, the V4L2 maximum, or it
+  starves); with real files MPEG-2 33 → 70 fps, DNxHR HQ 38 → 70, FFV1 46 → 79, VP9 43 → 62, ProRes 422
   29 → 49, H.264 10-bit 9 → 28 (TEST_REPORT "GPU upload routes"). Codecs whose decoder is slower than the display
   (ProRes 4444, CineForm, AV1, Theora, 10-bit H.264) stay decode-bound. Alpha sources (RGBA) and stills keep
   `glupload` from system memory: a still uploads once, and the ISP route for alpha is still to be measured. Open: the

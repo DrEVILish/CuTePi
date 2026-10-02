@@ -22,7 +22,9 @@ GL environment:
 `lineartarget [card]`: renders into a linear dumb buffer from the render node. Creates a 1920x1080 dumb buffer on the
 HDMI card (default `/dev/dri/card1`; no DRM master needed, the service can keep running), exports it as a DMABuf,
 imports it as an AB24 linear EGLImage (EGL surfaceless), checks the framebuffer is complete and that a clear reads back
-through the mapping, then times 600 full-screen textured draws with `glFinish` each.
+through the mapping, then times 600 full-screen textured draws with `glFinish` each. `-loop N` draws N frames
+round-robin into three imported ring buffers with `glFlush` and a fence per buffer (as the presenter does), paced at
+60 Hz, for counting V3D buffer allocations from outside.
 
 ```
 gcc -O2 -o lineartarget lineartarget.c $(pkg-config --cflags --libs libdrm egl glesv2)
@@ -53,6 +55,14 @@ Options:
   `"glimagesink sync=true qos=false max-lateness=-1"`.
 - `-cuesync`: cue appsinks sync to the clock (default: push ahead, bounded by the appsrc queue).
 - `-mixlat MS`: mixer latency (default 33).
+- `-kms`: our own presenter: the mixer output is copied by one GPU pass into a ring of three linear dumb buffers on
+  `/dev/dri/card1` (imported as EGLImages into the wall's GL context) and a presenter thread page-flips them, waiting
+  on a native fence per buffer (`-finish` uses `glFinish` instead). Needs DRM master (stop `cutepi`). `-copyonly`
+  does the copy pass without a display (no master needed; pacing is a sleep, so its numbers are only indicative).
+- `-copy`: the pump shallow-copies buffers as the spike did (default: ref and make writable).
+- `-target 2D|external-oes`: pin the upload texture target.
+- At exit the harness prints the negotiated upload format and target per layer, the number of distinct memory
+  objects seen per layer, and each thread's user and system CPU time.
 - `-split`: the wall ends in an appsink and a separate presenter pipeline (appsrc → `-sink`) is given the wall's GL
   display and context to share. Crashes in `gbm_surface_lock_front_buffer` on GBM: GStreamer's GBM window does not
   support a second presenting context on the same display.

@@ -563,7 +563,40 @@ linear EGLImage, is a complete framebuffer for V3D. A clear reads back exactly t
 8.89 ms, 202 fps) with a `glFinish` per frame. DESIGN §6.1.1 "Display" revised accordingly: the mixer's output goes
 into a ring of linear dumb buffers and the service presents them on a KMS plane from its own thread.
 
-Next: the same H.264 / H.264 + HEVC / HEVC + HEVC cases on HDMI through that presenter.
+**Our presenter on HDMI (`bridgebench -kms`: mixer → one GPU copy pass into a ring of three linear dumb buffers,
+native fence per frame, page flips from a presenter thread; service stopped for the runs):** HEVC + HEVC 57.8
+flips/s; H.264 45.2; H.264 + HEVC 31.0; MPEG-2 via the ISP 16.4. The cue pipelines are back-pressured, not dropping
+(H.264 pulled 396 of 480 frames in 9.3 s): the chain is bound by GPU work per frame, and the extra copy pass costs
+about 5 ms on top of the mix. Pool hints, queue depth, mixer latency and `glFinish` vs fence change nothing.
+
+**The fresh-buffer mode (the real cause of most of the above).** The slow runs are bimodal and sticky: the same
+command gives 58.5 fps or 15 fps, and a slow run stays slow. The kernel function profiler shows why: in a slow run
+`v3d_create_bo_ioctl` is called 350 times in 147 frames (8.7 s, 25 ms each, nearly all in page allocation with direct
+reclaim), against 28 times in a whole fast run; the allocations are 1080p RGBA buffers (8,298,496 bytes, caught with
+a gdb breakpoint on the ioctl). The GL buffer pools reuse their buffers (6 allocations per run, GStreamer's own
+pool trace), so it is the GL driver (Mesa 26.2.2, v3d) allocating a fresh backing buffer per frame for a texture it is
+asked to render into while the GPU is still busy with it — and each fresh allocation keeps the GPU behind, so the mode
+feeds itself. It is triggered by load: with the wall alone (black source → mixer → sink, no cue) a 3 s burst of
+competing GPU work at start-up leaves it allocating 69–181 buffers per 240 frames for the rest of the run, against 0
+in steady state; `V3D_DEBUG=always_flush` does not prevent it (223). It never self-recovers within a run. The
+trigger explains the ISP route's bimodality, the H.264-on-HDMI losses (the display pass is the extra load) and the
+"pool size" sensitivity (bigger pools shift the timing).
+
+**Rendering into imported buffers is immune**: the same test drawing 600 frames into three linear dumb buffers
+imported as EGLImages (`lineartarget -loop`), with the same 3 s load burst, allocates 0 buffers in the window (0
+without load). The driver cannot replace an imported buffer, so the trap cannot form. Consequence for the design: the
+mixer must render **straight into the ring** (no driver-owned 1080p render target in the per-frame path), and the
+wall's pacing source must not be a 1080p driver-owned texture either (a 16×16 live black source scaled by the mixer
+pad is enough: 38 allocations per run, all at start-up). DESIGN §6.1.1 updated.
+
+Other findings from this round: the ISP route needs a pool hint of 32 buffers from the bridge (the V4L2 maximum;
+8 → 15 fps, 32 → 41 fps even in the slow mode); `-copy` vs ref-and-make-writable in the pump makes no difference
+(`gst_buffer_copy` refs whole memories); the memory objects are reused (13 distinct per run); the upload texture
+target (external-OES vs 2D) is not the switch; the kernel log shows one V3D MMU fault during the HDMI runs and CMA
+allocation failures for 3 MB frames earlier in the day (fragmentation; relevant to the ring buffers, which are CMA).
+
+Next: a GstGLBufferPool subclass whose buffers wrap the ring's EGLImages, offered to the mixer in the allocation
+query, so the mixer renders into the ring; then the HDMI cases again.
 
 Pinning the decoder to NV12 or YU12 DMA_DRM caps fails at runtime (no frames), and is not needed.
 
