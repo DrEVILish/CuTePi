@@ -17,6 +17,17 @@ GL environment:
 - On HDMI: `GST_GL_API=gles2 GST_GL_PLATFORM=egl GST_GL_WINDOW=gbm GST_GL_GBM_DRM_DEVICE=/dev/dri/card1`. This needs
   DRM master: stop `cutepi` first and start it again afterwards.
 
+## lineartarget
+
+`lineartarget [card]`: renders into a linear dumb buffer from the render node. Creates a 1920x1080 dumb buffer on the
+HDMI card (default `/dev/dri/card1`; no DRM master needed, the service can keep running), exports it as a DMABuf,
+imports it as an AB24 linear EGLImage (EGL surfaceless), checks the framebuffer is complete and that a clear reads back
+through the mapping, then times 600 full-screen textured draws with `glFinish` each.
+
+```
+gcc -O2 -o lineartarget lineartarget.c $(pkg-config --cflags --libs libdrm egl glesv2)
+```
+
 ## mixbench
 
 `mixbench "<branch 0>" ["<branch 1>" ...]`: each branch is a gst-launch description ending in an element named
