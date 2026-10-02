@@ -482,8 +482,16 @@ wall pipeline (always running)                                    ▼
   renders in a tiled layout (UIF) that the display controller cannot scan out, and a CPU readback is too slow.
 - **Every codec.** Hardware-decoded frames enter the GPU without copies: H.264 as DMABuf, HEVC as `DMA_DRM` NV12 with
   the Broadcom SAND128 modifier, which Mesa's V3D driver samples directly (this is what makes hardware HEVC usable).
-  Software-decoded frames (VP9, AV1, ProRes, MPEG-2, …), stills and test patterns are uploaded from system memory by
-  `glupload`. There is one path for all of them.
+  Software-decoded video does **not** go up from system memory: on V3D a `glupload` from system memory tiles every
+  frame on the CPU (measured 2026-10-02: 41–52 fps for one 1080p layer into the mixer, 27 fps for two; 10-bit 4:2:2
+  33 fps). It goes through the Pi's ISP instead: `videoconvert n-threads=4` (only when the decoder's format is not one
+  the ISP takes: 10-bit, planar 4:2:2) → `v4l2convert` (ISP) writing **NV12 into DMABufs** → `glupload` imports the
+  DMABuf without a copy. Measured: one layer 111 fps, two 97 fps, three 47 fps (the ISP converts about 140 1080p
+  frames a second); with real files MPEG-2 33 → 70 fps, DNxHR HQ 38 → 70, FFV1 46 → 79, VP9 43 → 62, ProRes 422
+  29 → 49, H.264 10-bit 9 → 28 (TEST_REPORT "GPU upload routes"). Codecs whose decoder is slower than the display
+  (ProRes 4444, CineForm, AV1, Theora, 10-bit H.264) stay decode-bound. Alpha sources (RGBA) and stills keep
+  `glupload` from system memory: a still uploads once, and the ISP route for alpha is still to be measured. Open: the
+  ISP shares the VideoCore with the hardware H.264 decoder; measure an ISP layer beside a hardware-decoded one.
 - **Bridge rules (proven by the spike, 2026-10-01).**
   - *Attach a layer only once its format is known.* The video mixer waits for every input's caps before it produces
     anything, so an input created ahead of its first frame freezes the whole wall. A cue prerolls first; its first

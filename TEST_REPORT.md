@@ -454,6 +454,42 @@ stills: no re-render on fades, no infinite hold; DESIGN §6.1.3). Then rerun thi
 software codecs' frame rate are what the GPU compositor wall is for (§6.1.1). Decisions for the user: APNG and
 animated WebP need a decoder this system lacks (or conversion at import).
 
+## GPU upload routes for software-decoded video (2026-10-02)
+
+Headless on the test server (EGL surfaceless on the render node; the service keeps the display), 1080p, into
+`glvideomixerelement` (which samples every frame; a `glupload ! fakesink` never uploads, GL memory is lazy, so that
+number means nothing). `videotestsrc pattern=solid-color` as the source unless a file is named.
+
+| Route | 1 layer | 2 layers | 3 layers |
+|---|---|---|---|
+| I420 / NV12 system memory → `glupload` → mixer | 49.7 / 52.3 fps | 27.3 | – |
+| RGBA system memory → `glupload` → mixer | 40.8 | – | – |
+| I422_10LE system memory → `glupload` → mixer | 33.5 | – | – |
+| I420 → ISP (`v4l2convert`) → **NV12 DMABuf** → `glupload` → mixer | **111.4** | **96.9** | 47.4 |
+| I420 → ISP → RGBA / BGRx DMABuf → mixer | 82.6 / 83.1 | 41.8 (RGBA) | – |
+
+Real files (8 s, 1080p60), decode → route → mixer, one layer:
+
+| File | Direct `glupload` | `videoconvert n-threads=4` (if needed) → ISP NV12 DMABuf |
+|---|---|---|
+| MPEG-2 | 33.0 | 69.6 |
+| DNxHR HQ / LB | 37.7 / 39.3 | 69.5 / 79.7 |
+| FFV1 | 46.4 | 79.0 |
+| VP9 | 43.2 | 62.1 |
+| ProRes 422 / LT | 28.7 / 27.8 | 49.1 / 49.8 |
+| Theora | 37.2 | 45.4 |
+| H.264 High 10 | 9.3 | 28.1 |
+| AV1 | 22.6 | 25.2 |
+
+- On V3D a system-memory upload is tiled by the CPU, so the GPU wall as first designed would have played software
+  codecs below 60 fps even on one layer. The ISP route writes linear NV12 into DMABufs that the GPU imports without a
+  copy. DESIGN §6.1.1 amended.
+- `glupload` and `glcolorconvert` accept every decoder format here (10/12-bit, 4:2:2, 4:4:4, alpha), so nothing
+  fails to negotiate; the question was only speed. The ISP takes 8-bit YUV (I420, NV12, YUYV/UYVY) and RGB, not
+  10-bit or planar 4:2:2, so those get a CPU repack first.
+- Still open: the ISP route for alpha sources, an ISP layer beside a hardware-decoded H.264 layer (they share the
+  VideoCore), and the H.264 NV12 hand-over from the spike.
+
 ## SD card and decode-path measurements (2026-10-02)
 
 Test server, service idle. Card: SanDisk SN256 (256 GB, 07/2024), ext4 `noatime`, running **UHS DDR50** (50 MHz,
