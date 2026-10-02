@@ -523,8 +523,29 @@ Without the bridge or the mixer, H.264 → `glupload` → `glimagesink` presents
 `glcolorconvert` pass, and so does HEVC. Pushing cue frames ahead (unsynced appsink, bounded appsrc) instead of in real
 time, and a mixer latency of 50 or 150 ms, change nothing. So on the display the mixer pass for an H.264 layer takes
 about 23 ms (42 fps) where it took 12.5 ms headless, and the late frames are dropped by the sink; HEVC layers are not
-affected. Cause not yet found. Also seen, not yet investigated: software H.264 (`avdec_h264`) and hardware H.264
-copied to system memory, each straight into `glimagesink`, presented almost nothing (6 and 4 flips in 9 s).
+affected.
+
+Isolation runs (all with `GST_GL_API=gles2`, which the first HDMI runs lacked; H.264 through the bridge unless noted):
+
+| Run | Result |
+|---|---|
+| Real time, surfaceless context, live black source, mixer → `fakesink sync=true` | 58.5 fps mixed |
+| Display (GBM) context, same chain → `fakesink sync=true` (nothing presented) | 58.5 fps mixed |
+| Display, mixer → `glimagesink`, sink drops nothing late | 43.1 fps mixed, 44.6 flips/s |
+| Display, mixer → `glimagesink` (default) | 50.2 fps mixed, 29.8 flips/s, gaps up to 1 s |
+| H.264 → `glupload` → `glimagesink` (no bridge, no mixer) | 60.0 flips/s |
+| `avdec_h264` → `glupload` → `glimagesink`, no late drop | 25.4 flips/s |
+| Hardware H.264 → system-memory NV12 → `glupload` → `glimagesink`, no late drop | 12.6 flips/s |
+
+So the GBM context is not slower and real-time pacing is not the problem: the loss appears only when presenting is added
+to a GL chain that also uploads and mixes. Most likely cause (not yet confirmed): GL elements that share a context run
+on its single thread, so `glimagesink`'s present, which waits for the next refresh, blocks upload and mixing for that
+time. HEVC's per-frame GPU work (about 5 ms) still fits in a refresh, H.264's (about 12 ms) does not, and
+system-memory uploads (12–20 ms) fit even less. Earlier wording that the mixer pass "takes about 23 ms" on the display
+was an inference; what is measured is that the whole chain manages 42.5–43 fps.
+
+Next: present on its own GL context and thread (or a presenter of our own that page-flips the mixer's output), then
+rerun these cases. Until then the GPU wall has an open H.264-on-HDMI problem, which blocks making it the default.
 
 Pinning the decoder to NV12 or YU12 DMA_DRM caps fails at runtime (no frames), and is not needed.
 
