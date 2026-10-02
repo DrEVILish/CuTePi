@@ -454,6 +454,47 @@ stills: no re-render on fades, no infinite hold; DESIGN §6.1.3). Then rerun thi
 software codecs' frame rate are what the GPU compositor wall is for (§6.1.1). Decisions for the user: APNG and
 animated WebP need a decoder this system lacks (or conversion at import).
 
+## SD card and decode-path measurements (2026-10-02)
+
+Test server, service idle. Card: SanDisk SN256 (256 GB, 07/2024), ext4 `noatime`, running **UHS DDR50** (50 MHz,
+4-bit, 1.8 V): the fastest mode the Pi 4's SD host supports, about 50 MB/s at the bus.
+
+| Read | Result |
+|---|---|
+| Raw sequential, 1 GiB, `O_DIRECT`, at 2, 60 and 150 GiB | 43.8, 46.0, 46.0 MB/s |
+| Raw random 4 KiB | 2357 IOPS, 9.7 MB/s, 0.42 ms each |
+| Raw random 64 KiB | 562 IOPS, 36.8 MB/s, 1.78 ms each |
+| Raw random 1 MiB | 42 IOPS, 44.2 MB/s, 23.7 ms each |
+| Files, cold cache (ProRes 4444 alpha 614 MB, qtrle alpha 240 MB, DNxHR HQ 441 MB) | 44.8, 44.6, 44.6 MB/s |
+| The same files from the page cache (RAM) | 1.1–1.3 GB/s |
+
+Read rate each support-set file needs at 1× (size ÷ duration): ProRes 4444 alpha 76.8 MB/s and DNxHR HQ 55.1 MB/s
+exceed the card; CineForm RGBA/alpha 42.8 and RGB 38.3, ProRes 4444/XQ 35–36 and qtrle alpha 29.9 sit near or under
+it; the median file needs 11.4 MB/s. Two layers at once (a crossfade) need the sum.
+
+Decode speed with the file already in RAM (480 frames of 1080p60, `decodebin ! fakesink sync=false`), against what
+the KMS wall shows on screen:
+
+| File | Decode only | Decode + `videoconvert` to a plane format, 1 / 4 threads | On screen (KMS, steady) |
+|---|---|---|---|
+| DNxHR HQ (MOV) | 121 fps | 43.9 / 71.7 | 13.7 |
+| VP9 (MKV) | 102.7 | 102.0 / 102.2 | 35.1 |
+| qtrle alpha (MOV) | 94.5 | – | 2.7–42.8 (card-bound) |
+| HAP alpha (MOV) | 73.1 | – | 18.1 |
+| ProRes 422 (MOV) | 71.2 | 24.0 / 40.4 | 0.8 |
+| H.264 High 10 (MOV) | 64.1 | 45.2 / 47.5 | 0.3–0.5 |
+| ProRes 4444 alpha (MOV) | 35.6 | – | 0.3–0.5 |
+| CineForm alpha (MOV) | 7.8 | – | 0 |
+
+**Findings.**
+- The card limits only files above about 45 MB/s (ProRes 4444/XQ with alpha, DNxHR HQ) and, with two layers, the
+  sum of both. For most codecs the card is not the limit.
+- Most software codecs decode well above 60 fps. What they lose is after the decoder: the colour conversion to a
+  plane format on the CPU (single-threaded by default; 4 threads gives ProRes 422 24 → 40 fps, DNxHR 44 → 72), then
+  the copy into the display buffer and the shared 60 commits a second. A clip that falls behind its clock has its
+  late frames dropped and does not recover (ProRes 422: 24 fps possible, 0.8 shown).
+- CineForm (7.8 fps) and ProRes 4444 (35.6 fps) are decode-bound on the Pi 4's CPU even from RAM.
+
 ## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
 
 Pi 4 Model B Rev 1.5, KMS planes, live service; the full support set (94 files) rerun, then the slow-clip rows rerun
