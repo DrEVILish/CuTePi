@@ -64,7 +64,13 @@ Options:
   runs headless (no DRM master). `-tiny` replaces the 1080p `gltestsrc` pacing source with a 16×16 `videotestsrc`
   scaled by its mixer pad (no driver-owned 1080p texture in the per-frame path).
 - `-copy`: the pump shallow-copies buffers as the spike did (default: ref and make writable).
-- `-target 2D|external-oes`: pin the upload texture target.
+- `-target 2D|external-oes`: pin the upload texture target (do not: it breaks the direct import; left for experiments).
+- `-colorimetry bt709`: set on a layer's appsrc caps when the source caps carry none (the ISP's do not), as the bridge
+  will; without it `glcolorconvert` refuses an external-OES YUV layer.
+- The exit report also counts, per layer, pushed buffers whose memory is not a DMABuf (a route gone CPU-side).
+- ISP route that works: `... ! v4l2convert capture-io-mode=dmabuf ! video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=YU12`
+  with `-pool 16 -colorimetry bt709` (pool 32 makes v4l2convert copy to system memory; NV12 imports as 2D and costs
+  CPU).
 - At exit the harness prints the negotiated upload format and target per layer, the number of distinct memory
   objects seen per layer, and each thread's user and system CPU time.
 - `-split`: the wall ends in an appsink and a separate presenter pipeline (appsrc → `-sink`) is given the wall's GL

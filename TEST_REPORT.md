@@ -614,13 +614,39 @@ freed with its buffers (the first version made a second pool, orphaned the first
 two frames); and the mixer samples the hardware decoders' frames as external-OES textures directly (`glcolorconvert`
 passes them through), which is why H.264 costs the mix alone now.
 
-**Software video through the ISP is not solved yet.** As 2D imports (NV12, or RGBA/BGRx straight from the ISP) the
-frames cost the GL thread about 23 ms of user CPU each (Mesa copies a linear 2D import into its tiled layout; 7.0 s
-of GL-thread CPU for 303 frames), the cue delivers 28–38 fps, and the NV12 variant still enters the allocation storm
-(1002 creates in one run, 57 in the next). NV12 forced to external-OES stalls at once in ring mode (1087 creates,
-one mixed frame). The H.264 decoder's frames are linear YU12 imported as external-OES and run at 60, so the ISP's
-YU12 output through the same path is the next thing to measure. A 3 s GPU load burst at start-up left H.264 at 38.8
-flips/s over a window that included the burst; a post-burst window is still to be measured.
+**Software video through the ISP: solved (2026-10-02).** Three things had to be right at once, and the harness's
+own per-buffer checks found them where debug tracing could not (any `glupload` debug level changes the negotiation
+and sends even H.264 down the 2D path):
+- *YU12, not NV12.* The GL driver imports only `YU12` directly as an external-OES texture ("driver only supports
+  external import of fourcc YU12"); NV12 and RGB from the ISP arrive as 2D textures, which cost the GL thread about
+  23 ms of user CPU per frame (Mesa copies a linear 2D import into its tiled layout) plus a conversion pass. The ISP
+  writes YU12 as readily as NV12.
+- *A colour matrix on the layer caps.* The ISP's caps carry no colorimetry; `glcolorconvert` refuses an external-OES
+  YUV input without one ("Need to specify a color matrix"), so a layer stalls after one frame. The bridge sets
+  `colorimetry=bt709` on the layer's appsrc caps when the source has none (the H.264 decoder's caps say bt709).
+- *A pool hint below 32.* With 32 capture buffers requested, `v4l2convert` silently copies every frame into system
+  memory (353 of 353 pushed buffers were SystemMemory, 3,110,400 bytes each) and the whole route goes CPU-side;
+  8–31 all export DMABufs. The earlier "8 → 15 fps" was the NV12 path's allocation storm, not starvation. 16 is used.
+
+On HDMI through the ring wall (service stopped for the runs):
+
+| Layers | Presented (flips/s) | Refreshes over 20 ms | Cue frames delivered |
+|---|---|---|---|
+| MPEG-2 via ISP | **60.0** | 0 | 480 of 480 |
+| HEVC + MPEG-2 via ISP | **60.0** | 0 | 480 + 480 |
+| VP9 (software decode) via ISP | **59.8** | 2 | 480 of 480 |
+| DNxHR HQ (`videoconvert` to I420) via ISP | **60.0** | 2 | 480 of 480 |
+| ProRes 422 (`videoconvert` to I420) via ISP | 60.0 | 42 | 318 (decode + repack bound, ~35 fps) |
+| H.264 + MPEG-2 via ISP | 59.8 | 31 | 480 + 382 |
+| MPEG-2 + VP9 via ISP (two software layers) | 60.0 | 8 | 477 + 367 (CPU-bound) |
+
+The wall itself holds 60 in every case; what falls short is a cue's own decode rate (ProRes 422, two software
+decoders at once) or, beside an H.264 layer, the MPEG-2 cue (382 frames, 42 fps) — the H.264 decoder and the ISP
+share the VideoCore (HEVC decodes on its own block and the same pair with HEVC is clean).
+
+**Load-burst immunity on the real path:** H.264 and H.264 + HEVC with a 3 s burst of competing GPU work at start-up,
+counted after the burst: no refresh over 20 ms, longest gap 17 ms (the flips/s figures of 57.0 and 54.8 are
+under-counts, the window ran past the end of the clip). The wall returns to a solid 60 by itself.
 
 Pinning the decoder to NV12 or YU12 DMA_DRM caps fails at runtime (no frames), and is not needed.
 

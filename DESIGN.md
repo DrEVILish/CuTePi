@@ -508,16 +508,19 @@ wall pipeline (always running)                                    ▼
 - **Every codec.** Hardware-decoded frames enter the GPU without copies: H.264 as DMABuf, HEVC as `DMA_DRM` NV12 with
   the Broadcom SAND128 modifier, which Mesa's V3D driver samples directly (this is what makes hardware HEVC usable).
   Software-decoded video does **not** go up from system memory: on V3D a `glupload` from system memory tiles every
-  frame on the CPU (measured 2026-10-02: 41–52 fps for one 1080p layer into the mixer, 27 fps for two; 10-bit 4:2:2
-  33 fps). It goes through the Pi's ISP instead: `videoconvert n-threads=4` (only when the decoder's format is not one
-  the ISP takes: 10-bit, planar 4:2:2) → `v4l2convert` (ISP) writing **NV12 into DMABufs** → `glupload` imports the
-  DMABuf without a copy. Measured: one layer 111 fps, two 97 fps, three 47 fps (the ISP converts about 140 1080p
-  frames a second; the bridge's allocation answer must ask the ISP for 32 capture buffers, the V4L2 maximum, or it
-  starves); with real files MPEG-2 33 → 70 fps, DNxHR HQ 38 → 70, FFV1 46 → 79, VP9 43 → 62, ProRes 422
-  29 → 49, H.264 10-bit 9 → 28 (TEST_REPORT "GPU upload routes"). Codecs whose decoder is slower than the display
+  frame on the CPU, and a linear 2D DMABuf import costs the same CPU copy. It goes through the Pi's ISP instead:
+  `videoconvert n-threads=4` only when the decoder's format is not one the ISP takes (10-bit, planar 4:2:2) →
+  `v4l2convert` (ISP) writing **YU12 into DMABufs** (`video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=YU12`; YU12
+  is the one linear format the GL driver imports directly as an external-OES texture, NV12 and RGB are not) →
+  `glupload` imports the DMABuf without a copy and the mixer samples it. The bridge's allocation answer asks the ISP
+  for **16** capture buffers (8–31 work; 32 makes `v4l2convert` copy every frame into system memory) and sets
+  `colorimetry=bt709` on the layer caps when the source has none (`glcolorconvert` refuses an external YUV input
+  without a colour matrix). Measured on HDMI through the whole chain (TEST_REPORT "Software video through the
+  ISP"): MPEG-2, VP9 and DNxHR HQ 60 fps with every frame; HEVC + MPEG-2 60; two software layers or ProRes 422 are
+  bound by their decoders, and an MPEG-2 layer beside an H.264 layer drops to 42 fps because the H.264 decoder and
+  the ISP share the VideoCore (open; HEVC beside it is clean). Codecs whose decoder is slower than the display
   (ProRes 4444, CineForm, AV1, Theora, 10-bit H.264) stay decode-bound. Alpha sources (RGBA) and stills keep
-  `glupload` from system memory: a still uploads once, and the ISP route for alpha is still to be measured. Open: the
-  ISP shares the VideoCore with the hardware H.264 decoder; measure an ISP layer beside a hardware-decoded one.
+  `glupload` from system memory: a still uploads once; the ISP route for alpha is still to be measured.
 - **Bridge rules (proven by the spike, 2026-10-01).**
   - *Attach a layer only once its format is known.* The video mixer waits for every input's caps before it produces
     anything, so an input created ahead of its first frame freezes the whole wall. A cue prerolls first; its first

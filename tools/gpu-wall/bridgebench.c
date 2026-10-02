@@ -28,9 +28,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #define MAXL 4
-static int pool_min = 8, copy_mode = 0; static const char *target = NULL; static GstElement *g_wall;
+static int pool_min = 8, copy_mode = 0; static const char *target = NULL; static const char *colorimetry = NULL; static GstElement *g_wall;
 static guint64 mixed = 0, pulled[MAXL], pushed[MAXL];
-static GHashTable *mems_seen[MAXL]; /* distinct GstMemory objects per layer: pool reuse vs fresh import each frame */
+static GHashTable *mems_seen[MAXL]; static guint64 nondma[MAXL]; static char nondma_type[MAXL][64]; /* distinct GstMemory objects per layer: pool reuse vs fresh import each frame */
 typedef struct { GstElement *sink; GstElement *src; int i; } Layer;
 
 /* ---- -kms: our own presenter (DESIGN §6.1.1 "Display", revised) ----------
@@ -277,7 +277,7 @@ static int kms_run(GstElement *wall, GstElement *wout, double secs) {
 static void thread_cpu_report(void) {
   GDir *d = g_dir_open("/proc/self/task", 0, NULL); const char *t;
   if (!d) return;
-  for (int i = 0; i < MAXL && mems_seen[i]; i++) fprintf(stderr, "layer %d: %u distinct memory objects over %llu frames\n", i, g_hash_table_size(mems_seen[i]), (unsigned long long)pulled[i]);
+  for (int i = 0; i < MAXL && mems_seen[i]; i++) fprintf(stderr, "layer %d: %u distinct memory objects over %llu frames; %llu pushed buffers not dmabuf%s%s\n", i, g_hash_table_size(mems_seen[i]), (unsigned long long)pulled[i], (unsigned long long)nondma[i], nondma[i] ? ", first: " : "", nondma[i] ? nondma_type[i] : "");
   for (int i = 0; i < MAXL; i++) {
     char nm[8]; snprintf(nm, sizeof nm, "up%d", i);
     GstElement *up = g_wall ? gst_bin_get_by_name(GST_BIN(g_wall), nm) : NULL;
@@ -325,6 +325,8 @@ static gpointer pump(gpointer data) {
     else { b = gst_buffer_ref(orig); }
     gst_sample_unref(s);
     if (!copy_mode) b = gst_buffer_make_writable(b); /* sole ref now: no copy, re-stampable */
+    { GstMemory *m0 = gst_buffer_peek_memory(b, 0);
+      if (!gst_is_dmabuf_memory(m0)) { if (!nondma[l->i]++) snprintf(nondma_type[l->i], 64, "%s (n_mem %u, size %zu)", m0->allocator->mem_type, gst_buffer_n_memory(b), gst_buffer_get_size(b)); } }
     if (!mems_seen[l->i]) mems_seen[l->i] = g_hash_table_new(NULL, NULL);
     g_hash_table_add(mems_seen[l->i], gst_buffer_peek_memory(b, 0));
     if (pulled[l->i] <= 2) {
@@ -353,6 +355,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[a], "-finish")) use_fence = 0;
     else if (!strcmp(argv[a], "-copy")) copy_mode = 1;
     else if (!strcmp(argv[a], "-target")) target = argv[++a];
+    else if (!strcmp(argv[a], "-colorimetry")) colorimetry = argv[++a];
     else if (!strcmp(argv[a], "-copyonly")) { kms = 1; display = 1; copy_only = 1; }
     else if (!strcmp(argv[a], "-mixlat")) mixlat = atol(argv[++a]) * 1000000L;
     a++;
@@ -410,7 +413,13 @@ int main(int argc, char **argv) {
     if (gst_element_get_state(cue[i], NULL, NULL, 10 * GST_SECOND) == GST_STATE_CHANGE_FAILURE) { fprintf(stderr, "cue %d preroll failed\n", i); return 2; }
     GstSample *ps = gst_app_sink_pull_preroll(GST_APP_SINK(L[i].sink));
     if (!ps) { fprintf(stderr, "cue %d no preroll sample\n", i); return 2; }
-    gst_app_src_set_caps(GST_APP_SRC(L[i].src), gst_sample_get_caps(ps));
+    GstCaps *lc = gst_caps_copy(gst_sample_get_caps(ps));
+    /* A YUV layer needs its colour matrix for the GPU conversion (the ISP's
+     * caps carry none; the H.264 decoder's say bt709): the bridge supplies it. */
+    if (colorimetry && !gst_structure_has_field(gst_caps_get_structure(lc, 0), "colorimetry"))
+      gst_caps_set_simple(lc, "colorimetry", G_TYPE_STRING, colorimetry, NULL);
+    fprintf(stderr, "layer %d caps: %s\n", i, gst_caps_to_string(lc));
+    gst_app_src_set_caps(GST_APP_SRC(L[i].src), lc); gst_caps_unref(lc);
     gst_sample_unref(ps);
   }
   gint64 t0 = g_get_monotonic_time();
