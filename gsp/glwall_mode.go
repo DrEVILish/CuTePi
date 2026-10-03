@@ -68,11 +68,28 @@ func glWall() bool {
 	return glOpen
 }
 
-// GLWallStats reports frames mixed and presented by the GPU wall.
-func GLWallStats() (mixed, presented uint64, on bool) {
+// GLLayerStats is one cue layer's counters.
+type GLLayerStats struct {
+	Pulled, Pushed uint64
+	Visible        bool
+	Level          float64
+}
+
+// GLWallStats reports frames mixed and presented by the GPU wall and the
+// attached layers' counters (bottom to top).
+func GLWallStats() (mixed, presented uint64, layers []GLLayerStats, on bool) {
 	if !glOpen {
-		return 0, 0, false
+		return 0, 0, nil, false
 	}
 	m, p := glwall.Stats()
-	return m, p, true
+	glMu.Lock()
+	for _, l := range glLayers {
+		if l.layer == nil {
+			continue
+		}
+		a, b := l.layer.Stats()
+		layers = append(layers, GLLayerStats{Pulled: a, Pushed: b, Visible: l.visible, Level: l.level})
+	}
+	glMu.Unlock()
+	return m, p, layers, true
 }

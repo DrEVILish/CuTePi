@@ -1,6 +1,7 @@
 package gsp
 
 import (
+	"CuTePi/gsp/glwall"
 	"errors"
 	"fmt"
 	"math"
@@ -532,6 +533,9 @@ func Stop() {
 	if err := p.SetState(gst.StateNull); err != nil {
 		logs.Printf(logs.GSPStopErr, "gsp: error stopping: %v", err)
 	}
+	if glOpen {
+		glHide(p) // off the wall now; a resume re-attaches after its preroll
+	}
 	// Stop keeps the (nulled) pipeline so a later Play() can resume the same
 	// clip, but the clip is no longer "current": a natural end or error clears
 	// currentFile via clearIfCurrent, so stopping must too — otherwise the
@@ -664,6 +668,9 @@ func retireAll(ps ...*gst.Pipeline) {
 // retired, never installed.
 func Warm(file string, opts LoadOpts) error {
 	gstInit()
+	if glOpen {
+		return nil // GL wall: prewarm not wired yet; cold builds are quick
+	}
 	mgr.mu.Lock()
 	buildGen := mgr.gen
 	stale := mgr.takeWarm()
@@ -732,6 +739,9 @@ func watchWarm(p *gst.Pipeline) {
 // still the one Warm built: retire the current transport, install the warm
 // pipeline, play. False = stale/mismatched slot, caller falls back.
 func InstallWarm(file string, opts LoadOpts) bool {
+	if glOpen {
+		return false
+	}
 	mgr.mu.Lock()
 	p, ok := mgr.warm, mgr.warmFile == file && mgr.warmOpts == opts
 	if ok {
@@ -1760,6 +1770,9 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
+	if glOpen {
+		glwall.UseSystemClock(pipeline) // the wall's clock: the bridge maps running times onto it
+	}
 
 	var src *gst.Element
 	var srcChain []*gst.Element // test patterns: sized to the display, optional mode label
@@ -1822,7 +1835,15 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		src.Set("location", srcFile)
 	}
 
-	decodebin, err := gst.NewElement("decodebin")
+	// GPU wall: decodebin3 plugs the decoder against the real downstream, so a
+	// stateless V4L2 decoder negotiates DMABuf output; decodebin exposes such a
+	// pad with system-memory tiled caps first and never renegotiates
+	// (TEST_REPORT, GPU wall step 2).
+	decoderBin := "decodebin"
+	if glOpen {
+		decoderBin = "decodebin3"
+	}
+	decodebin, err := gst.NewElement(decoderBin)
 	if err != nil {
 		return nil, err
 	}
@@ -1838,6 +1859,17 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	decodebin.Connect("pad-added", func(self *gst.Element, srcPad *gst.Pad) {
 		var isAudio, isVideo bool
 		caps := srcPad.GetCurrentCaps()
+		if caps == nil {
+			// decodebin3 exposes a pad before it carries caps: ask what it
+			// can produce (the decoder's template; the format is not fixed yet).
+			caps = srcPad.QueryCaps(nil)
+		}
+		if caps == nil {
+			caps = gst.NewCapsFromString("video/x-raw")
+			if strings.HasPrefix(srcPad.GetName(), "audio") {
+				caps = gst.NewCapsFromString("audio/x-raw")
+			}
+		}
 		for i := 0; i < caps.GetSize(); i++ {
 			st := caps.GetStructureAt(i)
 			if strings.HasPrefix(st.Name(), "audio/") {
@@ -1899,6 +1931,9 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 				sink = "fakesink"
 			}
 			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", sink}
+		} else if glOpen && !spec.warmSink {
+			// GPU wall: the cue feeds the mixer through an appsink (gllayer.go).
+			elementNames = glVideoTail(!spec.isTest && glDmaBufCapable(srcPad), capsFormat(caps))
 		} else if kmsWall() != nil {
 			// KMS wall: own display plane, hardware scaling/blending.
 			elementNames = kmsVideoTail(!spec.isTest && dmaBufUpstream(srcPad), spec.opts)
@@ -1960,7 +1995,13 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 				setResolutionCaps(elements[i])
 			}
 		}
-		if isVideo && kmsWall() != nil {
+		if isVideo && glOpen && !spec.warmSink {
+			if err := configureGLTail(pipeline, byFactory, elementNames, spec.opts, !spec.isTest && glDmaBufCapable(srcPad), capsFormat(caps)); err != nil {
+				msg := gst.NewErrorMessage(self, gst.NewGError(3, err), "no wall layer", nil)
+				pipeline.GetPipelineBus().Post(msg)
+				return
+			}
+		} else if isVideo && kmsWall() != nil {
 			fw, fh := capsSize(caps)
 			if err := configureKMSTail(pipeline, byFactory, spec.opts, fw, fh, !spec.isTest && isStillFile(spec.filename)); err != nil {
 				msg := gst.NewErrorMessage(self, gst.NewGError(3, err), "no display layer", nil)
@@ -2047,6 +2088,9 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		queue := elements[0]
 		sinkPad := queue.GetStaticPad("sink")
 		srcPad.Link(sinkPad)
+		if isVideo && glOpen && !spec.warmSink {
+			glRegister(pipeline, byFactory, spec.opts)
+		}
 	})
 
 	return pipeline, nil

@@ -233,6 +233,10 @@ func opacityOf(opts LoadOpts) float64 {
 // showLayer puts p's layer on screen at the bottom of the visible stack
 // (under every layer still fading out) at alpha opacity*level.
 func showLayer(p *gst.Pipeline, level float64) {
+	if glOpen {
+		glShow(p, level)
+		return
+	}
 	w := kmsWall()
 	l := layerOf(p)
 	if w == nil || l == nil {
@@ -256,6 +260,9 @@ const zposTop = 17
 // parkLayer puts p's (invisible, alpha 0) layer at the top zpos, so raising
 // it later is a single alpha commit.
 func parkLayer(p *gst.Pipeline) bool {
+	if glOpen {
+		return glPark(p)
+	}
 	w := kmsWall()
 	l := layerOf(p)
 	if w == nil || l == nil {
@@ -276,6 +283,10 @@ func parkLayer(p *gst.Pipeline) bool {
 // the next refresh: the panic cut. A parked layer is already on top, so it
 // takes one commit (alpha); otherwise zpos goes first.
 func raiseLayer(p *gst.Pipeline) {
+	if glOpen {
+		glRaise(p)
+		return
+	}
 	w := kmsWall()
 	l := layerOf(p)
 	if w == nil || l == nil {
@@ -317,6 +328,10 @@ func restackLocked(w *KMSWall) {
 
 // setLayerLevel applies a fade level (0..1) to p's layer: alpha = opacity x level.
 func setLayerLevel(p *gst.Pipeline, level float64) {
+	if glOpen {
+		glSetLevel(p, level)
+		return
+	}
 	w := kmsWall()
 	l := layerOf(p)
 	if w == nil || l == nil || !l.visible {
@@ -327,6 +342,10 @@ func setLayerLevel(p *gst.Pipeline, level float64) {
 
 // dropLayer frees p's plane. Call after p is in NULL (kmssink has released it).
 func dropLayer(p *gst.Pipeline) {
+	if glOpen {
+		glDrop(p)
+		return
+	}
 	w := kmsWall()
 	layersMu.Lock()
 	l := layers[p]
@@ -710,6 +729,18 @@ func readFileTrim(path string) (string, error) {
 }
 
 // capsSize reads width/height from the first caps structure (0s if absent).
+// capsFormat reads the raw video format name from caps ("" when unknown).
+func capsFormat(caps *gst.Caps) string {
+	if caps == nil || caps.GetSize() == 0 {
+		return ""
+	}
+	if v, err := caps.GetStructureAt(0).GetValue("format"); err == nil {
+		f, _ := v.(string)
+		return f
+	}
+	return ""
+}
+
 func capsSize(caps *gst.Caps) (w, h int) {
 	if caps == nil || caps.GetSize() == 0 {
 		return 0, 0

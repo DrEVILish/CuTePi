@@ -570,6 +570,16 @@ wall pipeline (always running)                                    ▼
   expected to play below full rate (§5.7).
 - **Pi 5.** Same design: the Pi 5 has HEVC hardware decode (no H.264), a faster V3D GPU, and the same GBM/KMS path.
 
+**Status (2026-10-03).** Steps 1 and 2 are in the service behind `CUTEPI_WALL=gl` (`gsp/glwall`, `gsp/gllayer.go`,
+`gsp/glwall_mode.go`): the wall presents at 60 and cues play through it at their full rate (HEVC, H.264, DNxHR,
+MPEG-2, VP9 at 60; animated GIF at 25; stills held), with fades, crossfade, pause, stop/resume and the panic image
+working (TEST_REPORT "GPU wall in the service"). In GL mode cue pipelines use **decodebin3**: decodebin exposes a
+stateless V4L2 decoder's pad with system-memory tiled caps before any downstream exists and never renegotiates,
+decodebin3 plugs the decoder against the real tail. Because decodebin3 adds pads after the pipeline reports
+PAUSED, the layer is attached when its tail exists and its appsink has prerolled, not at `startPlayback`'s wait.
+Still to do: rotation/mirror and crop in the GL chain, warm preroll, the audio offset, alpha detection from the
+import metadata, measuring stills and test patterns, and `support.py` on the GL wall.
+
 **Build order.** Each step lands only once measured on the Pi (frame rate traced per refresh, as in TEST_REPORT O1),
 with the KMS plane wall as the default until the GPU wall covers everything it does:
 1. Wall pipeline and display ownership (`CUTEPI_WALL=gl`): black background at the display rate; console stays

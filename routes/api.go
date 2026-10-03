@@ -185,6 +185,7 @@ func wifiQREscape(v string) string {
 
 func Api(rg *gin.RouterGroup) {
 	registerThemeRoutes(rg)
+	registerGLWallRoutes(rg)
 	registerDisplayRoute(rg)
 	registerAudioRoute(rg)
 	registerDiskRoute(rg)

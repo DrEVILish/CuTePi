@@ -326,6 +326,7 @@ void glwall_close(void) {
 }
 
 void glwall_stats(uint64_t *mixed, uint64_t *presented) { *mixed = W.mixed; *presented = W.presented; }
+void glwall_layer_stats(glwall_layer *l, uint64_t *pulled, uint64_t *pushed) { *pulled = l ? l->pulled : 0; *pushed = l ? l->pushed : 0; }
 
 /* ---- layers ----------------------------------------------------------------- */
 
@@ -378,7 +379,7 @@ static gpointer pump(gpointer data) {
 glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, char **err) {
   *err = NULL;
   if (!W.open) { *err = g_strdup("wall not open"); return NULL; }
-  GstSample *ps = gst_app_sink_try_pull_preroll(GST_APP_SINK(appsink), 2 * GST_SECOND);
+  GstSample *ps = gst_app_sink_try_pull_preroll(GST_APP_SINK(appsink), 10 * GST_SECOND);
   if (!ps) { *err = g_strdup("cue has no preroll frame"); return NULL; }
   GstCaps *lc = gst_caps_copy(gst_sample_get_caps(ps));
   gst_sample_unref(ps);
@@ -422,8 +423,14 @@ fail:
 
 void glwall_layer_set_alpha(glwall_layer *l, double a) { if (l && l->mixpad) g_object_set(l->mixpad, "alpha", a, NULL); }
 void glwall_layer_set_zorder(glwall_layer *l, int z) { if (l && l->mixpad) g_object_set(l->mixpad, "zorder", (guint)z, NULL); }
-void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h) {
-  if (l && l->mixpad) g_object_set(l->mixpad, "xpos", x, "ypos", y, "width", w, "height", h, NULL);
+void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h, int keep_aspect) {
+  if (l && l->mixpad) g_object_set(l->mixpad, "xpos", x, "ypos", y, "width", w, "height", h, "sizing-policy", keep_aspect ? 1 : 0, NULL);
+}
+
+void glwall_use_system_clock(GstElement *pipeline) {
+  GstClock *clk = gst_system_clock_obtain();
+  gst_pipeline_use_clock(GST_PIPELINE(pipeline), clk);
+  gst_object_unref(clk);
 }
 
 void glwall_layer_free(glwall_layer *l) {

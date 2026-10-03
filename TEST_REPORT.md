@@ -691,6 +691,53 @@ the KMS wall shows on screen:
   late frames dropped and does not recover (ProRes 422: 24 fps possible, 0.8 shown).
 - CineForm (7.8 fps) and ProRes 4444 (35.6 fps) are decode-bound on the Pi 4's CPU even from RAM.
 
+## GPU wall in the service: steps 1 and 2 (2026-10-03)
+
+`CUTEPI_WALL=gl` (the KMS plane wall stays the default). The wall from the harness now runs inside the service
+(`gsp/glwall`, cgo): the GL mixer pipeline on the render node, the ring of four dumb buffers on the service's own
+DRM fd offered to the mixer as its pool, a presenter thread putting each fenced frame on the lowest overlay plane with
+`SetPlane` (the service stays DRM master; the panic plane logic is replaced by a mixer layer at the top), and the
+layer bridge. Measured through the live service and its API, `/api/debug/glwall` giving the wall's and each layer's
+counters:
+
+| Step 1 (wall alone) | 300 `SetPlane` commits in 5 s traced from outside: black at 60 fps; HTTP serving. |
+|---|---|
+
+| Step 2, cue layers (frames pushed to the mixer per second; the wall presented 60 throughout) | |
+|---|---|
+| HEVC (`v4l2slh265dec`, DMABuf) | 60 |
+| H.264 (`v4l2h264dec`, DMABuf) | 60 |
+| DNxHR HQ (software, `videoconvert` → ISP → YU12 DMABuf) | 60 |
+| MPEG-2, VP9 (software → ISP) | 60 |
+| Animated GIF (25 fps file, via ISP) | 25 (its own rate) |
+| PNG with alpha (still) | 1 frame, held |
+| Pause / resume | frames stop, then resume |
+| Stop, then Play (resume after stop) | layer re-attached after the new preroll |
+| Crossfade H.264 → HEVC with a 1 s fade-in | incoming layer level 0 → 1, 56 frames in the first second |
+| ESC fade-out | layer gone when the fade ends |
+| Panic to the armed holding image | layer on top at full level within the second |
+
+Found on the way:
+- decodebin exposes a stateless V4L2 decoder's pad (HEVC) with its system-memory tiled caps (`NV12_128C8`) before
+  anything downstream exists and never renegotiates: a DMABuf-only tail then fails to preroll, and the "software"
+  tail untiles on the CPU (12 fps). A reconfigure event does not change that. **GL mode builds cues with decodebin3**,
+  which plugs the decoder against the real downstream; every route then negotiates as in the harness.
+- decodebin3 adds its pads *after* the pipeline reports PAUSED, so the tail (and the appsink's preroll) can arrive
+  after `startPlayback`'s wait: `showLayer` waits for the tail record and then for the preroll (10 s), and the
+  record is registered only once the tail is in the pipeline and synced (an appsink still in NULL answers the
+  preroll pull with nothing: the first version raced and attached nothing).
+- The tail is chosen by what the decoder *can* produce (a caps query: memory:DMABuf listed or not), not by the pad's
+  current caps.
+- Stop keeps the pipeline for a resume, so it hides the layer (frees the wall side, keeps the record) and the resume
+  re-attaches.
+- A still through decodebin3 is pushed repeatedly (30 frames a second of the same picture): harmless, to trim.
+
+Not yet on the GL wall: rotation and mirror (`glvideoflip`), crop, the warm preroll (disabled in GL mode: cold builds
+are 1–3 ms + preroll), the audio offset for the wall's latency, alpha detection for sources whose format is unknown at
+pad-added time under decodebin3 (they go through the ISP, which drops alpha; use the import metadata), test
+patterns (they take the ISP route and should work; not measured), and `support.py` measuring on the GL wall (count a
+layer's frames per window from `/api/debug/glwall` instead of plane commits).
+
 ## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
 
 Pi 4 Model B Rev 1.5, KMS planes, live service; the full support set (94 files) rerun, then the slow-clip rows rerun

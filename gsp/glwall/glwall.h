@@ -31,12 +31,18 @@ void glwall_prepare_sink(GstElement *appsink, int pool_buffers);
 glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, char **err);
 void glwall_layer_set_alpha(glwall_layer *l, double alpha);
 void glwall_layer_set_zorder(glwall_layer *l, int zorder);
-void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h);
+/* keep_aspect: letterbox inside the rectangle (fit) rather than stretch. */
+void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h, int keep_aspect);
+/* Every cue pipeline runs on the system clock, like the wall, so the pump's
+ * base-time mapping holds (an audio sink would otherwise impose its own). */
+void glwall_use_system_clock(GstElement *pipeline);
 /* glwall_layer_free detaches the layer. The cue pipeline must be in NULL
  * (its appsink has released the pump). */
 void glwall_layer_free(glwall_layer *l);
 
 /* Counters since open: frames the mixer produced, frames put on the plane. */
 void glwall_stats(uint64_t *mixed, uint64_t *presented);
+/* Per layer: frames pulled from the cue and pushed to the mixer. */
+void glwall_layer_stats(glwall_layer *l, uint64_t *pulled, uint64_t *pushed);
 
 #endif

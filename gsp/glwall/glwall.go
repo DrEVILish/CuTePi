@@ -66,10 +66,18 @@ func (l *Layer) SetAlpha(a float64) { C.glwall_layer_set_alpha(l.l, C.double(a))
 // SetZOrder sets the stacking order (higher is on top).
 func (l *Layer) SetZOrder(z int) { C.glwall_layer_set_zorder(l.l, C.int(z)) }
 
-// SetRect places the layer on the wall.
-func (l *Layer) SetRect(x, y, w, h int) {
-	C.glwall_layer_set_rect(l.l, C.int(x), C.int(y), C.int(w), C.int(h))
+// SetRect places the layer on the wall; keepAspect letterboxes inside the
+// rectangle (fit) instead of stretching.
+func (l *Layer) SetRect(x, y, w, h int, keepAspect bool) {
+	k := 0
+	if keepAspect {
+		k = 1
+	}
+	C.glwall_layer_set_rect(l.l, C.int(x), C.int(y), C.int(w), C.int(h), C.int(k))
 }
+
+// UseSystemClock pins a cue pipeline to the system clock the wall runs on.
+func UseSystemClock(p *gst.Pipeline) { C.glwall_use_system_clock((*C.GstElement)(p.Unsafe())) }
 
 // Free detaches the layer. The cue pipeline must already be in NULL.
 func (l *Layer) Free() {
@@ -77,6 +85,15 @@ func (l *Layer) Free() {
 		C.glwall_layer_free(l.l)
 		l.l = nil
 	}
+}
+
+// Stats reports frames pulled from the cue and pushed to the mixer.
+func (l *Layer) Stats() (pulled, pushed uint64) {
+	var a, b C.uint64_t
+	if l.l != nil {
+		C.glwall_layer_stats(l.l, &a, &b)
+	}
+	return uint64(a), uint64(b)
 }
 
 // Stats reports frames mixed and frames presented since Open.
