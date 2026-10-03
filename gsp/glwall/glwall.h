@@ -42,7 +42,17 @@ void glwall_layer_free(glwall_layer *l);
 
 /* Counters since open: frames the mixer produced, frames put on the plane. */
 void glwall_stats(uint64_t *mixed, uint64_t *presented);
-/* Per layer: frames pulled from the cue and pushed to the mixer. */
-void glwall_layer_stats(glwall_layer *l, uint64_t *pulled, uint64_t *pushed);
+/* Ring pool diagnostics: allocs/frees of ring-backed buffers, allocation
+ * failures, pool configs/activations, mixer allocation queries answered,
+ * slots wrapped by live buffers, the slot on screen, frames queued,
+ * frames skipped by the presenter to catch up. */
+typedef struct {
+  uint64_t allocs, frees, exhausted, set_configs, activations, alloc_queries, skipped;
+  int allocated, onscreen, queued;
+} glwall_pool_stats_t;
+void glwall_pool_stats(glwall_pool_stats_t *st);
+
+/* Per layer: frames pulled from the cue, pushed to the mixer, opacity changes applied. */
+void glwall_layer_stats(glwall_layer *l, uint64_t *pulled, uint64_t *pushed, uint64_t *steps);
 
 #endif

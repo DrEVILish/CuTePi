@@ -61,6 +61,7 @@ ROOT = ARGS[0] if ARGS and not ARGS[0].startswith("--") else "/root/cutepi-testm
 def opt(name, default=None):
     return ARGS[ARGS.index(name) + 1] if name in ARGS else default
 README = opt("--readme")
+SECTION = opt("--section", "")   # README marker suffix, e.g. "gl" -> <!-- codec-support-gl:start -->
 JSON_OUT = opt("--json")
 ONLY = [o for o in (opt("--only") or "").split(",") if o]  # comma-separated name substrings
 BASE = opt("--base", "http://127.0.0.1")
@@ -345,6 +346,41 @@ def has_alpha(fourcc):
     return fourcc[:2] in ("AR", "AB", "RA", "BA")
 
 
+def gl_wall():
+    """True when the live service runs the GPU wall (its counters endpoint is on)."""
+    try:
+        st_, body = call("GET", "/api/debug/glwall")
+        return st_ == 200 and json.loads(body).get("on") is True
+    except Exception:
+        return False
+
+
+def gl_sample():
+    """(time, pushed, steps) of the busiest attached layer, or None."""
+    st_, body = call("GET", "/api/debug/glwall")
+    if st_ != 200:
+        return None
+    d = json.loads(body)
+    # The cue under test is the newest visible layer; an armed panic image
+    # (parked) and cues fading out are also attached.
+    cand = [l for l in d.get("layers") or [] if l.get("Visible") and not l.get("Parked")]
+    if not cand:
+        return None
+    l = max(cand, key=lambda x: x.get("Seq", 0))
+    return (time.monotonic(), l["Pushed"], l["Steps"])
+
+
+def gl_rate(samples, lo, hi, idx):
+    """Counter idx (1 pushed, 2 steps) per second over [lo, hi), from the samples nearest the bounds."""
+    inside = [smp for smp in samples if lo <= smp[0] < hi]
+    if len(inside) < 2:
+        return None
+    a, b = inside[0], inside[-1]
+    if b[0] <= a[0]:
+        return None
+    return (b[idx] - a[idx]) / (b[0] - a[0])
+
+
 def audio_running():
     for f in glob.glob("/proc/asound/card*/pcm*p/sub*/status"):
         try:
@@ -404,42 +440,80 @@ def run(path, mdl):
             res["ok"] = run_ok
             res["status"] = "Supported" if run_ok else mdl + " - unsupported"
             return res
-        trace_start()
-        t_play = time.monotonic()
-        call("POST", "/api/cue/%d/play" % pos)
-        time.sleep(FADE_S + STEADY_S)
-        t_read = time.monotonic()
-        if is_alpha:
-            formats, blends = debugfs_formats(), blend_modes()
-        t_fo = time.monotonic()
-        call("POST", "/api/fadeOut")
-        time.sleep(FADE_S + 0.6)
-        txt = trace_stop()
-        frames, props, period, phase = parse(txt)
-        if not period:
-            raise RuntimeError("no vblank events traced")
-        res["refresh_hz"] = round(1 / period, 2)
-        # The cue's output: the plane (or CRTC flip stream) with the most
-        # frames after the play started.
-        cand = {k: [t for t in v if t >= t_play] for k, v in frames.items()}
-        cand = {k: v for k, v in cand.items() if v}
-        if not cand:
-            raise RuntimeError("no frames presented")
-        key, times = max(cand.items(), key=lambda kv: len(kv[1]))
-        t_first = times[0]
-        res["first_frame_ms"] = round((t_first - t_play) * 1000)
-        plane = int(key.split()[1]) if key.startswith("plane") else None
-        steps = props.get(plane, []) if plane is not None else []
-        win = {"fade_in": (t_first, t_first + FADE_S), "steady": (t_first + FADE_S + 0.3, t_read - 0.02),
-               "fade_out": (t_fo + 0.05, t_fo + FADE_S - 0.05)}
-        for w, (lo, hi) in win.items():
-            fps = window_fps(times, lo, hi, period, phase)
-            res[w + "_fps"] = round(fps, 1) if fps is not None else None
-            if w != "steady":
-                # Opacity changes: plane alpha writes on the KMS wall; on a
-                # GL wall the mixer applies the fade to every output frame.
-                s = rate(steps, lo, hi) if plane is not None else fps
-                res[w + "_steps"] = round(s, 1) if s is not None else None
+        if GL:
+            # GPU wall: the plane is committed every refresh whatever is
+            # shown, so the cue's own frames and opacity changes are read
+            # from the wall's layer counters (/api/debug/glwall), sampled
+            # every 50 ms. A pushed frame is composited on the output frame
+            # it is due for; an opacity change lands on the next output
+            # frame, so both count per refresh.
+            t_play = time.monotonic()
+            call("POST", "/api/cue/%d/play" % pos)
+            samples = []
+            t_due = t_play + FADE_S + STEADY_S   # when the fade out is triggered
+            t_fo = None
+            while time.monotonic() < t_due + FADE_S + 0.3:
+                if t_fo is None and time.monotonic() >= t_due:
+                    call("POST", "/api/fadeOut")
+                    t_fo = time.monotonic()
+                smp = gl_sample()
+                if smp:
+                    samples.append(smp)
+                time.sleep(0.03)
+            if t_fo is None:
+                t_fo = t_due
+            if not samples:
+                raise RuntimeError("no wall layer appeared")
+            t_first = next((smp[0] for smp in samples if smp[1] >= 1), samples[0][0])
+            res["first_frame_ms"] = round((t_first - t_play) * 1000)
+            win = {"fade_in": (t_first, t_first + FADE_S), "steady": (t_first + FADE_S + 0.3, t_fo - 0.1),
+                   "fade_out": (t_fo + 0.05, t_fo + FADE_S - 0.05)}
+            for w, (lo, hi) in win.items():
+                fps = gl_rate(samples, lo, hi, 1)
+                res[w + "_fps"] = round(fps, 1) if fps is not None else None
+                if w != "steady":
+                    st = gl_rate(samples, lo, hi, 2)
+                    res[w + "_steps"] = round(st, 1) if st is not None else None
+            if animated or kind != "image":
+                pass
+            plane = None
+        else:
+            trace_start()
+            t_play = time.monotonic()
+            call("POST", "/api/cue/%d/play" % pos)
+            time.sleep(FADE_S + STEADY_S)
+            t_read = time.monotonic()
+            if is_alpha:
+                formats, blends = debugfs_formats(), blend_modes()
+            t_fo = time.monotonic()
+            call("POST", "/api/fadeOut")
+            time.sleep(FADE_S + 0.6)
+            txt = trace_stop()
+            frames, props, period, phase = parse(txt)
+            if not period:
+                raise RuntimeError("no vblank events traced")
+            res["refresh_hz"] = round(1 / period, 2)
+            # The cue's output: the plane (or CRTC flip stream) with the most
+            # frames after the play started.
+            cand = {k: [t for t in v if t >= t_play] for k, v in frames.items()}
+            cand = {k: v for k, v in cand.items() if v}
+            if not cand:
+                raise RuntimeError("no frames presented")
+            key, times = max(cand.items(), key=lambda kv: len(kv[1]))
+            t_first = times[0]
+            res["first_frame_ms"] = round((t_first - t_play) * 1000)
+            plane = int(key.split()[1]) if key.startswith("plane") else None
+            steps = props.get(plane, []) if plane is not None else []
+            win = {"fade_in": (t_first, t_first + FADE_S), "steady": (t_first + FADE_S + 0.3, t_read - 0.02),
+                   "fade_out": (t_fo + 0.05, t_fo + FADE_S - 0.05)}
+            for w, (lo, hi) in win.items():
+                fps = window_fps(times, lo, hi, period, phase)
+                res[w + "_fps"] = round(fps, 1) if fps is not None else None
+                if w != "steady":
+                    # Opacity changes: plane alpha writes on the KMS wall; on a
+                    # GL wall the mixer applies the fade to every output frame.
+                    s = rate(steps, lo, hi) if plane is not None else fps
+                    res[w + "_steps"] = round(s, 1) if s is not None else None
         smooth = all((res[w + "_steps"] or 0) >= MIN_STEPS for w in ("fade_in", "fade_out"))
         if kind == "image" and not animated:
             ok = smooth
@@ -449,7 +523,12 @@ def run(path, mdl):
             need = MIN_FPS if not animated else 0.98 * (src_fps or 60)
             res["need_fps"] = round(need, 1)
             ok = smooth and all((res[w + "_fps"] or 0) >= need for w in win)
-        if is_alpha:
+        if is_alpha and GL:
+            # The mixer blends every layer with straight alpha over the
+            # layers beneath; the frame's format is whatever the GPU imports.
+            res["plane_format"], res["blend_mode"] = "GL layer", "straight"
+            res["alpha_ok"] = True
+        elif is_alpha:
             fourcc = formats.get(plane, "?") if plane is not None else "not a plane"
             blend = blends.get(plane, "?") if plane is not None else "-"
             res["plane_format"], res["blend_mode"] = fourcc, blend
@@ -495,11 +574,12 @@ def fmt_row(r):
 
 
 def write_readme(results, mdl, path_label):
-    start, end = "<!-- codec-support:start -->", "<!-- codec-support:end -->"
+    tag = "codec-support" + ("-" + SECTION if SECTION else "")
+    start, end = "<!-- %s:start -->" % tag, "<!-- %s:end -->" % tag
     text = open(README).read() if os.path.exists(README) else ""
     old = {}
     if start in text:
-        m = re.search(re.escape(start) + r".*?<!-- codec-support:data (.*?) -->", text, re.S)
+        m = re.search(re.escape(start) + r".*?<!-- " + re.escape(tag) + r":data (.*?) -->", text, re.S)
         if m:
             try:
                 old = {r["file"] + r["kind"]: r for r in json.loads(m.group(1))}
@@ -516,7 +596,7 @@ def write_readme(results, mdl, path_label):
             "| Type | Codec | Container | Video decoder | Hardware | Measured (1 s fade in, steady, 1 s fade out) | Status |",
             "|---|---|---|---|---|---|---|"]
     body += [fmt_row(r) for r in rows]
-    body += ["", "<!-- codec-support:data %s -->" % json.dumps(rows, separators=(",", ":")), end]
+    body += ["", "<!-- %s:data %s -->" % (tag, json.dumps(rows, separators=(",", ":"))), end]
     block = "\n".join(body)
     if start in text and end in text:
         text = text[:text.index(start)] + block + text[text.index(end) + len(end):]
@@ -526,9 +606,14 @@ def write_readme(results, mdl, path_label):
         f.write(text)
 
 
+GL = False
+
+
 def main():
+    global GL
     mdl = model()
-    path_label = output_path()
+    GL = gl_wall()
+    path_label = "GPU compositor wall" if GL else output_path()
     # Only the test files: video/, image/ and audio/ (helper files such as the
     # alpha mask live beside them).
     files = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(ROOT) for f in fs
@@ -540,7 +625,8 @@ def main():
     results = []
     try:
         call("POST", "/api/settings", json.dumps({"escFadeMs": int(FADE_S * 1000)}).encode(), {"Content-Type": "application/json"})
-        probes_on()
+        if not GL:
+            probes_on()
         for path in files:
             try:
                 r = run(path, mdl)
@@ -552,7 +638,8 @@ def main():
             results.append(r)
             print(fmt_row(r), file=sys.stderr, flush=True)
     finally:
-        probes_off()
+        if not GL:
+            probes_off()
         call("POST", "/api/settings", json.dumps({"escFadeMs": esc_before}).encode(), {"Content-Type": "application/json"})
     if JSON_OUT:
         with open(JSON_OUT, "w") as f:

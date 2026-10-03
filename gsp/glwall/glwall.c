@@ -43,16 +43,30 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
-#define RING 4
+/* Eight scan-out buffers. The pool preallocates nothing (min 0): when a
+ * layer attaches, the mixer renegotiates its allocation and the pool is
+ * cycled, and a min of RING made every reactivation want all eight while some
+ * were still out (TEST_REPORT, GPU wall step 2: the mixer then waited in
+ * acquire_buffer for good). Each slot's state is tracked explicitly: a slot
+ * wrapped by a live GstBuffer is "allocated"; the slot on screen is never
+ * handed out again until another frame has replaced it, whatever the pool
+ * does, so the mixer never renders into the picture being scanned out. */
+#define RING 8
 #define MIXER_LATENCY_NS (33 * GST_MSECOND)
 
 typedef struct {
   uint32_t handle, pitch, fb;
-  int dmafd, fence;
+  int dmafd;
   EGLImageKHR img;
   GLuint tex;
-  GstSample *sample; /* the mixed frame living in this buffer, held until it has left the screen */
 } ring_buf;
+
+/* A finished frame on its way to the screen: it owns its sample (and so its
+ * ring buffer) and its fence; nothing per slot is ever overwritten. */
+typedef struct {
+  int idx, fence;
+  GstSample *sample;
+} frame_item;
 
 static struct {
   int open;
@@ -60,7 +74,10 @@ static struct {
   uint32_t crtc, plane;
   int w, h, hz;
   ring_buf ring[RING];
-  int ring_used[RING];
+  int slot_alloc[RING]; /* wrapped by a live GstBuffer */
+  int onscreen;         /* slot being scanned out, -1 none */
+  GMutex slot_lock;
+  GCond slot_cond;
   int ring_imported;
   GstVideoInfo ring_vinfo;
   GstBufferPool *pool;
@@ -68,10 +85,12 @@ static struct {
   GstGLContext *ctx;
   EGLDisplay dpy;
   int use_fence;
-  GAsyncQueue *ready; /* ring index + 1, in presentation order */
+  GAsyncQueue *ready; /* frame_item*, in presentation order */
   GThread *wall_thread, *present_thread;
   volatile int quit;
   guint64 mixed, presented;
+  /* pool diagnostics (/api/debug/glwall) */
+  guint64 allocs, frees, exhausted, set_configs, alloc_queries, activations, skipped;
   GMutex lock; /* layers list, zorder */
 } W;
 
@@ -81,7 +100,8 @@ struct glwall_layer {
   GstPad *mixpad;
   GThread *pump;
   volatile int quit;
-  guint64 pulled, pushed;
+  guint64 pulled, pushed, steps; /* steps: opacity changes applied */
+  double alpha;
 };
 
 static PFNEGLCREATESYNCKHRPROC p_mksync;
@@ -97,7 +117,7 @@ static int ring_create(char **err) {
   for (int i = 0; i < RING; i++) {
     struct drm_mode_create_dumb cd = { .width = W.w, .height = W.h, .bpp = 32 };
     if (drmIoctl(W.fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd)) { *err = g_strdup_printf("create dumb buffer: %s", g_strerror(errno)); return -1; }
-    W.ring[i].handle = cd.handle; W.ring[i].pitch = cd.pitch; W.ring[i].fence = -1;
+    W.ring[i].handle = cd.handle; W.ring[i].pitch = cd.pitch;
     uint32_t h[4] = { cd.handle }, p[4] = { cd.pitch }, o[4] = { 0 };
     if (drmModeAddFB2(W.fd, W.w, W.h, DRM_FORMAT_XBGR8888, h, p, o, &W.ring[i].fb, 0)) { *err = g_strdup_printf("addfb2: %s", g_strerror(errno)); return -1; }
     if (drmPrimeHandleToFD(W.fd, cd.handle, DRM_CLOEXEC | DRM_RDWR, &W.ring[i].dmafd)) { *err = g_strdup_printf("prime export: %s", g_strerror(errno)); return -1; }
@@ -108,11 +128,10 @@ static int ring_create(char **err) {
 static void ring_destroy(void) {
   for (int i = 0; i < RING; i++) {
     ring_buf *r = &W.ring[i];
-    if (r->fence >= 0) close(r->fence);
     if (r->fb) drmModeRmFB(W.fd, r->fb);
     if (r->dmafd > 0) close(r->dmafd);
     if (r->handle) { struct drm_mode_destroy_dumb dd = { .handle = r->handle }; drmIoctl(W.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd); }
-    memset(r, 0, sizeof *r); r->fence = -1;
+    memset(r, 0, sizeof *r);
   }
 }
 
@@ -140,19 +159,26 @@ static void gl_setup(GstGLContext *ctx, gpointer d) {
   W.ring_imported = 1;
 }
 
-/* On the GL thread: a native fence after the mixer's render into ring[i]. */
+/* On the GL thread: a native fence after the mixer's render of this frame. */
 static void gl_fence(GstGLContext *ctx, gpointer d) {
-  ring_buf *r = &W.ring[GPOINTER_TO_INT(d)];
-  if (r->fence >= 0) { close(r->fence); r->fence = -1; }
+  frame_item *f = d;
+  f->fence = -1;
   if (W.use_fence) {
     EGLint at[] = { EGL_SYNC_NATIVE_FENCE_FD_ANDROID, EGL_NO_NATIVE_FENCE_FD_ANDROID, EGL_NONE };
     EGLSyncKHR sy = p_mksync(W.dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, at);
     glFlush();
-    r->fence = p_dupfence(W.dpy, sy);
+    f->fence = p_dupfence(W.dpy, sy);
     p_rmsync(W.dpy, sy);
   } else {
     glFinish();
   }
+}
+
+static void frame_item_free(frame_item *f) {
+  if (!f) return;
+  if (f->fence >= 0) close(f->fence);
+  if (f->sample) gst_sample_unref(f->sample);
+  g_free(f);
 }
 
 /* ---- the ring as the mixer's buffer pool ----------------------------------- */
@@ -170,30 +196,75 @@ static int ring_index_of(GstBuffer *b) {
   return -1;
 }
 
+/* A free slot (not wrapped, not on screen), waiting up to 200 ms for one. */
+static int slot_take(void) {
+  gint64 until = g_get_monotonic_time() + 200 * G_TIME_SPAN_MILLISECOND;
+  g_mutex_lock(&W.slot_lock);
+  for (;;) {
+    for (int i = 0; i < RING; i++)
+      if (!W.slot_alloc[i] && i != W.onscreen) { W.slot_alloc[i] = 1; g_mutex_unlock(&W.slot_lock); return i; }
+    if (!g_cond_wait_until(&W.slot_cond, &W.slot_lock, until)) break;
+  }
+  g_mutex_unlock(&W.slot_lock);
+  return -1;
+}
+
+static void slot_release(int i) {
+  if (i < 0) return;
+  g_mutex_lock(&W.slot_lock);
+  W.slot_alloc[i] = 0;
+  g_cond_broadcast(&W.slot_cond);
+  g_mutex_unlock(&W.slot_lock);
+}
+
 static GstFlowReturn ring_pool_alloc(GstBufferPool *pool, GstBuffer **out, GstBufferPoolAcquireParams *ap) {
-  int i; for (i = 0; i < RING && W.ring_used[i]; i++);
-  if (i >= RING) { GST_ERROR("glwall: ring pool exhausted"); return GST_FLOW_ERROR; }
+  int i = slot_take();
+  if (i < 0) {
+    W.exhausted++;
+    g_printerr("glwall: ring pool exhausted (allocs %" G_GUINT64_FORMAT ", frees %" G_GUINT64_FORMAT ")\n", W.allocs, W.frees);
+    return GST_FLOW_ERROR;
+  }
   GstGLContext *ctx = GST_GL_BUFFER_POOL(pool)->context;
   GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_gl_handle(ctx, NULL, &W.ring_vinfo, 0, NULL,
     GST_GL_TEXTURE_TARGET_2D, GST_GL_RGBA, GUINT_TO_POINTER(W.ring[i].tex), NULL, NULL);
   GstBuffer *b = gst_buffer_new(); gpointer wd[1] = { GUINT_TO_POINTER(W.ring[i].tex) };
   if (!gst_gl_memory_setup_buffer(gst_gl_memory_allocator_get_default(ctx), b, params, NULL, wd, 1)) {
-    gst_gl_allocation_params_free((GstGLAllocationParams *)params); gst_buffer_unref(b);
+    gst_gl_allocation_params_free((GstGLAllocationParams *)params); gst_buffer_unref(b); slot_release(i);
+    g_printerr("glwall: wrapping ring texture %d failed\n", i);
     return GST_FLOW_ERROR;
   }
   gst_gl_allocation_params_free((GstGLAllocationParams *)params);
-  W.ring_used[i] = 1; *out = b;
+  W.allocs++;
+  *out = b;
   return GST_FLOW_OK;
 }
 
 static void ring_pool_free(GstBufferPool *pool, GstBuffer *b) {
-  int i = ring_index_of(b); if (i >= 0) W.ring_used[i] = 0;
+  slot_release(ring_index_of(b));
+  W.frees++;
   GST_BUFFER_POOL_CLASS(ring_pool_parent_class)->free_buffer(pool, b);
 }
 
+/* Whatever the mixer asks, the pool preallocates nothing (see RING). */
+static gboolean ring_pool_set_config(GstBufferPool *pool, GstStructure *cfg) {
+  GstCaps *caps; guint size, min, max;
+  if (gst_buffer_pool_config_get_params(cfg, &caps, &size, &min, &max))
+    gst_buffer_pool_config_set_params(cfg, caps, size, 0, RING);
+  W.set_configs++;
+  return GST_BUFFER_POOL_CLASS(ring_pool_parent_class)->set_config(pool, cfg);
+}
+
+static gboolean ring_pool_start(GstBufferPool *pool) {
+  W.activations++;
+  return GST_BUFFER_POOL_CLASS(ring_pool_parent_class)->start(pool);
+}
+
 static void ring_pool_class_init(RingPoolClass *k) {
-  ((GstBufferPoolClass *)k)->alloc_buffer = ring_pool_alloc;
-  ((GstBufferPoolClass *)k)->free_buffer = ring_pool_free;
+  GstBufferPoolClass *bp = (GstBufferPoolClass *)k;
+  bp->alloc_buffer = ring_pool_alloc;
+  bp->free_buffer = ring_pool_free;
+  bp->set_config = ring_pool_set_config;
+  bp->start = ring_pool_start;
 }
 static void ring_pool_init(RingPool *p) {}
 
@@ -206,18 +277,19 @@ static GstPadProbeReturn mixer_allocq(GstPad *pad, GstPadProbeInfo *info, gpoint
   if (!caps || !gst_video_info_from_caps(&W.ring_vinfo, caps)) return GST_PAD_PROBE_OK;
   GstGLContext *ctx = NULL; g_object_get(W.mixer, "context", &ctx, NULL);
   if (!ctx) return GST_PAD_PROBE_OK;
+  W.alloc_queries++;
   if (!W.ring_imported) gst_gl_context_thread_add(ctx, gl_setup, NULL);
   if (!W.ctx) W.ctx = gst_object_ref(ctx);
   if (!W.pool) {
     W.pool = g_object_new(ring_pool_get_type(), NULL);
     GST_GL_BUFFER_POOL(W.pool)->context = gst_object_ref(ctx);
     GstStructure *cfg = gst_buffer_pool_get_config(W.pool);
-    gst_buffer_pool_config_set_params(cfg, caps, W.ring_vinfo.size, RING, RING);
+    gst_buffer_pool_config_set_params(cfg, caps, W.ring_vinfo.size, 0, RING);
     gst_buffer_pool_config_add_option(cfg, GST_BUFFER_POOL_OPTION_VIDEO_META);
-    if (!gst_buffer_pool_set_config(W.pool, cfg)) GST_ERROR("glwall: ring pool config refused");
+    if (!gst_buffer_pool_set_config(W.pool, cfg)) g_printerr("glwall: ring pool config refused\n");
   }
   gst_query_add_allocation_meta(q, GST_VIDEO_META_API_TYPE, NULL);
-  gst_query_add_allocation_pool(q, W.pool, W.ring_vinfo.size, RING, RING);
+  gst_query_add_allocation_pool(q, W.pool, W.ring_vinfo.size, 0, RING);
   gst_object_unref(ctx);
   return GST_PAD_PROBE_HANDLED;
 }
@@ -225,41 +297,57 @@ static GstPadProbeReturn mixer_allocq(GstPad *pad, GstPadProbeInfo *info, gpoint
 /* ---- wall and presenter threads -------------------------------------------- */
 
 /* Pulls each mixed frame (in a ring buffer) as it falls due, fences it and
- * hands it to the presenter. The sample is held until the buffer has left
- * the screen, which is what keeps the mixer from reusing it. */
+ * hands it to the presenter. The frame item owns the sample. */
 static gpointer wall_thread(gpointer d) {
   while (!W.quit) {
     GstSample *s = gst_app_sink_try_pull_sample(GST_APP_SINK(W.wout), 100 * GST_MSECOND);
     if (!s) continue;
     int idx = ring_index_of(gst_sample_get_buffer(s));
     if (idx < 0) { GST_WARNING("glwall: mixed frame not in the ring"); gst_sample_unref(s); continue; }
-    gst_gl_context_thread_add(W.ctx, gl_fence, GINT_TO_POINTER(idx));
+    frame_item *f = g_new0(frame_item, 1);
+    f->idx = idx; f->sample = s; f->fence = -1;
+    gst_gl_context_thread_add(W.ctx, gl_fence, f);
     W.mixed++;
-    W.ring[idx].sample = s;
-    g_async_queue_push(W.ready, GINT_TO_POINTER(idx + 1));
+    g_async_queue_push(W.ready, f);
   }
   return NULL;
 }
 
+/* Puts each finished frame on the plane. The frame on screen keeps its
+ * sample (so its buffer stays out of the pool) until the next one has
+ * replaced it; its slot is marked on screen so no alloc can hand it out. */
 static gpointer present_thread(gpointer d) {
-  int shown = -1;
+  frame_item *shown = NULL;
   for (;;) {
-    gpointer p = g_async_queue_timeout_pop(W.ready, 100000);
-    if (W.quit) break;
-    if (!p) continue;
-    int idx = GPOINTER_TO_INT(p) - 1;
-    ring_buf *r = &W.ring[idx];
-    if (r->fence >= 0) { struct pollfd ff = { .fd = r->fence, .events = POLLIN }; poll(&ff, 1, 1000); close(r->fence); r->fence = -1; }
+    frame_item *f = g_async_queue_timeout_pop(W.ready, 100000);
+    if (W.quit) { frame_item_free(f); break; }
+    if (!f) continue;
+    /* Behind (a backlog formed, e.g. while the wall started): go straight to
+     * the newest finished frame. A standing queue is pure latency (each
+     * queued frame delays the picture a refresh against the sound). */
+    frame_item *newer;
+    while ((newer = g_async_queue_try_pop(W.ready)) != NULL) {
+      frame_item_free(f);
+      f = newer;
+      W.skipped++;
+    }
+    if (f->fence >= 0) { struct pollfd ff = { .fd = f->fence, .events = POLLIN }; poll(&ff, 1, 1000); close(f->fence); f->fence = -1; }
+    ring_buf *r = &W.ring[f->idx];
     /* Legacy SetPlane: one commit, returns when the frame is latched. */
     if (drmModeSetPlane(W.fd, W.plane, W.crtc, r->fb, 0, 0, 0, W.w, W.h, 0, 0, (uint32_t)W.w << 16, (uint32_t)W.h << 16)) {
       GST_WARNING("glwall: setplane: %s", g_strerror(errno));
-    } else {
-      W.presented++;
+      frame_item_free(f);
+      continue;
     }
-    if (shown >= 0 && W.ring[shown].sample) { gst_sample_unref(W.ring[shown].sample); W.ring[shown].sample = NULL; }
-    shown = idx;
+    W.presented++;
+    g_mutex_lock(&W.slot_lock);
+    W.onscreen = f->idx;
+    g_cond_broadcast(&W.slot_cond);
+    g_mutex_unlock(&W.slot_lock);
+    frame_item_free(shown); /* the previous frame has left the screen */
+    shown = f;
   }
-  if (shown >= 0 && W.ring[shown].sample) { gst_sample_unref(W.ring[shown].sample); W.ring[shown].sample = NULL; }
+  frame_item_free(shown);
   return NULL;
 }
 
@@ -271,9 +359,11 @@ int glwall_open(int drm_fd, uint32_t crtc_id, uint32_t plane_id, int width, int 
   *err = NULL;
   if (W.open) return 0;
   memset(&W, 0, sizeof W);
-  for (int i = 0; i < RING; i++) W.ring[i].fence = -1;
+  W.onscreen = -1;
   W.fd = drm_fd; W.crtc = crtc_id; W.plane = plane_id; W.w = width; W.h = height; W.hz = refresh_hz > 0 ? refresh_hz : 60;
   g_mutex_init(&W.lock);
+  g_mutex_init(&W.slot_lock);
+  g_cond_init(&W.slot_cond);
   if (ring_create(err)) { ring_destroy(); return -1; }
   gchar *desc = g_strdup_printf(
     "videotestsrc is-live=true pattern=black ! video/x-raw,width=16,height=16,framerate=%d/1 ! glupload ! glcolorconvert ! "
@@ -291,7 +381,7 @@ int glwall_open(int drm_fd, uint32_t crtc_id, uint32_t plane_id, int width, int 
   GstPad *msrc = gst_element_get_static_pad(W.mixer, "src");
   gst_pad_add_probe(msrc, GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM, mixer_allocq, NULL, NULL);
   gst_object_unref(msrc);
-  W.ready = g_async_queue_new();
+  W.ready = g_async_queue_new_full((GDestroyNotify)frame_item_free);
   /* The wall runs on the system clock with a base time every cue can be
    * mapped onto (the pump re-stamps frames from cue to wall base time). */
   GstClock *clk = gst_system_clock_obtain();
@@ -313,7 +403,6 @@ void glwall_close(void) {
   gst_element_set_state(W.wall, GST_STATE_NULL);
   if (W.wall_thread) g_thread_join(W.wall_thread);
   if (W.present_thread) g_thread_join(W.present_thread);
-  for (int i = 0; i < RING; i++) if (W.ring[i].sample) { gst_sample_unref(W.ring[i].sample); W.ring[i].sample = NULL; }
   drmModeSetPlane(W.fd, W.plane, W.crtc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); /* plane off */
   if (W.pool) { gst_buffer_pool_set_active(W.pool, FALSE); gst_object_unref(W.pool); }
   if (W.ctx) gst_object_unref(W.ctx);
@@ -326,7 +415,21 @@ void glwall_close(void) {
 }
 
 void glwall_stats(uint64_t *mixed, uint64_t *presented) { *mixed = W.mixed; *presented = W.presented; }
-void glwall_layer_stats(glwall_layer *l, uint64_t *pulled, uint64_t *pushed) { *pulled = l ? l->pulled : 0; *pushed = l ? l->pushed : 0; }
+void glwall_layer_stats(glwall_layer *l, uint64_t *pulled, uint64_t *pushed, uint64_t *steps) {
+  *pulled = l ? l->pulled : 0; *pushed = l ? l->pushed : 0; *steps = l ? l->steps : 0;
+}
+
+void glwall_pool_stats(glwall_pool_stats_t *st) {
+  memset(st, 0, sizeof *st);
+  st->allocs = W.allocs; st->frees = W.frees; st->exhausted = W.exhausted;
+  st->set_configs = W.set_configs; st->alloc_queries = W.alloc_queries; st->activations = W.activations;
+  g_mutex_lock(&W.slot_lock);
+  for (int i = 0; i < RING; i++) st->allocated += W.slot_alloc[i] ? 1 : 0;
+  st->onscreen = W.onscreen;
+  g_mutex_unlock(&W.slot_lock);
+  st->queued = W.ready ? g_async_queue_length(W.ready) : 0;
+  st->skipped = W.skipped;
+}
 
 /* ---- layers ----------------------------------------------------------------- */
 
@@ -421,7 +524,11 @@ fail:
   return NULL;
 }
 
-void glwall_layer_set_alpha(glwall_layer *l, double a) { if (l && l->mixpad) g_object_set(l->mixpad, "alpha", a, NULL); }
+void glwall_layer_set_alpha(glwall_layer *l, double a) {
+  if (!l || !l->mixpad) return;
+  if (a != l->alpha) { l->alpha = a; l->steps++; }
+  g_object_set(l->mixpad, "alpha", a, NULL);
+}
 void glwall_layer_set_zorder(glwall_layer *l, int z) { if (l && l->mixpad) g_object_set(l->mixpad, "zorder", (guint)z, NULL); }
 void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h, int keep_aspect) {
   if (l && l->mixpad) g_object_set(l->mixpad, "xpos", x, "ypos", y, "width", w, "height", h, "sizing-policy", keep_aspect ? 1 : 0, NULL);
@@ -436,14 +543,21 @@ void glwall_use_system_clock(GstElement *pipeline) {
 void glwall_layer_free(glwall_layer *l) {
   if (!l) return;
   l->quit = 1;
+  /* The pump may be blocked pushing into a full appsrc that nothing drains
+   * any more (the cue is stopping): NULL makes the push return FLUSHING. */
+  if (l->src) gst_element_set_state(l->src, GST_STATE_NULL);
   if (l->pump) g_thread_join(l->pump);
+  /* Detach from the mixer first: releasing the pad deactivates it, which
+   * wakes a push waiting in it, so the queue's task can stop. Stopping the
+   * chain before that waited forever on a frame the mixer still held. */
   if (l->mixpad) {
     GstPad *qsrc = l->queue ? gst_element_get_static_pad(l->queue, "src") : NULL;
     if (qsrc) { gst_pad_unlink(qsrc, l->mixpad); gst_object_unref(qsrc); }
     gst_element_release_request_pad(W.mixer, l->mixpad);
     gst_object_unref(l->mixpad);
+    l->mixpad = NULL;
   }
-  GstElement *els[] = { l->src, l->upload, l->convert, l->caps, l->queue };
+  GstElement *els[] = { l->queue, l->caps, l->convert, l->upload, l->src };
   for (int i = 0; i < 5; i++) if (els[i]) {
     gst_element_set_state(els[i], GST_STATE_NULL);
     if (GST_OBJECT_PARENT(els[i]) == GST_OBJECT(W.wall)) gst_bin_remove(GST_BIN(W.wall), els[i]);

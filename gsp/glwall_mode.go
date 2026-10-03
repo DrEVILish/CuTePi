@@ -68,11 +68,20 @@ func glWall() bool {
 	return glOpen
 }
 
+// GLPoolStats reports the GPU wall's ring pool diagnostics.
+func GLPoolStats() glwall.PoolStats {
+	if !glOpen {
+		return glwall.PoolStats{}
+	}
+	return glwall.Pool()
+}
+
 // GLLayerStats is one cue layer's counters.
 type GLLayerStats struct {
-	Pulled, Pushed uint64
-	Visible        bool
-	Level          float64
+	Pulled, Pushed, Steps uint64
+	Visible, Parked       bool
+	Level                 float64
+	Seq                   uint64 // attach order: newest highest
 }
 
 // GLWallStats reports frames mixed and presented by the GPU wall and the
@@ -87,8 +96,8 @@ func GLWallStats() (mixed, presented uint64, layers []GLLayerStats, on bool) {
 		if l.layer == nil {
 			continue
 		}
-		a, b := l.layer.Stats()
-		layers = append(layers, GLLayerStats{Pulled: a, Pushed: b, Visible: l.visible, Level: l.level})
+		a, b, c := l.layer.Stats()
+		layers = append(layers, GLLayerStats{Pulled: a, Pushed: b, Steps: c, Visible: l.visible, Parked: l.parked, Level: l.level, Seq: l.seq})
 	}
 	glMu.Unlock()
 	return m, p, layers, true

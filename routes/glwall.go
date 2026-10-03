@@ -14,6 +14,6 @@ import (
 func registerGLWallRoutes(rg *gin.RouterGroup) {
 	rg.GET("/debug/glwall", func(c *gin.Context) {
 		mixed, presented, layers, on := gsp.GLWallStats()
-		c.JSON(http.StatusOK, gin.H{"on": on, "mixed": mixed, "presented": presented, "layers": layers})
+		c.JSON(http.StatusOK, gin.H{"on": on, "mixed": mixed, "presented": presented, "layers": layers, "pool": gsp.GLPoolStats()})
 	})
 }

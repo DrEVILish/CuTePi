@@ -732,6 +732,36 @@ Found on the way:
   re-attaches.
 - A still through decodebin3 is pushed repeatedly (30 frames a second of the same picture): harmless, to trim.
 
+**A hang found after the step 2 commit, and fixed (2026-10-03).** Repeated play/stop cycles through the API hung
+the service after a few rounds: `Stop` blocked in `glwall_layer_free`, the mixer's output thread waited forever in
+`gst_buffer_pool_acquire_buffer` with every ring buffer counted out, while the pull and presenter threads were idle and
+held nothing. Cause: the presenter kept each frame's sample in a per-slot field (`ring[idx].sample`); a new mixed frame
+in the same ring slot overwrote it while the old one was still queued, so that reference was never released and the
+buffer never returned to the pool. Each such overwrite lost a slot until none were left. Fix (`gsp/glwall/glwall.c`):
+- frames travel to the presenter as items that own their sample and their fence, so nothing per slot is ever
+  overwritten or closed twice;
+- the ring pool preallocates nothing (min 0, max 8, forced in its own `set_config`), and each slot's state is
+  tracked: wrapped by a live buffer, or on screen; the slot on screen is never handed to the mixer until another frame
+  has replaced it; allocation waits up to 200 ms for a free slot and reports exhaustion instead of failing silently;
+- the layer is detached from the mixer before its chain is stopped;
+- the presenter skips to the newest finished frame when it is behind: a standing queue had formed (6 frames, about
+  100 ms of picture delay against the sound) and never drained;
+- `/api/debug/glwall` now reports the pool: allocations, frees, exhaustions, configs, activations, allocation queries
+  answered, slots allocated, the slot on screen, frames queued and frames skipped.
+
+Soak (service with `CUTEPI_WALL=gl`): 12 rounds, then 10 more after the catch-up change, each round four play/stop
+runs (H.264 twice, HEVC, MPEG-2 via the ISP, one with the API polled every 30 ms) and a crossfade H.264 → HEVC with a
+1 s fade-in. Every run pushed 59–60 frames a second, crossfades 60; no hang; 0 exhaustions; 193 allocation queries
+answered (16 per round: the mixer re-asks on every attach) with the pool configured and activated only once; queue
+depth 0–1 (3 at most). Open: the presenter skips about two mixed frames per cue start (and 67 at the first play after
+the service starts) while the new layer's first frames settle; measure whether a video frame is lost there.
+
+`support.py` on the GL wall (`--section gl`, wall detected from `/api/debug/glwall`) samples the newest visible layer's
+counters instead of tracing planes. Its opacity-step count is not valid yet: it counts calls that set a layer's alpha
+(about 100–120 a second, two writers), not changes the viewer sees, which wrongly marked a PNG Supported in a smoke run.
+It must count, per mixed frame, whether the newest layer's alpha differs from the previous frame's, capped at the frames
+presented. No GL batch has been written to the README.
+
 Not yet on the GL wall: rotation and mirror (`glvideoflip`), crop, the warm preroll (disabled in GL mode: cold builds
 are 1–3 ms + preroll), the audio offset for the wall's latency, alpha detection for sources whose format is unknown at
 pad-added time under decodebin3 (they go through the ISP, which drops alpha; use the import metadata), test

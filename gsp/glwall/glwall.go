@@ -87,13 +87,32 @@ func (l *Layer) Free() {
 	}
 }
 
-// Stats reports frames pulled from the cue and pushed to the mixer.
-func (l *Layer) Stats() (pulled, pushed uint64) {
-	var a, b C.uint64_t
+// Stats reports frames pulled from the cue, pushed to the mixer, and the
+// number of opacity changes applied (each lands on the next output frame).
+func (l *Layer) Stats() (pulled, pushed, steps uint64) {
+	var a, b, c C.uint64_t
 	if l.l != nil {
-		C.glwall_layer_stats(l.l, &a, &b)
+		C.glwall_layer_stats(l.l, &a, &b, &c)
 	}
-	return uint64(a), uint64(b)
+	return uint64(a), uint64(b), uint64(c)
+}
+
+// PoolStats are the ring pool's diagnostics.
+type PoolStats struct {
+	Allocs, Frees, Exhausted, SetConfigs, Activations, AllocQueries, Skipped uint64
+	Allocated, OnScreen, Queued                                              int
+}
+
+// Pool reports the ring pool's diagnostics.
+func Pool() PoolStats {
+	var st C.glwall_pool_stats_t
+	C.glwall_pool_stats(&st)
+	return PoolStats{
+		Allocs: uint64(st.allocs), Frees: uint64(st.frees), Exhausted: uint64(st.exhausted),
+		SetConfigs: uint64(st.set_configs), Activations: uint64(st.activations), AllocQueries: uint64(st.alloc_queries),
+		Skipped:   uint64(st.skipped),
+		Allocated: int(st.allocated), OnScreen: int(st.onscreen), Queued: int(st.queued),
+	}
 }
 
 // Stats reports frames mixed and frames presented since Open.

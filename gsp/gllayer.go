@@ -28,7 +28,10 @@ type glLayer struct {
 	visible bool
 	parked  bool // armed panic image: attached at the top, alpha 0
 	level   float64
+	seq     uint64 // attach order (newest highest)
 }
+
+var glSeq uint64
 
 var (
 	glMu     sync.Mutex
@@ -139,6 +142,13 @@ func glRegister(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts LoadO
 		return
 	}
 	glMu.Lock()
+	if glLayers[p] != nil {
+		// A second video pad for the same cue (decodebin3 can expose one per
+		// stream): the first tail is the layer; this one drains nowhere.
+		logs.Printf(logs.GSPPipeDebug, "gsp: GL wall: second video tail for a cue ignored")
+		glMu.Unlock()
+		return
+	}
 	glLayers[p] = &glLayer{appsink: sink, opts: opts, opacity: opacityOf(opts), level: 1}
 	glMu.Unlock()
 }
@@ -175,6 +185,8 @@ func glAttachLocked(p *gst.Pipeline, l *glLayer) bool {
 		return false
 	}
 	l.layer = layer
+	glSeq++
+	l.seq = glSeq
 	if pad := l.appsink.GetStaticPad("sink"); pad != nil {
 		if c := pad.GetCurrentCaps(); c != nil {
 			logs.Printf(logs.GSPPipeDebug, "gsp: GL wall layer caps %s", c.String())
