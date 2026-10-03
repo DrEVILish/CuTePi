@@ -68,6 +68,7 @@ func main() {
 		log.Fatalf("CuTePi: failed to initialize database: %v", err)
 	}
 	defer ctp.CloseDB()
+	gsp.AlphaLookup = ctp.MediaHasAlpha
 
 	// One-time scan flags media whose source files are missing on disk; cues
 	// and pool tiles then surface a warning (see the Missing flag).

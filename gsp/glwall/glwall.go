@@ -14,6 +14,7 @@ import "C"
 
 import (
 	"errors"
+	"time"
 	"unsafe"
 
 	"github.com/go-gst/go-gst/gst"
@@ -97,10 +98,28 @@ func (l *Layer) Stats() (pulled, pushed, steps uint64) {
 	return uint64(a), uint64(b), uint64(c)
 }
 
+// Shown reports, over output frames actually presented, how many showed a
+// new frame of the cue and how many changed its opacity (fade steps), and
+// how many cue frames arrived too late for their output frame (shown on
+// arrival; the decoder is told to catch up), and how late the last one was.
+func (l *Layer) Shown() (frames, steps, late uint64, lag time.Duration) {
+	var a, b, c C.uint64_t
+	var d C.int64_t
+	if l.l != nil {
+		C.glwall_layer_shown(l.l, &a, &b, &c, &d)
+	}
+	return uint64(a), uint64(b), uint64(c), time.Duration(d)
+}
+
 // PoolStats are the ring pool's diagnostics.
 type PoolStats struct {
 	Allocs, Frees, Exhausted, SetConfigs, Activations, AllocQueries, Skipped uint64
-	Allocated, OnScreen, Queued                                              int
+	// Presenter timing (µs): fence wait and SetPlane commit, totals and
+	// maxima since the last read; commits longer than a refresh.
+	FenceUs, FenceMaxUs, FlipUs, FlipMaxUs, FlipsLong uint64
+	// GPU time when the presenter waited, and lateness of mixed frames (µs).
+	GpuUs, GpuMaxUs, LateUs, LateMaxUs uint64
+	Allocated, OnScreen, Queued        int
 }
 
 // Pool reports the ring pool's diagnostics.
@@ -110,7 +129,10 @@ func Pool() PoolStats {
 	return PoolStats{
 		Allocs: uint64(st.allocs), Frees: uint64(st.frees), Exhausted: uint64(st.exhausted),
 		SetConfigs: uint64(st.set_configs), Activations: uint64(st.activations), AllocQueries: uint64(st.alloc_queries),
-		Skipped:   uint64(st.skipped),
+		Skipped: uint64(st.skipped),
+		FenceUs: uint64(st.fence_us), FenceMaxUs: uint64(st.fence_max_us), FlipUs: uint64(st.flip_us),
+		FlipMaxUs: uint64(st.flip_max_us), FlipsLong: uint64(st.flips_long),
+		GpuUs: uint64(st.gpu_us), GpuMaxUs: uint64(st.gpu_max_us), LateUs: uint64(st.late_us), LateMaxUs: uint64(st.late_max_us),
 		Allocated: int(st.allocated), OnScreen: int(st.onscreen), Queued: int(st.queued),
 	}
 }

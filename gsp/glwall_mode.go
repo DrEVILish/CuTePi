@@ -78,10 +78,15 @@ func GLPoolStats() glwall.PoolStats {
 
 // GLLayerStats is one cue layer's counters.
 type GLLayerStats struct {
-	Pulled, Pushed, Steps uint64
-	Visible, Parked       bool
-	Level                 float64
-	Seq                   uint64 // attach order: newest highest
+	Pulled, Pushed, Steps uint64 // from the cue; Steps: opacity changes requested
+	// On presented output frames: new cue frames shown, opacity changes shown.
+	ShownFrames, ShownSteps uint64
+	Late                    uint64  // cue frames too late for their output frame (shown on arrival)
+	LagMs                   float64 // how late the last cue frame was
+	Visible, Parked         bool
+	Route, Caps             string // the cue's tail ("dmabuf", "alpha", "isp") and the caps it delivers
+	Level                   float64
+	Seq                     uint64 // attach order: newest highest
 }
 
 // GLWallStats reports frames mixed and presented by the GPU wall and the
@@ -97,7 +102,9 @@ func GLWallStats() (mixed, presented uint64, layers []GLLayerStats, on bool) {
 			continue
 		}
 		a, b, c := l.layer.Stats()
-		layers = append(layers, GLLayerStats{Pulled: a, Pushed: b, Steps: c, Visible: l.visible, Parked: l.parked, Level: l.level, Seq: l.seq})
+		sf, ss, late, lag := l.layer.Shown()
+		layers = append(layers, GLLayerStats{Pulled: a, Pushed: b, Steps: c, ShownFrames: sf, ShownSteps: ss, Late: late, LagMs: float64(lag.Microseconds()) / 1000,
+			Visible: l.visible, Parked: l.parked, Level: l.level, Seq: l.seq, Route: l.route, Caps: l.caps})
 	}
 	glMu.Unlock()
 	return m, p, layers, true

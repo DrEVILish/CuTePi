@@ -1352,6 +1352,7 @@ func fadeIn(p *gst.Pipeline, gen uint64) {
 		_, state := p.GetState(gst.StateNull, 0)
 		delta := now.Sub(last)
 		last = now
+		onWall := !glOpen || glOnWall(p)
 		mgr.mu.Lock()
 		if mgr.pipeline != p || mgr.gen != gen || mgr.fadeSerial != serial {
 			mgr.mu.Unlock()
@@ -1359,7 +1360,8 @@ func fadeIn(p *gst.Pipeline, gen uint64) {
 		}
 		// A still ends (and holds, paused) the moment its one frame is
 		// out, so its fade clock cannot wait for PLAYING.
-		if state == gst.StatePlaying || mgr.still {
+		// On the GPU wall the clock also waits for the layer to be shown.
+		if (state == gst.StatePlaying || mgr.still) && onWall {
 			elapsed += delta
 		}
 		mgr.fadeLevel = fadeShape(mgr.fadeCurve, math.Min(1, float64(elapsed)/float64(duration)))
@@ -1933,7 +1935,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", sink}
 		} else if glOpen && !spec.warmSink {
 			// GPU wall: the cue feeds the mixer through an appsink (gllayer.go).
-			elementNames = glVideoTail(!spec.isTest && glDmaBufCapable(srcPad), capsFormat(caps))
+			elementNames = glVideoTail(!spec.isTest && glDmaBufCapable(srcPad), glTailFormat(caps, spec.filename))
 		} else if kmsWall() != nil {
 			// KMS wall: own display plane, hardware scaling/blending.
 			elementNames = kmsVideoTail(!spec.isTest && dmaBufUpstream(srcPad), spec.opts)
@@ -1996,7 +1998,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			}
 		}
 		if isVideo && glOpen && !spec.warmSink {
-			if err := configureGLTail(pipeline, byFactory, elementNames, spec.opts, !spec.isTest && glDmaBufCapable(srcPad), capsFormat(caps)); err != nil {
+			if err := configureGLTail(pipeline, byFactory, elementNames, spec.opts, !spec.isTest && glDmaBufCapable(srcPad), glTailFormat(caps, spec.filename)); err != nil {
 				msg := gst.NewErrorMessage(self, gst.NewGError(3, err), "no wall layer", nil)
 				pipeline.GetPipelineBus().Post(msg)
 				return
@@ -2089,7 +2091,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		sinkPad := queue.GetStaticPad("sink")
 		srcPad.Link(sinkPad)
 		if isVideo && glOpen && !spec.warmSink {
-			glRegister(pipeline, byFactory, spec.opts)
+			glRegister(pipeline, byFactory, elementNames, spec.opts)
 		}
 	})
 

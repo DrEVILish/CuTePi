@@ -29,6 +29,19 @@ type glLayer struct {
 	parked  bool // armed panic image: attached at the top, alpha 0
 	level   float64
 	seq     uint64 // attach order (newest highest)
+	route   string // "dmabuf" (hardware), "alpha" (RGBA upload) or "isp"
+	caps    string // the frames' caps at the bridge, once attached
+}
+
+// glRoute names a GL tail by its elements (glVideoTail).
+func glRoute(names []string) string {
+	switch {
+	case indexOfName(names, "v4l2convert") >= 0:
+		return "isp"
+	case indexOfName(names, "videoconvert") >= 0:
+		return "alpha"
+	}
+	return "dmabuf"
 }
 
 var glSeq uint64
@@ -95,6 +108,29 @@ func glVideoTail(dmabuf bool, format string) []string {
 	}
 }
 
+// AlphaLookup reports whether a media file's video carries an alpha channel,
+// from its import metadata (set by main once the database is open). The GL
+// tail needs it when the decoder's pad appears before its format is fixed
+// (decodebin3 exposes software decoders' pads that way): without it an alpha
+// video would take the ISP route, which has no alpha.
+var AlphaLookup func(filename string) bool
+
+// glTailFormat is the format the GL tail is chosen by: the pad's own when
+// fixed, else "RGBA" for a file recorded as having alpha. Unfixed caps (a
+// caps query's answer) list what the decoder could produce, not what it
+// will: gdkpixbufdec offers RGB first and delivers RGBA for a TIFF with alpha.
+func glTailFormat(caps *gst.Caps, filename string) string {
+	if caps != nil && caps.IsFixed() {
+		if f := capsFormat(caps); f != "" {
+			return f
+		}
+	}
+	if AlphaLookup != nil && filename != "" && AlphaLookup(filename) {
+		return "RGBA"
+	}
+	return ""
+}
+
 // ispInputCaps are the formats the ISP accepts; videoconvert passes a
 // matching source through untouched and repacks 10-bit or planar 4:2:2.
 const ispInputCaps = "video/x-raw,format={I420,YV12,NV12,NV21,YUY2,UYVY,BGRx,RGB,BGR}"
@@ -136,7 +172,7 @@ func configureGLTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, names
 // glRegister records the cue's layer once its tail is in the pipeline and
 // synced to its state (showLayer may be waiting for it; an appsink still in
 // NULL would answer the preroll pull with nothing).
-func glRegister(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts LoadOpts) {
+func glRegister(p *gst.Pipeline, byFactory map[string][]*gst.Element, names []string, opts LoadOpts) {
 	sink := firstByFactory(byFactory, "appsink")
 	if sink == nil {
 		return
@@ -149,7 +185,7 @@ func glRegister(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts LoadO
 		glMu.Unlock()
 		return
 	}
-	glLayers[p] = &glLayer{appsink: sink, opts: opts, opacity: opacityOf(opts), level: 1}
+	glLayers[p] = &glLayer{appsink: sink, opts: opts, opacity: opacityOf(opts), level: 1, route: glRoute(names)}
 	glMu.Unlock()
 }
 
@@ -189,7 +225,8 @@ func glAttachLocked(p *gst.Pipeline, l *glLayer) bool {
 	l.seq = glSeq
 	if pad := l.appsink.GetStaticPad("sink"); pad != nil {
 		if c := pad.GetCurrentCaps(); c != nil {
-			logs.Printf(logs.GSPPipeDebug, "gsp: GL wall layer caps %s", c.String())
+			l.caps = c.String()
+			logs.Printf(logs.GSPPipeDebug, "gsp: GL wall layer caps %s", l.caps)
 		}
 	}
 	if w := kmsWall(); w != nil {
@@ -223,6 +260,17 @@ func glShow(p *gst.Pipeline, level float64) {
 	glRestackLocked()
 	l.level = level
 	l.layer.SetAlpha(l.opacity * level)
+}
+
+// glOnWall reports whether p's layer is attached and shown: a fade-in's
+// clock waits for it (a cue's first frame can reach the wall well after
+// Play, e.g. a still through decodebin3, and a fade that ran before then
+// would show the picture at full level at once).
+func glOnWall(p *gst.Pipeline) bool {
+	glMu.Lock()
+	defer glMu.Unlock()
+	l := glLayers[p]
+	return l != nil && l.layer != nil && l.visible
 }
 
 func glSetLevel(p *gst.Pipeline, level float64) {
@@ -291,11 +339,30 @@ func glHide(p *gst.Pipeline) {
 			glRestackLocked()
 		}
 	}
+	layer := glTakeLayerLocked(l)
 	glMu.Unlock()
-	if l != nil && l.layer != nil {
-		l.layer.SetAlpha(0)
-		l.layer.Free()
-		l.layer = nil
+	glFreeLayer(layer)
+}
+
+// glTakeLayerLocked detaches the wall layer from its record, so exactly one
+// caller frees it: Stop (glHide) and the cue's teardown (glDrop) can run at
+// once, and both freeing the same layer released its mixer pad twice and
+// crashed the service. Caller holds glMu.
+func glTakeLayerLocked(l *glLayer) *glwall.Layer {
+	if l == nil {
+		return nil
+	}
+	layer := l.layer
+	l.layer = nil
+	return layer
+}
+
+// glFreeLayer takes a detached layer off the wall (outside glMu: it waits for
+// the layer's pump thread).
+func glFreeLayer(layer *glwall.Layer) {
+	if layer != nil {
+		layer.SetAlpha(0)
+		layer.Free()
 	}
 }
 
@@ -313,9 +380,7 @@ func glDrop(p *gst.Pipeline) {
 		}
 		glRestackLocked()
 	}
+	layer := glTakeLayerLocked(l)
 	glMu.Unlock()
-	if l != nil && l.layer != nil {
-		l.layer.SetAlpha(0)
-		l.layer.Free()
-	}
+	glFreeLayer(layer)
 }

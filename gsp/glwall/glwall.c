@@ -63,9 +63,27 @@ typedef struct {
 
 /* A finished frame on its way to the screen: it owns its sample (and so its
  * ring buffer) and its fence; nothing per slot is ever overwritten. */
+/* What one output frame showed of each layer, snapshotted as the mixer
+ * selects its inputs: the opacity it is about to blend with and which cue
+ * frame (by PTS). Counted only once that output frame is on screen. */
+typedef struct {
+  guint64 layer_id;
+  double alpha;
+  GstClockTime frame_pts;
+  int has_frame;
+} layer_snap;
+
+typedef struct {
+  GstClockTime pts; /* output frame */
+  int n;
+  layer_snap layers[];
+} frame_snap;
+
 typedef struct {
   int idx, fence;
   GstSample *sample;
+  frame_snap *snap;
+  gint64 fenced; /* monotonic µs when the fence was taken */
 } frame_item;
 
 static struct {
@@ -91,7 +109,17 @@ static struct {
   guint64 mixed, presented;
   /* pool diagnostics (/api/debug/glwall) */
   guint64 allocs, frees, exhausted, set_configs, alloc_queries, activations, skipped;
-  GMutex lock; /* layers list, zorder */
+  /* presenter timing, microseconds: waiting for the GPU's fence, and the
+   * SetPlane commit (returns once the frame is latched at a vblank) */
+  guint64 fence_us, fence_max_us, flip_us, flip_max_us, flips_long;
+  /* GPU time (fence taken -> signalled, µs) and how late each mixed frame
+   * was handed out by the wall's sink against its due time (µs) */
+  guint64 gpu_us, gpu_max_us, late_us, late_max_us;
+  GMutex lock;     /* layers, layer_ids */
+  GList *layers;   /* glwall_layer*, attached */
+  guint64 layer_ids;
+  GMutex snap_lock;
+  GQueue snaps;    /* frame_snap*, mixed but not yet pulled */
 } W;
 
 struct glwall_layer {
@@ -100,8 +128,24 @@ struct glwall_layer {
   GstPad *mixpad;
   GThread *pump;
   volatile int quit;
-  guint64 pulled, pushed, steps; /* steps: opacity changes applied */
+  guint64 pulled, pushed, steps; /* steps: opacity changes requested */
   double alpha;
+  guint64 id;
+  /* On screen (written by the presenter): output frames that showed a new
+   * cue frame, and output frames whose opacity differed from the previous
+   * one shown. These are what a viewer sees, unlike pushed and steps. */
+  guint64 shown_frames, shown_steps;
+  double shown_alpha;
+  GstClockTime shown_pts;
+  int shown_any;
+  /* Frames that reached the pump too late for their output frame: shown on
+   * arrival instead (the mixer would drop them and freeze the picture), and
+   * the decoder told through QoS so it skips ahead to catch up. */
+  guint64 late;
+  gint64 lag_ns; /* how late the last frame reached the pump (0: on time) */
+  GstClockTime qos_at; /* wall clock time of the last QoS event sent */
+  int still;           /* caps say framerate 0/1: one frame, held */
+  GstClockTime last_pts; /* last PTS pushed (wall running time) */
 };
 
 static PFNEGLCREATESYNCKHRPROC p_mksync;
@@ -169,6 +213,7 @@ static void gl_fence(GstGLContext *ctx, gpointer d) {
     glFlush();
     f->fence = p_dupfence(W.dpy, sy);
     p_rmsync(W.dpy, sy);
+    f->fenced = g_get_monotonic_time();
   } else {
     glFinish();
   }
@@ -176,6 +221,7 @@ static void gl_fence(GstGLContext *ctx, gpointer d) {
 
 static void frame_item_free(frame_item *f) {
   if (!f) return;
+  g_free(f->snap);
   if (f->fence >= 0) close(f->fence);
   if (f->sample) gst_sample_unref(f->sample);
   g_free(f);
@@ -294,6 +340,70 @@ static GstPadProbeReturn mixer_allocq(GstPad *pad, GstPadProbeInfo *info, gpoint
   return GST_PAD_PROBE_HANDLED;
 }
 
+/* ---- what each output frame shows ----------------------------------------- */
+
+/* On the mixer's thread, just before it renders an output frame: snapshot
+ * each layer's opacity and current cue frame (the values this render uses). */
+static void mixer_selected(GstElement *agg, GstSegment *seg, guint64 pts, guint64 dts, guint64 dur, GstStructure *info, gpointer d) {
+  g_mutex_lock(&W.lock);
+  int n = g_list_length(W.layers);
+  frame_snap *fs = g_malloc0(sizeof *fs + n * sizeof(layer_snap));
+  fs->pts = pts;
+  for (GList *it = W.layers; it; it = it->next) {
+    glwall_layer *l = it->data;
+    layer_snap *ls = &fs->layers[fs->n++];
+    ls->layer_id = l->id;
+    g_object_get(l->mixpad, "alpha", &ls->alpha, NULL);
+    ls->frame_pts = GST_CLOCK_TIME_NONE;
+    GstSample *s = gst_aggregator_peek_next_sample(GST_AGGREGATOR(agg), GST_AGGREGATOR_PAD(l->mixpad));
+    if (s) {
+      GstBuffer *b = gst_sample_get_buffer(s);
+      if (b) { ls->frame_pts = GST_BUFFER_PTS(b); ls->has_frame = 1; }
+      gst_sample_unref(s);
+    }
+  }
+  g_mutex_unlock(&W.lock);
+  g_mutex_lock(&W.snap_lock);
+  g_queue_push_tail(&W.snaps, fs);
+  while (g_queue_get_length(&W.snaps) > 2 * RING) g_free(g_queue_pop_head(&W.snaps));
+  g_mutex_unlock(&W.snap_lock);
+}
+
+/* The snapshot for the output frame with this PTS (older ones are dropped:
+ * their frames never reached the wall's sink). */
+static frame_snap *snap_take(GstClockTime pts) {
+  frame_snap *found = NULL;
+  g_mutex_lock(&W.snap_lock);
+  frame_snap *fs;
+  while ((fs = g_queue_peek_head(&W.snaps)) != NULL && (!GST_CLOCK_TIME_IS_VALID(pts) || fs->pts <= pts)) {
+    g_queue_pop_head(&W.snaps);
+    if (fs->pts == pts) { found = fs; break; }
+    g_free(fs);
+  }
+  g_mutex_unlock(&W.snap_lock);
+  return found;
+}
+
+/* The presenter, once a frame is on screen: credit each layer still attached. */
+static void snap_count(frame_snap *fs) {
+  if (!fs) return;
+  g_mutex_lock(&W.lock);
+  for (int i = 0; i < fs->n; i++) {
+    layer_snap *ls = &fs->layers[i];
+    for (GList *it = W.layers; it; it = it->next) {
+      glwall_layer *l = it->data;
+      if (l->id != ls->layer_id) continue;
+      if (ls->alpha != l->shown_alpha) { if (l->shown_alpha >= 0) l->shown_steps++; l->shown_alpha = ls->alpha; }
+      /* A still can arrive without a timestamp: its first frame counts. */
+      if (ls->has_frame && (!l->shown_any || (GST_CLOCK_TIME_IS_VALID(ls->frame_pts) && ls->frame_pts != l->shown_pts))) {
+        l->shown_frames++; l->shown_pts = ls->frame_pts; l->shown_any = 1;
+      }
+      break;
+    }
+  }
+  g_mutex_unlock(&W.lock);
+}
+
 /* ---- wall and presenter threads -------------------------------------------- */
 
 /* Pulls each mixed frame (in a ring buffer) as it falls due, fences it and
@@ -306,6 +416,16 @@ static gpointer wall_thread(gpointer d) {
     if (idx < 0) { GST_WARNING("glwall: mixed frame not in the ring"); gst_sample_unref(s); continue; }
     frame_item *f = g_new0(frame_item, 1);
     f->idx = idx; f->sample = s; f->fence = -1;
+    f->snap = snap_take(GST_BUFFER_PTS(gst_sample_get_buffer(s)));
+    {
+      GstClock *clk = gst_element_get_clock(W.wall);
+      GstClockTime pts = GST_BUFFER_PTS(gst_sample_get_buffer(s)), base = gst_element_get_base_time(W.wall);
+      if (clk && GST_CLOCK_TIME_IS_VALID(pts)) {
+        gint64 late = ((gint64)gst_clock_get_time(clk) - (gint64)(base + pts)) / 1000;
+        if (late > 0) { W.late_us += late; if ((guint64)late > W.late_max_us) W.late_max_us = late; }
+      }
+      if (clk) gst_object_unref(clk);
+    }
     gst_gl_context_thread_add(W.ctx, gl_fence, f);
     W.mixed++;
     g_async_queue_push(W.ready, f);
@@ -331,7 +451,10 @@ static gpointer present_thread(gpointer d) {
       f = newer;
       W.skipped++;
     }
+    gint64 t0 = g_get_monotonic_time();
     if (f->fence >= 0) { struct pollfd ff = { .fd = f->fence, .events = POLLIN }; poll(&ff, 1, 1000); close(f->fence); f->fence = -1; }
+    gint64 t1 = g_get_monotonic_time();
+    if (f->fenced) { gint64 g = t1 - f->fenced; if (t1 - t0 > 50) { W.gpu_us += g; if ((guint64)g > W.gpu_max_us) W.gpu_max_us = g; } }
     ring_buf *r = &W.ring[f->idx];
     /* Legacy SetPlane: one commit, returns when the frame is latched. */
     if (drmModeSetPlane(W.fd, W.plane, W.crtc, r->fb, 0, 0, 0, W.w, W.h, 0, 0, (uint32_t)W.w << 16, (uint32_t)W.h << 16)) {
@@ -339,7 +462,12 @@ static gpointer present_thread(gpointer d) {
       frame_item_free(f);
       continue;
     }
+    gint64 t2 = g_get_monotonic_time();
+    W.fence_us += t1 - t0; if ((guint64)(t1 - t0) > W.fence_max_us) W.fence_max_us = t1 - t0;
+    W.flip_us += t2 - t1; if ((guint64)(t2 - t1) > W.flip_max_us) W.flip_max_us = t2 - t1;
+    if (t2 - t1 > 1000000 / W.hz + 2000) W.flips_long++;
     W.presented++;
+    snap_count(f->snap);
     g_mutex_lock(&W.slot_lock);
     W.onscreen = f->idx;
     g_cond_broadcast(&W.slot_cond);
@@ -362,6 +490,8 @@ int glwall_open(int drm_fd, uint32_t crtc_id, uint32_t plane_id, int width, int 
   W.onscreen = -1;
   W.fd = drm_fd; W.crtc = crtc_id; W.plane = plane_id; W.w = width; W.h = height; W.hz = refresh_hz > 0 ? refresh_hz : 60;
   g_mutex_init(&W.lock);
+  g_mutex_init(&W.snap_lock);
+  g_queue_init(&W.snaps);
   g_mutex_init(&W.slot_lock);
   g_cond_init(&W.slot_cond);
   if (ring_create(err)) { ring_destroy(); return -1; }
@@ -381,6 +511,8 @@ int glwall_open(int drm_fd, uint32_t crtc_id, uint32_t plane_id, int width, int 
   GstPad *msrc = gst_element_get_static_pad(W.mixer, "src");
   gst_pad_add_probe(msrc, GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM, mixer_allocq, NULL, NULL);
   gst_object_unref(msrc);
+  g_object_set(W.mixer, "emit-signals", TRUE, NULL);
+  g_signal_connect(W.mixer, "samples-selected", G_CALLBACK(mixer_selected), NULL);
   W.ready = g_async_queue_new_full((GDestroyNotify)frame_item_free);
   /* The wall runs on the system clock with a base time every cue can be
    * mapped onto (the pump re-stamps frames from cue to wall base time). */
@@ -410,6 +542,7 @@ void glwall_close(void) {
   if (W.wout) gst_object_unref(W.wout);
   gst_object_unref(W.wall);
   g_async_queue_unref(W.ready);
+  g_queue_clear_full(&W.snaps, g_free);
   ring_destroy();
   W.open = 0;
 }
@@ -417,6 +550,9 @@ void glwall_close(void) {
 void glwall_stats(uint64_t *mixed, uint64_t *presented) { *mixed = W.mixed; *presented = W.presented; }
 void glwall_layer_stats(glwall_layer *l, uint64_t *pulled, uint64_t *pushed, uint64_t *steps) {
   *pulled = l ? l->pulled : 0; *pushed = l ? l->pushed : 0; *steps = l ? l->steps : 0;
+}
+void glwall_layer_shown(glwall_layer *l, uint64_t *frames, uint64_t *steps, uint64_t *late, int64_t *lag_ns) {
+  *frames = l ? l->shown_frames : 0; *steps = l ? l->shown_steps : 0; *late = l ? l->late : 0; *lag_ns = l ? l->lag_ns : 0;
 }
 
 void glwall_pool_stats(glwall_pool_stats_t *st) {
@@ -429,6 +565,10 @@ void glwall_pool_stats(glwall_pool_stats_t *st) {
   g_mutex_unlock(&W.slot_lock);
   st->queued = W.ready ? g_async_queue_length(W.ready) : 0;
   st->skipped = W.skipped;
+  st->fence_us = W.fence_us; st->fence_max_us = W.fence_max_us; st->flip_us = W.flip_us;
+  st->flip_max_us = W.flip_max_us; st->flips_long = W.flips_long;
+  st->gpu_us = W.gpu_us; st->gpu_max_us = W.gpu_max_us; st->late_us = W.late_us; st->late_max_us = W.late_max_us;
+  W.fence_max_us = W.flip_max_us = W.gpu_max_us = W.late_max_us = 0; /* maxima since the last read */
 }
 
 /* ---- layers ----------------------------------------------------------------- */
@@ -453,6 +593,67 @@ void glwall_prepare_sink(GstElement *appsink, int pool_buffers) {
   gst_object_unref(p);
 }
 
+/* A frame later than the mixer will wait for (its latency, less the time to
+ * upload it) would be dropped by the mixer, freezing the layer on its last
+ * frame for as long as the decoder stays behind. It is stamped to show on
+ * the next output frame instead, and the decoder is sent the QoS event a
+ * display sink would send, so it drops frames until it has caught up with
+ * the clock (and the sound) again. */
+#define LATE_NS (MIXER_LATENCY_NS - 8 * GST_MSECOND)
+#define QOS_EVERY (250 * GST_MSECOND)
+
+static void pump_lateness(glwall_layer *l, GstBuffer *b, const GstSegment *seg, GstClockTime cue_pts) {
+  GstClockTime pts = GST_BUFFER_PTS(b), wall_base = gst_element_get_base_time(W.wall);
+  if (!GST_CLOCK_TIME_IS_VALID(pts) || !GST_CLOCK_TIME_IS_VALID(wall_base)) return;
+  GstClock *clk = gst_element_get_clock(W.wall);
+  if (!clk) return;
+  GstClockTime now = gst_clock_get_time(clk);
+  gst_object_unref(clk);
+  if (now <= wall_base) return;
+  GstClockTime now_rt = now - wall_base;
+  l->lag_ns = now_rt > pts ? (gint64)(now_rt - pts) : 0;
+  if (pts + LATE_NS < now_rt) {
+    GstClockTimeDiff diff = (GstClockTimeDiff)(now_rt - pts);
+    GST_BUFFER_PTS(b) = now_rt;
+    l->late++;
+    GstClockTime rt = seg ? gst_segment_to_running_time(seg, GST_FORMAT_TIME, cue_pts) : GST_CLOCK_TIME_NONE;
+    /* GstVideoDecoder skips up to twice the reported lateness ahead, and
+     * the converters behind it drop on the same event: report half, at most
+     * every QOS_EVERY, so the decoder aims at the clock instead of past it
+     * (a full report every frame made it drop nearly everything). */
+    if (GST_CLOCK_TIME_IS_VALID(rt) && (!GST_CLOCK_TIME_IS_VALID(l->qos_at) || now - l->qos_at >= QOS_EVERY)) {
+      gst_element_send_event(l->appsink, gst_event_new_qos(GST_QOS_TYPE_UNDERFLOW, 1.0, diff / 2, rt));
+      l->qos_at = now;
+    }
+  }
+  /* Never step back: a late frame stamped "now" may be followed by one
+   * whose own time is earlier still. */
+  if (GST_CLOCK_TIME_IS_VALID(l->last_pts) && GST_BUFFER_PTS(b) <= l->last_pts) GST_BUFFER_PTS(b) = l->last_pts + 1;
+  l->last_pts = GST_BUFFER_PTS(b);
+}
+
+/* The mixer needs each frame's start and end: a frame without a duration
+ * makes it wait for the next frame to learn where this one ends, and a
+ * still never sends one, so the whole wall stopped (a BMP or GIF still, one
+ * buffer with no duration at framerate 0/1). A frame without a timestamp is
+ * due now; a still lasts until it is replaced; any other frame without a
+ * duration lasts one refresh (the mixer repeats it if nothing follows). */
+#define STILL_NS (24 * 3600 * GST_SECOND)
+
+static void pump_timing(glwall_layer *l, GstBuffer *b) {
+  if (!GST_CLOCK_TIME_IS_VALID(GST_BUFFER_PTS(b))) {
+    GstClock *clk = gst_element_get_clock(W.wall);
+    GstClockTime wall_base = gst_element_get_base_time(W.wall);
+    if (clk) {
+      GstClockTime now = gst_clock_get_time(clk);
+      if (GST_CLOCK_TIME_IS_VALID(wall_base) && now > wall_base) GST_BUFFER_PTS(b) = now - wall_base;
+      gst_object_unref(clk);
+    }
+  }
+  if (!GST_CLOCK_TIME_IS_VALID(GST_BUFFER_DURATION(b)))
+    GST_BUFFER_DURATION(b) = l->still ? STILL_NS : GST_SECOND / W.hz;
+}
+
 /* Per layer: pull, re-stamp onto the wall clock, push. The shallow
  * make-writable keeps the decoder's memory (one ref), so nothing is copied. */
 static gpointer pump(gpointer data) {
@@ -473,6 +674,8 @@ static gpointer pump(gpointer data) {
         GST_BUFFER_PTS(b) = rt + cue_base - wall_base;
     }
     GST_BUFFER_DTS(b) = GST_CLOCK_TIME_NONE;
+    pump_timing(l, b);
+    pump_lateness(l, b, seg, pts);
     if (gst_app_src_push_buffer(GST_APP_SRC(l->src), b) != GST_FLOW_OK) break;
     l->pushed++;
   }
@@ -489,6 +692,11 @@ glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, 
   if (colorimetry && *colorimetry && !gst_structure_has_field(gst_caps_get_structure(lc, 0), "colorimetry"))
     gst_caps_set_simple(lc, "colorimetry", G_TYPE_STRING, colorimetry, NULL);
   glwall_layer *l = g_new0(glwall_layer, 1);
+  {
+    gint fn = 0, fd = 1;
+    GstStructure *st = gst_caps_get_structure(lc, 0);
+    l->still = gst_structure_get_fraction(st, "framerate", &fn, &fd) && fn == 0;
+  }
   l->appsink = gst_object_ref(appsink);
   l->cue = GST_ELEMENT(gst_element_get_parent(appsink)); /* ref'd; released in free */
   l->src = gst_element_factory_make("appsrc", NULL);
@@ -516,6 +724,11 @@ glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, 
   gst_element_sync_state_with_parent(l->upload);
   gst_element_sync_state_with_parent(l->src);
   gst_caps_unref(lc);
+  l->shown_alpha = -1; l->shown_pts = GST_CLOCK_TIME_NONE; l->last_pts = GST_CLOCK_TIME_NONE; l->qos_at = GST_CLOCK_TIME_NONE;
+  g_mutex_lock(&W.lock);
+  l->id = ++W.layer_ids;
+  W.layers = g_list_append(W.layers, l);
+  g_mutex_unlock(&W.lock);
   l->pump = g_thread_new("glwall-pump", pump, l);
   return l;
 fail:
@@ -542,6 +755,10 @@ void glwall_use_system_clock(GstElement *pipeline) {
 
 void glwall_layer_free(glwall_layer *l) {
   if (!l) return;
+  /* Off the list first: the mixer's snapshot reads the pad under W.lock. */
+  g_mutex_lock(&W.lock);
+  W.layers = g_list_remove(W.layers, l);
+  g_mutex_unlock(&W.lock);
   l->quit = 1;
   /* The pump may be blocked pushing into a full appsrc that nothing drains
    * any more (the cue is stopping): NULL makes the push return FLUSHING. */

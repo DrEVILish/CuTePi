@@ -33,6 +33,17 @@ atomic state and its blend mode through libdrm (opened only then, after the
 service is master); that read takes the modeset locks, so it is made at the
 end of steady play and the steady window stops just before it.
 
+On the GPU compositor wall (the service runs with CUTEPI_WALL=gl, detected
+from GET /api/debug/glwall), the plane is committed every refresh whatever is
+shown, so the kernel trace cannot tell the cue's frames apart. The wall's
+presenter counts instead, per cue layer and only for output frames actually
+put on the plane: frames that showed a new frame of the cue, and frames whose
+opacity for the cue differed from the previous one shown (both snapshotted as
+the mixer selects its inputs). They are polled every 30 ms and counted per
+presented frame in the same response, scaled by the presented rate over the
+whole run, so the polling jitter cancels out. Alpha on the GPU wall is not
+measured: the mixer always blends straight alpha.
+
 Per file: upload, add a cue, set its fade in to 1 s, set the ESC fade to 1 s
 (restored afterwards), play the cue, after 4 s trigger the fade out
 (POST /api/fadeOut), then stop and delete the cue and the media. With
@@ -356,7 +367,13 @@ def gl_wall():
 
 
 def gl_sample():
-    """(time, pushed, steps) of the busiest attached layer, or None."""
+    """(time, shown_frames, shown_steps, presented) of the cue under test, or None.
+
+    shown_frames: output frames on screen that showed a new frame of the cue;
+    shown_steps: output frames on screen whose opacity for the cue differed
+    from the previous one shown. Both are counted by the wall's presenter
+    after the frame is on the plane, so a frame the mixer dropped or the
+    presenter skipped is not credited (DESIGN 6.1.1)."""
     st_, body = call("GET", "/api/debug/glwall")
     if st_ != 200:
         return None
@@ -367,11 +384,28 @@ def gl_sample():
     if not cand:
         return None
     l = max(cand, key=lambda x: x.get("Seq", 0))
-    return (time.monotonic(), l["Pushed"], l["Steps"])
+    return (time.monotonic(), l["ShownFrames"], l["ShownSteps"], d.get("presented", 0), l.get("Route", ""), l.get("Caps", ""))
+
+
+def gl_per_refresh(samples, lo, hi, idx, hz):
+    """Counter idx per presented output frame over [lo, hi), scaled to hz.
+
+    Counted against the wall's own presented-frame counter, read in the same
+    response, so the HTTP polling jitter (a 30 ms sample interval is +-1.5 %
+    of a 1 s window) cancels out. hz is the presented rate over the whole
+    run (a long window, so precise); a presenter missing refreshes shows
+    there."""
+    inside = [smp for smp in samples if lo <= smp[0] < hi]
+    if len(inside) < 2:
+        return None
+    a, b = inside[0], inside[-1]
+    if b[3] <= a[3]:
+        return None
+    return (b[idx] - a[idx]) / (b[3] - a[3]) * hz
 
 
 def gl_rate(samples, lo, hi, idx):
-    """Counter idx (1 pushed, 2 steps) per second over [lo, hi), from the samples nearest the bounds."""
+    """Counter idx (1 frames shown, 2 steps shown, 3 presented) per second over [lo, hi), from the samples nearest the bounds."""
     inside = [smp for smp in samples if lo <= smp[0] < hi]
     if len(inside) < 2:
         return None
@@ -443,10 +477,8 @@ def run(path, mdl):
         if GL:
             # GPU wall: the plane is committed every refresh whatever is
             # shown, so the cue's own frames and opacity changes are read
-            # from the wall's layer counters (/api/debug/glwall), sampled
-            # every 50 ms. A pushed frame is composited on the output frame
-            # it is due for; an opacity change lands on the next output
-            # frame, so both count per refresh.
+            # from the wall's per-layer counters of presented output frames
+            # (/api/debug/glwall), sampled every 30 ms.
             t_play = time.monotonic()
             call("POST", "/api/cue/%d/play" % pos)
             samples = []
@@ -466,16 +498,19 @@ def run(path, mdl):
                 raise RuntimeError("no wall layer appeared")
             t_first = next((smp[0] for smp in samples if smp[1] >= 1), samples[0][0])
             res["first_frame_ms"] = round((t_first - t_play) * 1000)
-            win = {"fade_in": (t_first, t_first + FADE_S), "steady": (t_first + FADE_S + 0.3, t_fo - 0.1),
+            # The fade in starts with the first frame shown; both fade windows
+            # leave 50 ms at each end, so no frame before or after a fade is
+            # counted as a missing step.
+            win = {"fade_in": (t_first + 0.05, t_first + FADE_S - 0.05), "steady": (t_first + FADE_S + 0.3, t_fo - 0.1),
                    "fade_out": (t_fo + 0.05, t_fo + FADE_S - 0.05)}
+            hz = gl_rate(samples, t_first, samples[-1][0] + 0.001, 3)
+            res["refresh_hz"] = round(hz, 2) if hz is not None else None
             for w, (lo, hi) in win.items():
-                fps = gl_rate(samples, lo, hi, 1)
+                fps = gl_per_refresh(samples, lo, hi, 1, hz or 0)
                 res[w + "_fps"] = round(fps, 1) if fps is not None else None
                 if w != "steady":
-                    st = gl_rate(samples, lo, hi, 2)
+                    st = gl_per_refresh(samples, lo, hi, 2, hz or 0)
                     res[w + "_steps"] = round(st, 1) if st is not None else None
-            if animated or kind != "image":
-                pass
             plane = None
         else:
             trace_start()
@@ -524,10 +559,16 @@ def run(path, mdl):
             res["need_fps"] = round(need, 1)
             ok = smooth and all((res[w + "_fps"] or 0) >= need for w in win)
         if is_alpha and GL:
-            # The mixer blends every layer with straight alpha over the
-            # layers beneath; the frame's format is whatever the GPU imports.
-            res["plane_format"], res["blend_mode"] = "GL layer", "straight"
-            res["alpha_ok"] = True
+            # The mixer blends every layer with straight alpha over the layers
+            # beneath, so what decides is whether the cue's frames keep their
+            # alpha on the way: only the RGBA upload route does (the ISP and
+            # the hardware decoders' formats carry none).
+            route = samples[-1][4] if samples else ""
+            m = re.search(r"format=\(string\)(\w+)", samples[-1][5] if samples else "")
+            res["plane_format"] = "GL layer, %s route%s" % (route or "?", ", " + m.group(1) if m else "")
+            res["blend_mode"] = "straight"
+            res["alpha_ok"] = route == "alpha"
+            ok = ok and res["alpha_ok"]
         elif is_alpha:
             fourcc = formats.get(plane, "?") if plane is not None else "not a plane"
             blend = blends.get(plane, "?") if plane is not None else "-"

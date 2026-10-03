@@ -779,13 +779,96 @@ late).
 counters instead of tracing planes. Its opacity-step count is not valid yet: it counts calls that set a layer's alpha
 (about 100–120 a second, two writers), not changes the viewer sees, which wrongly marked a PNG Supported in a smoke run.
 It must count, per mixed frame, whether the newest layer's alpha differs from the previous frame's, capped at the frames
-presented. No GL batch has been written to the README.
+presented. No GL batch has been written to the README. (Done since: see "GPU wall: measured as the viewer sees it".)
 
 Not yet on the GL wall: rotation and mirror (`glvideoflip`), crop, the warm preroll (disabled in GL mode: cold builds
 are 1–3 ms + preroll), the audio offset for the wall's latency, alpha detection for sources whose format is unknown at
 pad-added time under decodebin3 (they go through the ISP, which drops alpha; use the import metadata), test
 patterns (they take the ISP route and should work; not measured), and `support.py` measuring on the GL wall (count a
 layer's frames per window from `/api/debug/glwall` instead of plane commits).
+
+## GPU wall: measured as the viewer sees it, and what that found (2026-10-03)
+
+**The metric.** The wall now counts, per cue layer, only output frames that reached the plane: as the mixer selects
+its inputs (`samples-selected`) it snapshots each layer's pad opacity and the PTS of the cue frame it is about to
+draw; the presenter, after its `SetPlane` returns, credits each layer still attached with a shown frame (PTS changed,
+or the first frame of a still) and a fade step (opacity changed). `/api/debug/glwall` serves `ShownFrames`,
+`ShownSteps`, `Late`, `LagMs`, `Route` and `Caps` per layer, and presenter timing in `pool` (fence wait, `SetPlane`
+time, GPU time when the presenter waited, how late mixed frames left the wall's sink). `support.py` reads the counters
+every 30 ms and divides by the frames presented **in the same response**: dividing by wall time instead gave 55.9–58.4
+for clips that were at 60, the HTTP polling jitter (±1.5 % of a 1 s window); per presented frame they read 60.0. The
+presented rate itself is taken over the whole run. On the GL wall an alpha file passes only if its layer took the RGBA
+route (`Route == "alpha"`); before, the test assumed it.
+
+**First batch with the metric** (all 95 files): 29 Supported, but it exposed four faults, all fixed and re-measured:
+
+| Fault | Symptom in the batch | Cause | Fix (`gsp/glwall/glwall.c`, `gsp/gllayer.go`, `gsp/gsp.go`) | After |
+|---|---|---|---|---|
+| Late frames dropped | DNxHR HQ 0 fps shown, VP9 8.9, while the cue pushed 24–63 a second | the mixer drops a frame later than its output frame and repeats the last one; a cue behind once stays frozen | late frames stamped to show on the next output frame; the decoder sent QoS (half the lateness, at most every 250 ms) | DNxHR HQ 60 on time; VP9 60 after 1.5 s; ProRes 422 35–40 within 0.1 s of the sound |
+| Stills stopped the wall | BMP: presented counter stopped while the still was up | one buffer, no duration, framerate 0/1: the mixer waited for a next frame | frames without a timestamp due now; a still lasts a day; other frames one refresh | BMP, TIFF, GIF, WebP stills 60 steps in and out |
+| Fade-in missed on stills | GIF/WebP: fade in 0 steps | first frame on the wall 2.2 s after Play; the fade clock ran from Play | on the GL wall the fade-in clock waits for the layer to be shown | 60 steps |
+| Alpha lost | every alpha video on the ISP route (no alpha) | decodebin3 pads have no fixed format; unfixed caps list RGB first | import records `Alpha` (pixel format, or `alpha_mode=1`); the tail trusts fixed caps only, else the media pool | every alpha file on the RGBA route |
+
+QoS tuning, DNxHR HQ through the ISP route (pushed / shown per second, lag behind the clock):
+
+| Variant | Pushed | Shown | Lag |
+|---|---|---|---|
+| Late frames dropped by the mixer (before) | 24–34 | 0 | – |
+| Shown on arrival, QoS with the full lateness on every late frame | 0–2 | 0–2 | – |
+| Shown on arrival, no QoS | 22–44 | 22–45 | 0.9 s, growing to 1.8 s |
+| Shown on arrival, QoS with half the lateness, at most every 250 ms (kept) | 60 | 60 | 0 |
+
+**H.264 1080p60 is short on the GL wall: memory bandwidth.** `h264_high` (7.4 Mbit/s High@4.2) showed 46–55 frames a
+second with presenter skips; HEVC on the same wall 59.4–60. Timings from the presenter: the GPU takes 12–15 ms per
+H.264 frame from its fence to completion against 2–7 ms for HEVC, and H.264 frames leave the wall's sink 90–150 ms
+after their timestamp against a constant 87 ms (the pipeline latency) for HEVC. Not the import: one `DirectDmabufExternal`
+route for both (glupload debug), and no V3D buffer allocations or TFU jobs traced (`v3d_create_bo_ioctl`,
+`v3d_submit_tfu_ioctl` kprobes: 0–3 allocations a second, 2 render jobs a frame, the same for both codecs). The
+hardware decoder on its own (gst-launch to a fakesink, unsynced):
+
+| Display state | H.264 1080p60 decode, fps |
+|---|---|
+| Service stopped | 75.7 |
+| Plane wall idle | 75.9 |
+| GL wall rendering 60 frames a second, its plane off (experiment build) | 67.4 |
+| GL wall rendering and on screen | 63.5 |
+
+So rendering 1080p RGBA every refresh costs the decoder ~8 fps and scanning out the extra full-screen plane ~4 more,
+leaving it 6 % above real time: frames arrive late and the presenter misses refreshes. The plane wall shows this clip
+at 58.4 (also short). The hardware decoder can write the tiled NC12 layout the GPU samples cheaply (`v4l2-ctl`), but
+`v4l2h264dec` has no caps for it. Not fixed; options in DESIGN §6.1.1.
+
+**Second batch** (the fixes above, all 95 files, written to the README's GPU-wall table): 29 Supported, against 17
+on the plane wall. It is not a superset; what changed against the first GL batch:
+
+- Up: software codecs that fell behind once now play at their decoder's speed in step with the sound: DNxHR HQ 55.8
+  (0 before; 13.7 on the plane wall), QuickTime Animation 35 (0), HAP 32 (0.9), ProRes LT/Proxy 9–20 (0.3), Theora 20
+  (0.9). FFV1, MJPEG MKV, MPEG-4 ASP MKV, VP8, TIFF, WebP and GIF stills now pass.
+- Down: H.264 37–51 (memory bandwidth, above). HEVC 58.0–58.9 this run (59.4 in the first; one or two presenter skips a
+  second decide it). Several stills fade in at 57.3–58.9 steps a second: the fade levels come from a Go timer (10 ms
+  ticks) and a tick that runs late repeats a level on one frame. Driving fades from the output frame in C (a ramp
+  evaluated in the mixer's `samples-selected`) removes that; it is the next GL-wall item. The same timer drops to 15–35
+  steps a second while a software decoder or the alpha upload keeps all four cores busy.
+- Alpha video now keeps its alpha but is CPU-bound on the upload: QuickTime Animation alpha 1.7, HAP alpha 8.7, PNG
+  in MOV/MKV under 1 (the plane wall: 42.8, 18.1, 0).
+
+**Two faults found by the second batch, fixed:**
+- **A crash (SIGSEGV) on Stop.** `glHide` (Stop) and `glDrop` (the cue's teardown) both read the layer under the lock
+  and freed it after releasing it, so both could free the same layer; the second release of its mixer pad
+  ("Padname sink_29 does not belong to element m") ended in a segfault in `glwall_layer_free`, and systemd restarted
+  the service mid-batch (DNxHR HQ's row was "Remote end closed connection"). Each now takes the layer out of the record
+  under the lock (`glTakeLayerLocked`), so exactly one caller frees it. Verified: 40 random play/stop rounds across
+  DNxHR HQ, VP9, H.264, HEVC, MPEG-2 and a BMP still, with stops 50 ms to 1.5 s after play: no crash, no GStreamer
+  assertion, the wall presenting throughout.
+- **Every GIF treated as alpha.** ffmpeg decodes every GIF to BGRA, so the recorded pixel format said alpha for opaque
+  GIFs and they took the slow RGBA upload (the 25 fps animated GIF fell to 16). The transparency flag cannot decide
+  either: ffmpeg's palettegen reserves a transparent colour in every frame, and encoders use it in later frames for
+  unchanged pixels. Import now decodes the first frame (`media.GIFTransparent`, Go's `image/gif`) and records alpha
+  only if a pixel there is transparent (or the frame is smaller than the canvas); old GIF imports no longer fall back
+  to the pixel format. The support set's opaque GIFs (`gif`, `gif_anim`, `gif_anim_50fps`) now take the ISP route
+  and `gif_anim` plays at 25 again; `gif_alpha` and `gif_anim_alpha` keep the RGBA route.
+
+
 
 ## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
 

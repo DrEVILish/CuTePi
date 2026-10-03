@@ -2732,6 +2732,20 @@ func RequestThumbnailRefresh(filename string) (err error) {
 	return nil
 }
 
+// MediaHasAlpha reports whether a registered file's video carries an alpha
+// channel, from the metadata recorded at import (false when unknown).
+func MediaHasAlpha(filename string) bool {
+	var meta string
+	if db.Get(&meta, `SELECT media_meta FROM mediapool WHERE filename = ?`, filename) != nil || meta == "" {
+		return false
+	}
+	var info media.MediaInfo
+	if json.Unmarshal([]byte(meta), &info) != nil {
+		return false
+	}
+	return info.HasAlpha()
+}
+
 func MediaLoudnessGain(filename string) (gain float64, err error) {
 	err = db.Get(&gain, `SELECT loudness_gain FROM mediapool WHERE filename = ?`, filename)
 	return

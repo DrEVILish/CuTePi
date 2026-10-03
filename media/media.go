@@ -69,20 +69,21 @@ type Metadata struct {
 }
 
 type ffprobeStream struct {
-	CodecType      string `json:"codec_type"`
-	CodecName      string `json:"codec_name"`
-	Profile        string `json:"profile"`
-	Width          int    `json:"width"`
-	Height         int    `json:"height"`
-	PixFmt         string `json:"pix_fmt"`
-	ColorSpace     string `json:"color_space"`
-	ColorTransfer  string `json:"color_transfer"`
-	ColorPrimaries string `json:"color_primaries"`
-	AvgFrameRate   string `json:"avg_frame_rate"`
-	BitRate        string `json:"bit_rate"`
-	Channels       int    `json:"channels"`
-	ChannelLayout  string `json:"channel_layout"`
-	SampleRate     string `json:"sample_rate"`
+	CodecType      string            `json:"codec_type"`
+	CodecName      string            `json:"codec_name"`
+	Profile        string            `json:"profile"`
+	Width          int               `json:"width"`
+	Height         int               `json:"height"`
+	PixFmt         string            `json:"pix_fmt"`
+	ColorSpace     string            `json:"color_space"`
+	ColorTransfer  string            `json:"color_transfer"`
+	ColorPrimaries string            `json:"color_primaries"`
+	AvgFrameRate   string            `json:"avg_frame_rate"`
+	BitRate        string            `json:"bit_rate"`
+	Channels       int               `json:"channels"`
+	ChannelLayout  string            `json:"channel_layout"`
+	SampleRate     string            `json:"sample_rate"`
+	Tags           map[string]string `json:"tags"`
 }
 
 type ffprobeFormat struct {
@@ -108,6 +109,9 @@ type MediaVideoInfo struct {
 	PixFmt  string
 	Bitrate int
 	Color   string
+	// Alpha: the stream carries an alpha channel (its pixel format has one,
+	// or it is VP8/VP9 with a Matroska alpha_mode=1 side channel).
+	Alpha bool `json:",omitempty"`
 }
 type MediaAudioInfo struct {
 	Codec      string
@@ -234,6 +238,7 @@ func Probe(path string) (Metadata, error) {
 				PixFmt:  videoStream.PixFmt,
 				Bitrate: num(videoStream.BitRate),
 				Color:   cs,
+				Alpha:   streamHasAlpha(videoStream, path),
 			},
 		}
 	}
@@ -507,4 +512,39 @@ func KindFromExtension(filename string) Kind {
 	default:
 		return KindUnknown
 	}
+}
+
+// streamHasAlpha: the pixel format has an alpha channel (except GIF, which
+// ffmpeg always decodes to BGRA: there the file's transparency flag
+// decides), or VP8/VP9 in Matroska carries an alpha side channel.
+func streamHasAlpha(s *ffprobeStream, path string) bool {
+	if s.CodecName == "gif" {
+		return GIFTransparent(path)
+	}
+	return PixFmtHasAlpha(s.PixFmt) || s.Tags["alpha_mode"] == "1" || s.Tags["ALPHA_MODE"] == "1"
+}
+
+// PixFmtHasAlpha reports an ffmpeg pixel format with an alpha channel
+// (yuva420p, yuva444p10le, rgba, bgra, argb, abgr, gbrap12le, ya8, rgba64le ...).
+func PixFmtHasAlpha(f string) bool {
+	switch {
+	case strings.HasPrefix(f, "yuva"), strings.HasPrefix(f, "gbrap"), strings.HasPrefix(f, "ya8"), strings.HasPrefix(f, "ya16"):
+		return true
+	}
+	for _, a := range []string{"rgba", "bgra", "argb", "abgr"} {
+		if strings.Contains(f, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAlpha reports a video stream with an alpha channel. Imports made before
+// the Alpha flag existed fall back to the recorded pixel format (not for
+// GIF, which always records BGRA).
+func (i *MediaInfo) HasAlpha() bool {
+	if i == nil || i.Video == nil {
+		return false
+	}
+	return i.Video.Alpha || (i.Video.Codec != "gif" && PixFmtHasAlpha(i.Video.PixFmt))
 }

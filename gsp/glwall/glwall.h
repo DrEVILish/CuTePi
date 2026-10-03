@@ -48,11 +48,23 @@ void glwall_stats(uint64_t *mixed, uint64_t *presented);
  * frames skipped by the presenter to catch up. */
 typedef struct {
   uint64_t allocs, frees, exhausted, set_configs, activations, alloc_queries, skipped;
+  /* presenter: total and maximum (since the last read) microseconds waiting
+   * for the GPU fence and in the SetPlane commit; commits longer than a refresh */
+  uint64_t fence_us, fence_max_us, flip_us, flip_max_us, flips_long;
+  /* GPU time from fence to signal when the presenter had to wait (µs), and
+   * how late mixed frames left the wall's sink against their due time (µs) */
+  uint64_t gpu_us, gpu_max_us, late_us, late_max_us;
   int allocated, onscreen, queued;
 } glwall_pool_stats_t;
 void glwall_pool_stats(glwall_pool_stats_t *st);
 
 /* Per layer: frames pulled from the cue, pushed to the mixer, opacity changes applied. */
 void glwall_layer_stats(glwall_layer *l, uint64_t *pulled, uint64_t *pushed, uint64_t *steps);
+/* Per layer, counted on presented output frames only: frames that showed a
+ * new cue frame, and frames whose opacity differed from the previous one
+ * shown (a fade's steps as the viewer sees them); and cue frames that
+ * arrived too late for their output frame (shown on arrival, decoder told
+ * through QoS), and how late the last cue frame was (ns, 0 when on time). */
+void glwall_layer_shown(glwall_layer *l, uint64_t *frames, uint64_t *steps, uint64_t *late, int64_t *lag_ns);
 
 #endif

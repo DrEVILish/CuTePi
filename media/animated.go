@@ -11,6 +11,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"image"
+	"image/gif"
 	"io"
 	"os"
 )
@@ -128,6 +130,55 @@ func gifAnimation(r *bufio.Reader) Animation {
 			return a
 		}
 	}
+}
+
+// GIFTransparent reports whether a GIF's first frame shows any transparent
+// pixel. ffmpeg decodes every GIF to BGRA, so the pixel format cannot tell
+// an opaque GIF from a transparent one, and the transparency flag cannot
+// either: encoders reserve a transparent colour in every frame (ffmpeg's
+// palettegen does by default) and use it in later frames for pixels that do
+// not change. The first frame's pixels decide; a first frame smaller than
+// the canvas leaves the rest transparent.
+func GIFTransparent(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	cfg, err := gif.DecodeConfig(f)
+	if err != nil {
+		return false
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return false
+	}
+	img, err := gif.Decode(bufio.NewReader(f))
+	if err != nil {
+		return false
+	}
+	pal, ok := img.(*image.Paletted)
+	if !ok {
+		return false
+	}
+	if b := pal.Bounds(); b.Dx() < cfg.Width || b.Dy() < cfg.Height {
+		return true
+	}
+	clear := make([]bool, len(pal.Palette))
+	any := false
+	for i, c := range pal.Palette {
+		if _, _, _, a := c.RGBA(); a < 0xffff {
+			clear[i], any = true, true
+		}
+	}
+	if !any {
+		return false
+	}
+	for _, ix := range pal.Pix {
+		if int(ix) < len(clear) && clear[ix] {
+			return true
+		}
+	}
+	return false
 }
 
 func skipSubBlocks(r *bufio.Reader) bool {

@@ -553,6 +553,12 @@ wall pipeline (always running)                                    ▼
   opacity, fades and crossfades are pad `alpha`, applied **every output frame** (60 steps a second at 60 Hz, finer
   than the plane wall's 30) at no cost to the video; geometry is `xpos/ypos/width/height`. A layer that stops showing
   frames (pause, hold) keeps its last frame on screen. Black is the mixer background.
+  *Measured as the viewer sees it.* As the mixer selects its inputs for an output frame (`samples-selected`), the
+  wall snapshots each layer's pad opacity and the PTS of the cue frame it is about to draw; once the presenter has
+  put that output frame on the plane it credits each layer still attached with a new frame (PTS changed) and a fade
+  step (opacity changed). Frames the mixer never produced or the presenter skipped to catch up are not credited.
+  `GET /api/debug/glwall` serves these per-layer counters (`ShownFrames`, `ShownSteps`) beside the frames presented,
+  and the codec support test reads them per presented frame.
 - **Rotation, mirror, fit, crop.** Rotation and mirror by `glvideoflip` in the cue's GPU chain; fit modes by pad size
   and position. Crop is applied as the frame's source rectangle in the GPU chain (to be verified: video crop meta
   through `glupload`, else a GPU crop step) — never a CPU copy.
@@ -565,6 +571,49 @@ wall pipeline (always running)                                    ▼
   unscaled output is the reference case. Colour conversion follows each stream's colorimetry (`glcolorconvert`).
 - **Audio** stays per cue on its own sink for now (simultaneous cues, §6.1.2, add a mixer). The wall adds a fixed
   latency (about one output frame plus the page flip); audio is delayed by the same amount so lips stay in sync.
+- **Late frames are shown, and the decoder is told.** The mixer drops a frame that arrives after the output frame it
+  was due for and repeats the layer's last one, so a cue whose decoder fell behind once (at its start, or a slow
+  software codec) showed a frozen picture for as long as it stayed behind, even when it was decoding at 60 again
+  (measured: DNxHR HQ and VP9 delivered 24–63 frames a second into the mixer and 0–4 reached the screen). The bridge
+  therefore stamps a frame that is later than the mixer's wait (its latency less the upload time) to show on the next
+  output frame, and sends the cue's decoder the QoS event a display sink would, so it drops frames until it is back on
+  the clock and in step with the sound. The report is **half** the measured lateness, **at most every 250 ms**:
+  `GstVideoDecoder` skips up to twice the reported lateness ahead and the converters behind it drop on the same event,
+  so a full report on every frame made the decoder drop nearly everything (0–2 frames a second); showing late frames
+  without any report kept the picture moving but let it drift seconds behind the sound. Measured with the halved,
+  rate-limited report: DNxHR HQ 60 fps on time (0 before; 13.7 on the plane wall), VP9 back on time within 1.5 s then
+  60, ProRes 422 35–40 fps within 0.1 s of the sound.
+- **Every frame has a start and an end.** A frame without a duration makes the mixer wait for the next one to learn
+  where it ends; a still sends no next one, so a BMP or GIF still (one buffer, no duration, framerate 0/1) stopped the
+  whole wall. The bridge gives a frame without a timestamp the current time, a still a duration of a day (it lasts
+  until replaced), and any other frame without one a refresh.
+- **Alpha from the import metadata.** decodebin3 exposes a software decoder's pad before its format is fixed, so the
+  tail cannot see an alpha format there; unfixed caps list what the decoder could produce (gdkpixbufdec offers RGB
+  first and delivers RGBA). The tail trusts only fixed caps and otherwise asks the media pool: import records `Alpha`
+  (ffprobe's pixel format has an alpha channel, or VP8/VP9 in Matroska carries `alpha_mode=1`; for GIF, which ffmpeg
+  always decodes to BGRA, a transparent pixel in the first frame); older imports fall back to the recorded pixel
+  format, except GIF. Alpha sources take the RGBA upload route; the ISP and the hardware decoders' formats
+  have no alpha. That route is a CPU upload (V3D tiles system-memory textures on the CPU): stills fade at 60 steps,
+  but alpha video is slow (QuickTime Animation 2 fps, HAP 8.5, against 42.8 and 18.1 on the plane wall). Open.
+- **One owner frees a layer.** Stop (which keeps the cue for a resume) and the cue's teardown can run at once; the
+  layer is taken out of its record under the lock, so only one of them frees it (both freeing it released its mixer
+  pad twice and crashed the service).
+- **A fade-in starts when the picture does.** A cue's first frame can reach the wall well after Play (a still through
+  decodebin3: 2.2 s for a GIF or WebP), and a fade clock started at Play had finished by then, so the picture appeared
+  at full level. On the GPU wall the fade-in clock runs only once the layer is attached and shown.
+- **Memory bandwidth and the H.264 decoder (measured 2026-10-03).** Compositing costs the hardware H.264 decoder its
+  headroom. Decoding a 1080p60 High-profile clip (7.4 Mbit/s) as fast as it can, with nothing else on screen: 75.9 fps
+  with the plane wall or no service, **67.4** with the GL wall rendering 60 frames a second but its plane switched off,
+  **63.5** with the wall rendering and on screen (the display controller also reads the full-screen RGBA plane over
+  the RG16 console plane). The GPU's per-frame time for an H.264 layer, from its fence to completion, is 12–15 ms
+  against 2–7 ms for HEVC, and H.264 frames leave the mixer 5–60 ms later than their due time (HEVC frames are on
+  time), so the presenter misses refreshes: H.264 1080p60 shows 46–55 frames a second through the GL wall, against
+  58.4 on the plane wall (where it is also short of 60). The GL import itself is not the cause (no buffer allocations
+  and no TFU copies traced; the same `DirectDmabufExternal` route as HEVC); the decoder simply has no spare capacity
+  for the extra memory traffic. `v4l2h264dec` cannot output the tiled NC12 layout the hardware offers (GStreamer has
+  no mapping for it). Ways back, none measured yet: the wall on the primary plane instead of an overlay (one plane
+  less to scan out, worth up to the ~4 fps the scan-out costs), not re-rendering an unchanged picture (helps idle and
+  stills, not video), and the firmware's `h264_freq` (the owner's decision, it is an overclock).
 - **Limits that remain.** The H.264 decoder manages about 70 fps of 1080p in total (two 1080p60 H.264 layers cannot
   both be full rate); HEVC decodes about 90 + 90 fps; software codecs run at CPU speed. Import warns when a file is
   expected to play below full rate (§5.7).
@@ -579,6 +628,13 @@ decodebin3 plugs the decoder against the real tail. Because decodebin3 adds pads
 PAUSED, the layer is attached when its tail exists and its appsink has prerolled, not at `startPlayback`'s wait.
 Still to do: rotation/mirror and crop in the GL chain, warm preroll, the audio offset, alpha detection from the
 import metadata, measuring stills and test patterns, and `support.py` on the GL wall.
+Since then (same day): the support test measures the GL wall per presented frame (above), late frames are shown and
+the decoder told through QoS, frames without timing no longer stall the wall, alpha is taken from the import
+metadata, and a fade-in waits for its layer. The codec batch on the GL wall is in the README beside the plane wall's.
+Open on the GL wall: H.264 1080p60 (memory bandwidth, above), alpha video speed, fades driven per output frame from a
+ramp in C (the Go fade timer misses a refresh under CPU load: 15–57 steps a second while a software decoder uses all
+four cores, and an occasional 58.9 on a still), rotation/mirror and crop, warm preroll, the audio offset, and the
+first-play loss after the service starts.
 
 **Build order.** Each step lands only once measured on the Pi (frame rate traced per refresh, as in TEST_REPORT O1),
 with the KMS plane wall as the default until the GPU wall covers everything it does:
