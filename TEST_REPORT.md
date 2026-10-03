@@ -735,9 +735,12 @@ Found on the way:
 **A hang found after the step 2 commit, and fixed (2026-10-03).** Repeated play/stop cycles through the API hung
 the service after a few rounds: `Stop` blocked in `glwall_layer_free`, the mixer's output thread waited forever in
 `gst_buffer_pool_acquire_buffer` with every ring buffer counted out, while the pull and presenter threads were idle and
-held nothing. Cause: the presenter kept each frame's sample in a per-slot field (`ring[idx].sample`); a new mixed frame
-in the same ring slot overwrote it while the old one was still queued, so that reference was never released and the
-buffer never returned to the pool. Each such overwrite lost a slot until none were left. Fix (`gsp/glwall/glwall.c`):
+held nothing. The change set below fixes it (22 soak rounds without a hang, where it hung within two or three
+before), but which change did is not isolated. The first explanation (a per-slot sample overwritten while still
+queued, leaking a buffer) is contradicted by the new counters: the mixer configured and activated the pool once
+across 193 allocation queries, and with the pool never cycled a slot cannot receive a second frame while its first is
+held. Rebuilding the step-2 code with only the counters added and soaking it until it hangs would show the mechanism.
+Fix (`gsp/glwall/glwall.c`):
 - frames travel to the presenter as items that own their sample and their fence, so nothing per slot is ever
   overwritten or closed twice;
 - the ring pool preallocates nothing (min 0, max 8, forced in its own `set_config`), and each slot's state is
@@ -751,11 +754,27 @@ buffer never returned to the pool. Each such overwrite lost a slot until none we
 
 Soak (service with `CUTEPI_WALL=gl`): 12 rounds, then 10 more after the catch-up change, each round four play/stop
 runs (H.264 twice, HEVC, MPEG-2 via the ISP, one with the API polled every 30 ms) and a crossfade H.264 → HEVC with a
-1 s fade-in. Every run pushed 59–60 frames a second, crossfades 60; no hang; 0 exhaustions; 193 allocation queries
-answered (16 per round: the mixer re-asks on every attach) with the pool configured and activated only once; queue
-depth 0–1 (3 at most). Open: the presenter skips about two mixed frames per cue start (and 67 at the first play after
-the service starts) while the new layer's first frames settle; measure whether a video frame is lost there.
+1 s fade-in. Every run pushed 59–60 cue frames a second **into the mixer** (the layer's pushed counter, not frames
+on screen); no hang; 0 exhaustions; 193 allocation queries answered (16 per round: the mixer re-asks on every attach)
+with the pool configured and activated only once; queue depth 0–1 (3 at most).
 
+Frames on screen, per window (`presented`, `mixed` and presenter skips from `/api/debug/glwall`):
+
+| Window | Presented/s | Mixed/s | Skipped |
+|---|---|---|---|
+| Idle wall | 59.9 | 59.9 | 0 |
+| HEVC: start (play + 1 s) / steady 3 s / ESC fade 1 s | 75.6 / 60.0 / 59.9 | 75.6 / 60.0 / 59.9 | 1 / 0 / 0 |
+| MPEG-2 via ISP: start / steady / fade | 73.5 / 60.0 / 59.6 | 74.5 / 60.0 / 60.5 | 0 / 0 / 0 |
+| H.264, the first cue after the service started: start / steady / fade | 69.4 / **55.5** / **51.1** | 73.4 / 57.8 / 59.9 | 4 / **7** / **6** |
+| H.264 steady, later in the session | 60.6 | 59.9 | 0 |
+| Crossfade to HEVC (attach + 1 s fade) / after | 68.9 / 59.9 | 68.1 / 59.9 | 0 / 0 |
+
+So once warm the wall shows every mixed frame through steady play, fades and a crossfade. Two open points: the first
+H.264 cue after the service starts loses frames for several seconds (13 skipped across steady play and fade: a
+warm-up effect, e.g. first texture imports or shader compiles, to be removed by warming the wall at start-up), and
+at a cue start the wall presents and mixes above 60 a second for about a second while late frames are caught up,
+which shows those frames for less than a refresh each (to fix at the source: the new layer's first frames arrive
+late).
 `support.py` on the GL wall (`--section gl`, wall detected from `/api/debug/glwall`) samples the newest visible layer's
 counters instead of tracing planes. Its opacity-step count is not valid yet: it counts calls that set a layer's alpha
 (about 100–120 a second, two writers), not changes the viewer sees, which wrongly marked a PNG Supported in a smoke run.
