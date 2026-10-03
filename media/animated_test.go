@@ -96,3 +96,88 @@ func TestGIFTransparent(t *testing.T) {
 		t.Error("missing file reported transparent")
 	}
 }
+
+// writeGIF writes frames (each a 4x4 picture on a canvas of cw x ch) to a
+// GIF whose palette reserves a transparent colour, as ffmpeg's does.
+func writeGIF(t *testing.T, path string, cw, ch int, frames ...*image.Paletted) string {
+	t.Helper()
+	g := &gif.GIF{Image: frames, Delay: make([]int, len(frames)), Config: image.Config{Width: cw, Height: ch}}
+	g.Config.ColorModel = frames[0].Palette
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := gif.EncodeAll(f, g); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+var gifPal = color.Palette{color.RGBA{0, 0, 0, 255}, color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 0}}
+
+// An animation whose first frame is opaque but whose later frames use the
+// transparent colour for unchanged pixels (how ffmpeg encodes) is opaque.
+func TestGIFTransparentOnlyFirstFrameCounts(t *testing.T) {
+	dir := t.TempDir()
+	f1 := image.NewPaletted(image.Rect(0, 0, 4, 4), gifPal)
+	f2 := image.NewPaletted(image.Rect(0, 0, 4, 4), gifPal)
+	for i := range f2.Pix {
+		f2.Pix[i] = 2
+	}
+	if GIFTransparent(writeGIF(t, filepath.Join(dir, "a.gif"), 4, 4, f1, f2)) {
+		t.Error("opaque first frame, delta-coded later frames: reported transparent")
+	}
+}
+
+// A first frame smaller than the canvas leaves the rest of the canvas
+// transparent.
+func TestGIFTransparentSmallFirstFrame(t *testing.T) {
+	f1 := image.NewPaletted(image.Rect(0, 0, 4, 4), gifPal)
+	if !GIFTransparent(writeGIF(t, filepath.Join(t.TempDir(), "s.gif"), 8, 8, f1)) {
+		t.Error("first frame 4x4 on an 8x8 canvas: not reported transparent")
+	}
+}
+
+// Not a GIF, or a GIF cut short: never alpha (and never a panic).
+func TestGIFTransparentNotAGIF(t *testing.T) {
+	dir := t.TempDir()
+	png := filepath.Join(dir, "x.gif")
+	os.WriteFile(png, []byte("\x89PNG\r\n\x1a\n not a gif"), 0o644)
+	if GIFTransparent(png) {
+		t.Error("PNG bytes named .gif reported transparent")
+	}
+	f1 := image.NewPaletted(image.Rect(0, 0, 4, 4), gifPal)
+	f1.Pix[0] = 2
+	full := writeGIF(t, filepath.Join(dir, "t.gif"), 4, 4, f1)
+	b, _ := os.ReadFile(full)
+	cut := filepath.Join(dir, "cut.gif")
+	os.WriteFile(cut, b[:20], 0o644)
+	if GIFTransparent(cut) {
+		t.Error("truncated GIF reported transparent")
+	}
+}
+
+// streamHasAlpha: VP8/VP9 alpha comes from the Matroska alpha_mode tag (any
+// case), not the pixel format; a GIF is judged by its pixels, not BGRA.
+func TestStreamHasAlpha(t *testing.T) {
+	dir := t.TempDir()
+	opaque := writeGIF(t, filepath.Join(dir, "o.gif"), 4, 4, image.NewPaletted(image.Rect(0, 0, 4, 4), gifPal))
+	cases := []struct {
+		s    ffprobeStream
+		path string
+		want bool
+	}{
+		{ffprobeStream{CodecName: "vp9", PixFmt: "yuv420p", Tags: map[string]string{"alpha_mode": "1"}}, "", true},
+		{ffprobeStream{CodecName: "vp9", PixFmt: "yuv420p", Tags: map[string]string{"ALPHA_MODE": "1"}}, "", true},
+		{ffprobeStream{CodecName: "vp9", PixFmt: "yuv420p", Tags: map[string]string{"alpha_mode": "0"}}, "", false},
+		{ffprobeStream{CodecName: "vp9", PixFmt: "yuv420p"}, "", false},
+		{ffprobeStream{CodecName: "prores", PixFmt: "yuva444p10le"}, "", true},
+		{ffprobeStream{CodecName: "gif", PixFmt: "bgra"}, opaque, false},
+	}
+	for i, c := range cases {
+		if got := streamHasAlpha(&c.s, c.path); got != c.want {
+			t.Errorf("case %d (%s %s %v): %v, want %v", i, c.s.CodecName, c.s.PixFmt, c.s.Tags, got, c.want)
+		}
+	}
+}

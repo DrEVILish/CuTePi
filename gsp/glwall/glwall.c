@@ -411,6 +411,9 @@ static double ramp_shape(int curve, double t) {
   }
 }
 
+/* ramp_shape for tests (it must match gsp's fadeShape). */
+double glwall_ramp_shape(int curve, double t) { return ramp_shape(curve, t); }
+
 /* Under W.lock, before the mixer renders the output frame due at clock time
  * T: a layer with a fade gets the opacity for exactly that frame, so a fade
  * changes on every refresh whatever the CPU is doing (a Go timer writing
@@ -1033,6 +1036,9 @@ uint64_t glwall_now(void) {
   GstClockTime t = gst_clock_get_time(clk);
   gst_object_unref(clk);
   return t;
+}
+void glwall_layer_set_crop(glwall_layer *l, int left, int right, int top, int bottom) {
+  if (l && l->mixpad) g_object_set(l->mixpad, "crop-left", left, "crop-right", right, "crop-top", top, "crop-bottom", bottom, NULL);
 }
 void glwall_layer_set_zorder(glwall_layer *l, int z) { if (l && l->mixpad) g_object_set(l->mixpad, "zorder", (guint)z, NULL); }
 void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h, int keep_aspect) {

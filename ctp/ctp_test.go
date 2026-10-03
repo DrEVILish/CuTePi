@@ -1333,3 +1333,30 @@ func TestSortSheetByCueNumber(t *testing.T) {
 		t.Fatalf("sorted = %v, want 7,10,30,B (numbers by value, text after)", got)
 	}
 }
+
+// MediaHasAlpha reads the import metadata: the recorded flag, an older
+// import's alpha pixel format (not GIF, always BGRA), and false for no
+// metadata, broken metadata or an unknown file.
+func TestMediaHasAlpha(t *testing.T) {
+	reg := func(name string, info *media.MediaInfo) {
+		t.Helper()
+		if err := RegisterMedia(name, 1, media.Metadata{Mimetype: "video/mp4", Duration: 1, Resolution: "1920x1080", Codec: "x", Info: info}, name); err != nil {
+			t.Fatalf("RegisterMedia(%q): %v", name, err)
+		}
+	}
+	reg("alpha-flag.mkv", &media.MediaInfo{Video: &media.MediaVideoInfo{Codec: "vp9", PixFmt: "yuv420p", Alpha: true}})
+	reg("alpha-oldpix.mov", &media.MediaInfo{Video: &media.MediaVideoInfo{Codec: "prores", PixFmt: "yuva444p10le"}})
+	reg("old.gif", &media.MediaInfo{Video: &media.MediaVideoInfo{Codec: "gif", PixFmt: "bgra"}})
+	reg("opaque.mp4", &media.MediaInfo{Video: &media.MediaVideoInfo{Codec: "h264", PixFmt: "yuv420p"}})
+	reg("nometa.mp4", nil)
+	reg("broken.mp4", &media.MediaInfo{Video: &media.MediaVideoInfo{PixFmt: "rgba"}})
+	if err := UpdateMediaMeta("broken.mp4", "{not json"); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"alpha-flag.mkv": true, "alpha-oldpix.mov": true, "old.gif": false,
+		"opaque.mp4": false, "nometa.mp4": false, "broken.mp4": false, "unknown.mov": false} {
+		if got := MediaHasAlpha(name); got != want {
+			t.Errorf("MediaHasAlpha(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

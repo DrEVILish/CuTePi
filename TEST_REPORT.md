@@ -981,6 +981,44 @@ HEVC cue, 125.8 ms on an AAC cue, the HDMI stream running throughout. Not measur
 presented every half second from the first, no presenter skips, mixed 59.3–61.2 (the start-up overshoot of 69–76
 mixed a second is gone). Before (TEST_REPORT "GPU wall in the service"): the first H.264 lost 13 frames.
 
+## GPU wall: rotation, mirror, crop, fit; edge-case tests (2026-10-03)
+
+Rotated and mirrored cues through the service (CUTEPI_WALL=gl), 3 s windows, `v3d_create_bo_ioctl` and
+`v3d_submit_tfu_ioctl` kprobes:
+
+| Route | Cue | Wall presented / skips | Cue frames shown | V3D buffers created |
+|---|---|---|---|---|
+| `glvideoflip` in the wall (GL's own textures) | HEVC 90° | 14.3 / 134 | 12.6 | 163 |
+| same | MPEG-2 180° | 13.6 / 144 | 13.3 | 46 (+456 TFU) |
+| `glvideoflip` with imported-buffer pools | HEVC 90° | 0 (wall stopped; Stop timed out) | – | – |
+| CPU `videoflip` in the cue, pre-scaled (kept) | MPEG-2 90° | 60.0 / 0 | 60.0 | – |
+| same | MPEG-2 180° + mirror + 10 % crop + fill | 60.3 / 0 | 60.3 | – |
+| same | animated alpha GIF 90° | 59.9 / 0 | 25.0 | – |
+| same, ISP pre-scale then RGBA copy | H.264 1080p60 270° / 90°+mirror / 180° | 53–60 / 2–22 | 4.3–8.0 | – |
+| same, `videoconvert` (SAND) | HEVC 90° | 58.9 / 4 | 10.7 | – |
+
+The wall recovered by itself after each `glvideoflip` run (idle 59.9, HEVC unturned 59.9) once the layer was gone.
+
+**A test-script mistake deleted user data.** The rotation probe was given the media pool's own
+`bbb_sunflower_1080p_30fps_normal.mp4` as its input file; its cleanup deletes the media it uploaded by name, which
+removed the operator's file and, with it, the three cues using it (20, 31, 31.5). The file was restored
+byte-identical (276 134 947 bytes) from Blender's download site and re-imported; the three cues still need restoring
+(the operator's decision). Probe scripts must only ever be given files from the test media folders.
+
+**Edge-case tests added** (all pass; each was checked to fail when the behaviour it guards was broken on purpose):
+`gsp`: `TestGLDirectionNormalisesInput` (−90, 450, 360, unknown mirror), `TestGLVideoTailShapes` (element order the
+configurers index into, crop before turn, the wall's ISP after the turn, route per tail), `TestGLTailFormat` (fixed
+caps win, unfixed ignored, no lookup), `TestGLISPCanTake` (HEVC SAND not to the ISP; turned hardware cues not
+zero-copy), `TestGLCurve`, `TestGLTakeLayerOnce` (the Stop crash), `TestRampLevel` (zero-length fade, before
+start, past end), `TestFadeLandAndAudioSyncOffWall`; `gsp/glwall`: `TestRampShapeMatchesFadeShape` (C envelope =
+Go envelope, clamped); `media`: `TestGIFTransparentOnlyFirstFrameCounts`, `TestGIFTransparentSmallFirstFrame`,
+`TestGIFTransparentNotAGIF`, `TestStreamHasAlpha`; `ctp`: `TestMediaHasAlpha`; `tools/codec-corpus/test_support.py`
+(7 tests: per-presented-frame counting, window bounds, too few samples, presented not advancing, rate edge cases).
+Two bugs found by them and fixed: `glRoute` called a turned hardware cue's tail "isp" though it ends in RGBA (it now
+names what reaches the appsink), and a zero-length ramp started now gave a NaN level (`rampLevel`).
+Suite: `go test ./...` green twice; in one of three full runs `TestWarmVideoPrewarmAndRelink` failed ("no slot armed
+after video Warm") with packages running in parallel; it passed 3/3 alone and 3/3 with the whole `gsp` package.
+
 ## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
 
 Pi 4 Model B Rev 1.5, KMS planes, live service; the full support set (94 files) rerun, then the slow-clip rows rerun

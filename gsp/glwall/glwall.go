@@ -83,8 +83,19 @@ func (l *Layer) Ramp(from, to float64, start uint64, dur time.Duration, curve Cu
 	C.glwall_layer_ramp(l.l, C.double(from), C.double(to), C.uint64_t(start), C.uint64_t(dur), C.int(curve))
 }
 
+// rampShape is the C ramp's envelope (tests compare it with gsp's fadeShape).
+func rampShape(c Curve, t float64) float64 {
+	return float64(C.glwall_ramp_shape(C.int(c), C.double(t)))
+}
+
 // Now is the wall's clock (the system clock, ns).
 func Now() uint64 { return uint64(C.glwall_now()) }
+
+// SetCrop crops the layer's picture as it reaches the mixer, in pixels per
+// edge (the mixer pad's crop: no extra GPU pass).
+func (l *Layer) SetCrop(left, right, top, bottom int) {
+	C.glwall_layer_set_crop(l.l, C.int(left), C.int(right), C.int(top), C.int(bottom))
+}
 
 // SetZOrder sets the stacking order (higher is on top).
 func (l *Layer) SetZOrder(z int) { C.glwall_layer_set_zorder(l.l, C.int(z)) }

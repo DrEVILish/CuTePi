@@ -559,9 +559,17 @@ wall pipeline (always running)                                    ▼
   step (opacity changed). Frames the mixer never produced or the presenter skipped to catch up are not credited.
   `GET /api/debug/glwall` serves these per-layer counters (`ShownFrames`, `ShownSteps`) beside the frames presented,
   and the codec support test reads them per presented frame.
-- **Rotation, mirror, fit, crop.** Rotation and mirror by `glvideoflip` in the cue's GPU chain; fit modes by pad size
-  and position. Crop is applied as the frame's source rectangle in the GPU chain (to be verified: video crop meta
-  through `glupload`, else a GPU crop step) — never a CPU copy.
+- **Rotation, mirror, fit, crop (2026-10-03).** Crop and the fill modes' overflow are the mixer pad's `crop-*`
+  properties (no extra pass), computed as on the plane wall (`computeLayout`); every fit mode but stretch keeps the
+  aspect inside the box. Rotation and mirror are done on the CPU in the cue's own pipeline, as the plane wall's
+  90/270: scale to the size shown first (the ISP for decoder frames), `videocrop`, `videoflip`, then the ISP to YU12
+  DMABufs (software sources) or RGBA for the wall's copy route (hardware sources: a second ISP pass beside the H.264
+  decoder starved both). HEVC's tiled frames cannot enter `v4l2convert` and take `videoconvert`. Not `glvideoflip`:
+  inside the wall pipeline it rendered into GL's own textures (Mesa's fresh-buffer mode: the whole wall at 13–14
+  fps, 46–163 buffer creations per run), and with imported buffers as its pool `glcolorconvert` waited for a buffer
+  on the GL thread, which the mixer needed to release one: the whole wall stopped. Measured: MPEG-2 turned 90° 60
+  fps, 180° + mirror + crop + fill 60, an alpha GIF turned 25 (its rate), H.264 1080p60 turned 4–10 (decoder and
+  ISP share the VideoCore), HEVC turned 10.7; the wall itself stayed at 59–60 presented except beside turned H.264.
 - **Panic.** The holding image is a permanent mixer pad at the top `zorder`, alpha 0. A panic sets its alpha to 1: it
   shows on the next output frame (at most one refresh plus the sink's flip). The target stays a mean under 50 ms
   (§12.9).
@@ -671,7 +679,7 @@ metadata, and a fade-in waits for its layer. The codec batch on the GL wall is i
 Fades are now stepped per output frame, the wall's threads run ahead of the decoders, and cue sound is delayed by
 the wall's display delay (above). The first cue after a restart now plays clean (MPEG-2 and HEVC: 59–61 presented,
 no skips, from the first half second; the earlier first-play loss and the start-up overshoot are gone). Open on the
-GL wall: H.264 1080p60 (a decoder limit, above), rotation/mirror and crop, and warm preroll. Alpha layers now copy their frames off the GL thread (above).
+GL wall: H.264 1080p60 (a decoder limit, above), turned H.264 and HEVC speed, and warm preroll. Alpha layers now copy their frames off the GL thread (above).
 
 **Build order.** Each step lands only once measured on the Pi (frame rate traced per refresh, as in TEST_REPORT O1),
 with the KMS plane wall as the default until the GPU wall covers everything it does:

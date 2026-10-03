@@ -31,6 +31,9 @@ void glwall_prepare_sink(GstElement *appsink, int pool_buffers);
 glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, char **err);
 void glwall_layer_set_alpha(glwall_layer *l, double alpha);
 void glwall_layer_set_zorder(glwall_layer *l, int zorder);
+/* Crop the layer's picture as it reaches the mixer, pixels per edge (the
+ * mixer pad's crop: no extra pass). */
+void glwall_layer_set_crop(glwall_layer *l, int left, int right, int top, int bottom);
 /* A fade evaluated for every output frame from that frame's clock time:
  * alpha = from + (to - from) * curve((T - start_ns) / dur_ns), holding `to`
  * once done. start_ns is on the system clock (glwall_now). A set_alpha ends
@@ -38,6 +41,8 @@ void glwall_layer_set_zorder(glwall_layer *l, int zorder);
 enum { GLWALL_CURVE_LINEAR, GLWALL_CURVE_SMOOTH, GLWALL_CURVE_LOG, GLWALL_CURVE_EXP };
 void glwall_layer_ramp(glwall_layer *l, double from, double to, uint64_t start_ns, uint64_t dur_ns, int curve);
 uint64_t glwall_now(void);
+/* The ramp's envelope at t (0..1, clamped), for tests. */
+double glwall_ramp_shape(int curve, double t);
 /* How long after its time a frame is seen (mid-screen): the presenter's
  * moving average of time -> latch, plus half a refresh (ns). */
 int64_t glwall_display_delay(void);

@@ -334,11 +334,17 @@ func setLayerRamp(p *gst.Pipeline, from, to float64, start time.Time, dur time.D
 		glRamp(p, from, to, start, dur, curve)
 		return
 	}
+	setLayerLevel(p, rampLevel(from, to, time.Since(start), dur, curve))
+}
+
+// rampLevel is a fade's level `elapsed` into it: from before it starts, to
+// once done (also for a zero-length fade: 0/0 gave NaN).
+func rampLevel(from, to float64, elapsed, dur time.Duration, curve string) float64 {
 	t := 1.0
 	if dur > 0 {
-		t = math.Min(1, float64(time.Since(start))/float64(dur))
+		t = math.Max(0, math.Min(1, float64(elapsed)/float64(dur)))
 	}
-	setLayerLevel(p, from+(to-from)*fadeShape(curve, t))
+	return from + (to-from)*fadeShape(curve, t)
 }
 
 // setLayerLevel applies a fade level (0..1) to p's layer: alpha = opacity x level.

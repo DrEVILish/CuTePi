@@ -1962,7 +1962,8 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", sink}
 		} else if glOpen && !spec.warmSink {
 			// GPU wall: the cue feeds the mixer through an appsink (gllayer.go).
-			elementNames = glVideoTail(!spec.isTest && glDmaBufCapable(srcPad), glTailFormat(caps, spec.filename))
+			elementNames = glVideoTail(glTailDMABuf(srcPad, spec.opts, spec.isTest), glTailFormat(caps, spec.filename),
+				glDirection(spec.opts.Rotation, spec.opts.Flip) != dirIdentity, !spec.isTest && glISPCanTake(srcPad))
 		} else if kmsWall() != nil {
 			// KMS wall: own display plane, hardware scaling/blending.
 			elementNames = kmsVideoTail(!spec.isTest && dmaBufUpstream(srcPad), spec.opts)
@@ -2030,7 +2031,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			}
 		}
 		if isVideo && glOpen && !spec.warmSink {
-			if err := configureGLTail(pipeline, byFactory, elementNames, spec.opts, !spec.isTest && glDmaBufCapable(srcPad), glTailFormat(caps, spec.filename)); err != nil {
+			if err := configureGLTail(pipeline, byFactory, elementNames, spec.opts, glTailDMABuf(srcPad, spec.opts, spec.isTest), glTailFormat(caps, spec.filename)); err != nil {
 				msg := gst.NewErrorMessage(self, gst.NewGError(3, err), "no wall layer", nil)
 				pipeline.GetPipelineBus().Post(msg)
 				return
