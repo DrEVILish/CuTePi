@@ -38,6 +38,15 @@ void glwall_layer_set_zorder(glwall_layer *l, int zorder);
 enum { GLWALL_CURVE_LINEAR, GLWALL_CURVE_SMOOTH, GLWALL_CURVE_LOG, GLWALL_CURVE_EXP };
 void glwall_layer_ramp(glwall_layer *l, double from, double to, uint64_t start_ns, uint64_t dur_ns, int curve);
 uint64_t glwall_now(void);
+/* How long after its time a frame is seen (mid-screen): the presenter's
+ * moving average of time -> latch, plus half a refresh (ns). */
+int64_t glwall_display_delay(void);
+/* Delay a cue's audio sink (its ts-offset) by the display delay, so sound
+ * and picture stay together. A non-live cue pipeline does not pass a
+ * configured latency on to its sinks (measured: 0), so it is set per sink. */
+void glwall_align_audio(GstElement *sink);
+/* The largest ts-offset on a pipeline's sinks other than the video appsink, ns (-1: none). */
+int64_t glwall_audio_offset(GstElement *pipeline);
 /* keep_aspect: letterbox inside the rectangle (fit) rather than stretch. */
 void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h, int keep_aspect);
 /* Every cue pipeline runs on the system clock, like the wall, so the pump's

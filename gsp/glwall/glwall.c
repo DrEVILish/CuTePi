@@ -30,6 +30,7 @@
 #include <gst/allocators/gstdmabuf.h>
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
+#include <gst/base/gstbasesink.h>
 #include <gst/gl/gl.h>
 #include <gst/gl/gstglbufferpool.h>
 #include <gst/gl/gstglfuncs.h>
@@ -57,6 +58,10 @@
  * does, so the mixer never renders into the picture being scanned out. */
 #define RING 8
 #define MIXER_LATENCY_NS (33 * GST_MSECOND)
+/* Frame time to latch before the presenter has measured it (measured
+ * 2026-10-03: frames leave the wall's sink 87 ms after their time, then wait
+ * for the next vblank). */
+#define DEFAULT_DELAY_NS (100 * GST_MSECOND)
 
 typedef struct {
   uint32_t handle, pitch, fb;
@@ -120,6 +125,7 @@ static struct {
    * was handed out by the wall's sink against its due time (µs) */
   guint64 gpu_us, gpu_max_us, late_us, late_max_us;
   guint64 unsnapped; /* frames presented with no mixer snapshot */
+  gint64 delay_ns;    /* frame time -> latched on screen, moving average */
   GMutex lock;     /* layers, layer_ids */
   GList *layers;   /* glwall_layer*, attached */
   guint64 layer_ids;
@@ -554,6 +560,17 @@ static gpointer present_thread(gpointer d) {
     if (t2 - t1 > 1000000 / W.hz + 2000) W.flips_long++;
     W.presented++;
     if (!f->snap) W.unsnapped++;
+    {
+      /* How long after its time a frame reaches the screen: SetPlane has
+       * just returned at the vblank that latched it (both clocks are
+       * CLOCK_MONOTONIC). Cue sound is delayed by this (glwall_align_audio). */
+      GstBuffer *fb = gst_sample_get_buffer(f->sample);
+      GstClockTime base = gst_element_get_base_time(W.wall);
+      if (fb && GST_CLOCK_TIME_IS_VALID(GST_BUFFER_PTS(fb)) && GST_CLOCK_TIME_IS_VALID(base)) {
+        gint64 d = t2 * 1000 - (gint64)(base + GST_BUFFER_PTS(fb));
+        if (d > 0 && d < GST_SECOND) W.delay_ns = W.delay_ns ? (W.delay_ns * 31 + d) / 32 : d;
+      }
+    }
     snap_count(f->snap);
     g_mutex_lock(&W.slot_lock);
     W.onscreen = f->idx;
@@ -977,6 +994,38 @@ void glwall_layer_ramp(glwall_layer *l, double from, double to, uint64_t start_n
   l->ramp.from = from; l->ramp.to = to; l->ramp.start = start_ns; l->ramp.dur = dur_ns; l->ramp.curve = curve;
   l->ramp.active = 1;
   g_mutex_unlock(&W.lock);
+}
+
+/* The picture is latched DELAY after its time and scanned out over the next
+ * refresh; the middle of the screen lights half a refresh after the latch. */
+int64_t glwall_display_delay(void) {
+  gint64 d = W.delay_ns ? W.delay_ns : DEFAULT_DELAY_NS;
+  return d + GST_SECOND / (2 * (W.hz ? W.hz : 60));
+}
+
+void glwall_align_audio(GstElement *sink) {
+  g_object_set(sink, "ts-offset", (gint64)glwall_display_delay(), NULL);
+}
+
+/* The largest ts-offset on a pipeline's sinks other than the video appsink
+ * (its sound), ns; -1 when it has none. */
+int64_t glwall_audio_offset(GstElement *pipeline) {
+  GstIterator *it = gst_bin_iterate_sinks(GST_BIN(pipeline));
+  GValue v = G_VALUE_INIT;
+  gint64 off = -1;
+  while (gst_iterator_next(it, &v) == GST_ITERATOR_OK) {
+    GstElement *e = g_value_get_object(&v);
+    /* autoaudiosink is a bin that passes ts-offset to the sink inside it */
+    if (!GST_IS_APP_SINK(e) && g_object_class_find_property(G_OBJECT_GET_CLASS(e), "ts-offset")) {
+      gint64 o = 0;
+      g_object_get(e, "ts-offset", &o, NULL);
+      if (o > off) off = o;
+    }
+    g_value_reset(&v);
+  }
+  g_value_unset(&v);
+  gst_iterator_free(it);
+  return off;
 }
 
 uint64_t glwall_now(void) {

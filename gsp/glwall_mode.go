@@ -9,6 +9,7 @@ package gsp
 import (
 	"os"
 	"sync"
+	"time"
 
 	"CuTePi/gsp/glwall"
 	"CuTePi/logs"
@@ -108,4 +109,21 @@ func GLWallStats() (mixed, presented uint64, layers []GLLayerStats, on bool) {
 	}
 	glMu.Unlock()
 	return m, p, layers, true
+}
+
+// GLAudioSync reports the wall's display delay and the current cue's audio
+// offset (the ts-offset its sound sink carries; -1 without one). Zero when
+// the GL wall is off or nothing plays.
+func GLAudioSync() (displayDelay, cueAudioOffset time.Duration) {
+	if !glOpen {
+		return 0, 0
+	}
+	displayDelay = glwall.DisplayDelay()
+	mgr.mu.Lock()
+	p := mgr.pipeline
+	mgr.mu.Unlock()
+	if p != nil {
+		cueAudioOffset = glwall.AudioOffset(p)
+	}
+	return
 }

@@ -2020,6 +2020,11 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		if !spec.warmSink && !spec.isTest {
 			if isAudio {
 				applyAudioSink(elements[len(elements)-1])
+				if glOpen {
+					// The wall shows a frame ~115 ms after its time; the
+					// sound waits as long (DESIGN §6.1.1, Audio).
+					glwall.AlignAudio(elements[len(elements)-1])
+				}
 			} else if i := indexOfName(elementNames, "capsfilter"); i >= 0 {
 				setResolutionCaps(elements[i])
 			}

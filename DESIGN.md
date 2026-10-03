@@ -569,8 +569,14 @@ wall pipeline (always running)                                    ▼
 - **Quality notes.** The mixer composites in 8-bit RGBA at the output size. Unscaled layers are pixel-exact. Scaled
   layers use the GPU's bilinear filter, softer than the display controller's polyphase scaler, so full-screen,
   unscaled output is the reference case. Colour conversion follows each stream's colorimetry (`glcolorconvert`).
-- **Audio** stays per cue on its own sink for now (simultaneous cues, §6.1.2, add a mixer). The wall adds a fixed
-  latency (about one output frame plus the page flip); audio is delayed by the same amount so lips stay in sync.
+- **Audio** stays per cue on its own sink for now (simultaneous cues, §6.1.2, add a mixer). The wall shows a frame
+  later than its time: the presenter measures it on every frame (frame time to the vblank that latched it, a moving
+  average; 107–117 ms measured, plus half a refresh to the middle of the screen: 115–126 ms in all). Each cue's audio
+  sink gets that as its `ts-offset` when it is built, so the sound plays when the picture is seen (`autoaudiosink`
+  passes it to the sink inside). Not the pipeline latency: a non-live cue pipeline does not pass a configured latency
+  on to its sinks (set to 120 ms, the audio sink received 0). `GET /api/debug/glwall` shows `displayDelayMs` and the
+  current cue's `cueAudioOffsetMs`. Not measured acoustically (no ALSA loopback on the test machine); the monitor's
+  own audio and video processing delays are outside this.
 - **Late frames are shown, and the decoder is told.** The mixer drops a frame that arrives after the output frame it
   was due for and repeats the layer's last one, so a cue whose decoder fell behind once (at its start, or a slow
   software codec) showed a frozen picture for as long as it stayed behind, even when it was decoding at 60 again
@@ -639,9 +645,12 @@ wall pipeline (always running)                                    ▼
   58.4 on the plane wall (where it is also short of 60). The GL import itself is not the cause (no buffer allocations
   and no TFU copies traced; the same `DirectDmabufExternal` route as HEVC); the decoder simply has no spare capacity
   for the extra memory traffic. `v4l2h264dec` cannot output the tiled NC12 layout the hardware offers (GStreamer has
-  no mapping for it). Ways back, none measured yet: the wall on the primary plane instead of an overlay (one plane
-  less to scan out, worth up to the ~4 fps the scan-out costs), not re-rendering an unchanged picture (helps idle and
-  stills, not video), and the firmware's `h264_freq` (the owner's decision, it is an overclock).
+  no mapping for it). With the wall's threads ahead of the decoders H.264 High reached 57.8–58.4 shown (and steps):
+  level with the plane wall's 58.4 steady (whose fades step 30 times a second). Neither path reaches 59: the decoder
+  itself manages 63–66 fps on these clips with any display running. Closed options: switching the hidden console
+  plane off (decoder 63.5 → 66.1 fps, but H.264 shown 56.5–57.6, no gain), and RGBA (AB24) from the decoder so the GPU
+  samples a tiled copy (`v4l2h264dec` will not preroll with it). Left: the firmware's `h264_freq` (an overclock, the
+  owner's decision), and not re-rendering an unchanged picture (helps idle and stills, not video).
 - **Limits that remain.** The H.264 decoder manages about 70 fps of 1080p in total (two 1080p60 H.264 layers cannot
   both be full rate); HEVC decodes about 90 + 90 fps; software codecs run at CPU speed. Import warns when a file is
   expected to play below full rate (§5.7).
@@ -659,9 +668,10 @@ import metadata, measuring stills and test patterns, and `support.py` on the GL 
 Since then (same day): the support test measures the GL wall per presented frame (above), late frames are shown and
 the decoder told through QoS, frames without timing no longer stall the wall, alpha is taken from the import
 metadata, and a fade-in waits for its layer. The codec batch on the GL wall is in the README beside the plane wall's.
-Fades are now stepped per output frame and the wall's threads run ahead of the decoders (above). Open on the GL
-wall: H.264 1080p60 (memory bandwidth, above), rotation/mirror and crop, warm preroll, the audio offset, and the
-first-play loss after the service starts. Alpha layers now copy their frames off the GL thread (above).
+Fades are now stepped per output frame, the wall's threads run ahead of the decoders, and cue sound is delayed by
+the wall's display delay (above). The first cue after a restart now plays clean (MPEG-2 and HEVC: 59–61 presented,
+no skips, from the first half second; the earlier first-play loss and the start-up overshoot are gone). Open on the
+GL wall: H.264 1080p60 (a decoder limit, above), rotation/mirror and crop, and warm preroll. Alpha layers now copy their frames off the GL thread (above).
 
 **Build order.** Each step lands only once measured on the Pi (frame rate traced per refresh, as in TEST_REPORT O1),
 with the KMS plane wall as the default until the GPU wall covers everything it does:

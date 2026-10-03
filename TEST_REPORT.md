@@ -961,6 +961,26 @@ went 8 → 12 on every play of an alpha cue and back to 8 on every stop (six rou
 50 random play / stop / ESC fade / crossfade rounds over alpha and opaque files: no crash, no GStreamer assertion, no
 ring exhaustion.
 
+## GPU wall: H.264 options closed, sound delayed to the picture, first play clean (2026-10-03)
+
+**H.264.** Decoding `video_h264_1080p60_aac.mp4` as fast as possible while the GL wall runs: 63.3–63.7 fps with the
+console (primary) plane on, 66.1–66.2 with it switched off (an experiment build; the plane is fully covered by the
+wall). Through `support.py` with it off: H.264 High MKV 57.4, MOV 56.5, no-audio MOV 57.6 fps, no better than with it
+on (57.8–58.4); not adopted. Asking the decoder for RGBA (`drm-format=AB24`, or system-memory RGBA) so the GPU would
+sample a tiled copy: `v4l2h264dec` does not preroll ("Internal data stream error"). H.264 1080p60 on the Pi 4 stays
+at 57–58 on the GL wall, the same as the plane wall's 58.4; the decoder's own ceiling is 63–66 fps here.
+
+**Sound.** The presenter now measures how long after its time each frame is latched (`displayDelayMs` adds half a
+refresh): 107–117 ms latched, 115–126 ms with the half refresh, over several runs. First approach, the cue
+pipeline's latency set to that: `gst_pipeline_get_latency` read back 120.6–120.7 ms but the audio sink's own latency
+(`gst_base_sink_get_latency`) was 0 (a non-live pipeline does not distribute it), so it did nothing. Kept: the audio
+sink's `ts-offset` set to the display delay when the sink is built; read back through `autoaudiosink`: 114.7 ms on an
+HEVC cue, 125.8 ms on an AAC cue, the HDMI stream running throughout. Not measured acoustically.
+
+**First play after a restart.** Service restarted, then the first cue MPEG-2 (ISP route) and next HEVC: 59.3–61.2
+presented every half second from the first, no presenter skips, mixed 59.3–61.2 (the start-up overshoot of 69–76
+mixed a second is gone). Before (TEST_REPORT "GPU wall in the service"): the first H.264 lost 13 frames.
+
 ## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
 
 Pi 4 Model B Rev 1.5, KMS planes, live service; the full support set (94 files) rerun, then the slow-clip rows rerun

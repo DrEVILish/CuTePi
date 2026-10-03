@@ -14,6 +14,8 @@ import (
 func registerGLWallRoutes(rg *gin.RouterGroup) {
 	rg.GET("/debug/glwall", func(c *gin.Context) {
 		mixed, presented, layers, on := gsp.GLWallStats()
-		c.JSON(http.StatusOK, gin.H{"on": on, "mixed": mixed, "presented": presented, "layers": layers, "pool": gsp.GLPoolStats()})
+		delay, audio := gsp.GLAudioSync()
+		c.JSON(http.StatusOK, gin.H{"on": on, "mixed": mixed, "presented": presented, "layers": layers, "pool": gsp.GLPoolStats(),
+			"displayDelayMs": float64(delay.Microseconds()) / 1000, "cueAudioOffsetMs": float64(audio.Microseconds()) / 1000})
 	})
 }

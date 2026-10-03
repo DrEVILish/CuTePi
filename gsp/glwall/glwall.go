@@ -99,6 +99,19 @@ func (l *Layer) SetRect(x, y, w, h int, keepAspect bool) {
 	C.glwall_layer_set_rect(l.l, C.int(x), C.int(y), C.int(w), C.int(h), C.int(k))
 }
 
+// AlignAudio delays a cue's audio sink (ts-offset) by the wall's display
+// delay, so its sound plays when its picture is seen.
+func AlignAudio(sink *gst.Element) { C.glwall_align_audio((*C.GstElement)(sink.Unsafe())) }
+
+// AudioOffset reports the largest ts-offset on a pipeline's sinks other than
+// the video appsink (-1 when there is none).
+func AudioOffset(p *gst.Pipeline) time.Duration {
+	return time.Duration(C.glwall_audio_offset((*C.GstElement)(p.Unsafe())))
+}
+
+// DisplayDelay is how long after its time a frame is seen (mid-screen).
+func DisplayDelay() time.Duration { return time.Duration(C.glwall_display_delay()) }
+
 // UseSystemClock pins a cue pipeline to the system clock the wall runs on.
 func UseSystemClock(p *gst.Pipeline) { C.glwall_use_system_clock((*C.GstElement)(p.Unsafe())) }
 
