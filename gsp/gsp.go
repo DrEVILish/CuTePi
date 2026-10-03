@@ -114,6 +114,7 @@ func applyDecoderRanks() {
 func gstInit() {
 	initOnce.Do(func() {
 		applyDecoderRanks()
+		glEnv()
 		gst.Init(nil)
 		// Bus watches (EOS/error handling in watchAndPlay/watchWarm) only
 		// dispatch on a running GLib main loop — without it a finished cue

@@ -126,7 +126,13 @@ var (
 
 // OpenWall claims the display at startup (KMS wall only), before anything
 // else can become its DRM master.
-func OpenWall() { kmsWall() }
+func OpenWall() {
+	kmsWall()
+	if glWallEnabled() {
+		gstInit()
+		glWall()
+	}
+}
 
 // Layered reports whether cues get their own display layers (KMS wall):
 // crossfades, opacity and geometry need it.
@@ -134,7 +140,7 @@ func Layered() bool { return kmsWall() != nil }
 
 // kmsWall returns the open KMS display when the wall sink is kmssink.
 func kmsWall() *KMSWall {
-	if wallVideoSink() != "kmssink" {
+	if wallVideoSink() != "kmssink" && !glWallEnabled() {
 		return nil
 	}
 	wallOnce.Do(func() {
