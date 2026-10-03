@@ -30,6 +30,19 @@ round-robin into three imported ring buffers with `glFlush` and a fence per buff
 gcc -O2 -o lineartarget lineartarget.c $(pkg-config --cflags --libs libdrm egl glesv2)
 ```
 
+## linearsource
+
+`linearsource [card] [frames]`: the cost of getting a 1080p RGBA frame from system memory to V3D each frame: (a)
+`glTexSubImage2D` into an ordinary texture (what `glupload` does; V3D tiles it on the CPU in the GL thread), against
+(b) a `memcpy` into a mapped linear dumb buffer imported as an AB24 EGLImage texture. Prints CPU time per upload or
+copy and the time of a full-screen draw sampling it (with `glFinish`), and reads the drawn pixel back to check the new
+frame is the one sampled. Headless; no DRM master needed. Count V3D TFU jobs and buffer creations from outside with
+kprobes on `v3d_submit_tfu_ioctl` and `v3d_create_bo_ioctl`.
+
+```
+gcc -O2 -o linearsource linearsource.c $(pkg-config --cflags --libs libdrm egl glesv2)
+```
+
 ## mixbench
 
 `mixbench "<branch 0>" ["<branch 1>" ...]`: each branch is a gst-launch description ending in an element named

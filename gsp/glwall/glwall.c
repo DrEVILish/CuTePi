@@ -37,6 +37,7 @@
 #include <gst/video/video.h>
 #include <math.h>
 #include <poll.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <stdio.h>
@@ -153,7 +154,32 @@ struct glwall_layer {
    * is from + (to - from) * shape((T - start) / dur). */
   struct { int active, curve; double from, to; GstClockTime start, dur; } ramp;
   GstClockTime last_pts; /* last PTS pushed (wall running time) */
+  struct lin_set *lin;   /* RGBA frames copied into linear buffers (lin_*) */
 };
+
+/* ---- linear upload slots for RGBA layers ----------------------------------- */
+
+/* A moving layer whose frames arrive in system memory as RGBA (the alpha
+ * route) was uploaded by glupload on the GL thread, and V3D tiles such an
+ * upload on the CPU: 7 ms a 1080p frame (tools/gpu-wall/linearsource), during
+ * which the mixer cannot render, so the whole wall missed refreshes beside an
+ * alpha video. Instead the layer's pump copies each frame (4.4 ms, a plain
+ * memcpy, off the GL thread) into one of LIN_SLOTS linear dumb buffers on the
+ * display card, imported once as AB24 textures; the copy is wrapped as GL
+ * memory, so glupload passes it through. The GPU converts the linear buffer
+ * to its tiled layout per frame (a TFU job, ~2.4 ms of GPU time) instead of
+ * the CPU. A slot is free again when the mixer releases the buffer. Stills
+ * keep glupload: they are uploaded once, while a linear texture costs the TFU
+ * job on every output frame. */
+#define LIN_SLOTS 4
+
+typedef struct lin_set {
+  int w, h, refs; /* refs: the layer + each buffer out */
+  struct { uint32_t handle, pitch; int dmafd; unsigned char *map; size_t size; EGLImageKHR img; GLuint tex; int busy; } s[LIN_SLOTS];
+  GstVideoInfo vinfo;
+  GMutex lock;
+  GCond cond;
+} lin_set;
 
 static PFNEGLCREATESYNCKHRPROC p_mksync;
 static PFNEGLDESTROYSYNCKHRPROC p_rmsync;
@@ -702,6 +728,122 @@ static void pump_lateness(glwall_layer *l, GstBuffer *b, const GstSegment *seg, 
   l->last_pts = GST_BUFFER_PTS(b);
 }
 
+static void lin_gl_import(GstGLContext *ctx, gpointer d) {
+  lin_set *ls = d;
+  for (int i = 0; i < LIN_SLOTS; i++) {
+    EGLint ia[] = { EGL_WIDTH, ls->w, EGL_HEIGHT, ls->h, EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ABGR8888,
+      EGL_DMA_BUF_PLANE0_FD_EXT, ls->s[i].dmafd, EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0, EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)ls->s[i].pitch,
+      EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, 0, EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, 0, EGL_NONE };
+    ls->s[i].img = p_mkimg(W.dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, ia);
+    if (ls->s[i].img == EGL_NO_IMAGE_KHR) continue;
+    glGenTextures(1, &ls->s[i].tex); glBindTexture(GL_TEXTURE_2D, ls->s[i].tex); p_bindimg(GL_TEXTURE_2D, ls->s[i].img);
+    glBindTexture(GL_TEXTURE_2D, 0);
+  }
+}
+
+static void lin_gl_release(GstGLContext *ctx, gpointer d) {
+  lin_set *ls = d;
+  for (int i = 0; i < LIN_SLOTS; i++) {
+    if (ls->s[i].tex) glDeleteTextures(1, &ls->s[i].tex);
+    if (ls->s[i].img && ls->s[i].img != EGL_NO_IMAGE_KHR && p_rmimg) p_rmimg(W.dpy, ls->s[i].img);
+  }
+}
+
+static void lin_unref(lin_set *ls) {
+  g_mutex_lock(&ls->lock);
+  int last = --ls->refs == 0;
+  g_mutex_unlock(&ls->lock);
+  if (!last) return;
+  if (W.ctx) gst_gl_context_thread_add(W.ctx, lin_gl_release, ls);
+  for (int i = 0; i < LIN_SLOTS; i++) {
+    if (ls->s[i].map) munmap(ls->s[i].map, ls->s[i].size);
+    if (ls->s[i].dmafd > 0) close(ls->s[i].dmafd);
+    if (ls->s[i].handle) { struct drm_mode_destroy_dumb dd = { .handle = ls->s[i].handle }; drmIoctl(W.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd); }
+  }
+  g_mutex_clear(&ls->lock); g_cond_clear(&ls->cond);
+  g_free(ls);
+}
+
+/* The slots for a w x h RGBA layer, or NULL (then glupload uploads). */
+static lin_set *lin_new(GstCaps *caps) {
+  GstVideoInfo vi;
+  if (!W.ctx || !p_mkimg || !gst_video_info_from_caps(&vi, caps) || GST_VIDEO_INFO_FORMAT(&vi) != GST_VIDEO_FORMAT_RGBA) return NULL;
+  GstCapsFeatures *f = gst_caps_get_features(caps, 0);
+  if (f && !gst_caps_features_is_equal(f, GST_CAPS_FEATURES_MEMORY_SYSTEM_MEMORY)) return NULL;
+  lin_set *ls = g_new0(lin_set, 1);
+  ls->w = vi.width; ls->h = vi.height; ls->refs = 1;
+  g_mutex_init(&ls->lock); g_cond_init(&ls->cond);
+  for (int i = 0; i < LIN_SLOTS; i++) {
+    struct drm_mode_create_dumb cd = { .width = ls->w, .height = ls->h, .bpp = 32 };
+    struct drm_mode_map_dumb md = { 0 };
+    if (drmIoctl(W.fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd)) goto fail;
+    ls->s[i].handle = cd.handle; ls->s[i].pitch = cd.pitch; ls->s[i].size = cd.size;
+    md.handle = cd.handle;
+    if (drmIoctl(W.fd, DRM_IOCTL_MODE_MAP_DUMB, &md)) goto fail;
+    ls->s[i].map = mmap(NULL, cd.size, PROT_READ | PROT_WRITE, MAP_SHARED, W.fd, md.offset);
+    if (ls->s[i].map == MAP_FAILED) { ls->s[i].map = NULL; goto fail; }
+    if (drmPrimeHandleToFD(W.fd, cd.handle, DRM_CLOEXEC | DRM_RDWR, &ls->s[i].dmafd)) goto fail;
+  }
+  gst_gl_context_thread_add(W.ctx, lin_gl_import, ls);
+  for (int i = 0; i < LIN_SLOTS; i++) if (!ls->s[i].tex) goto fail;
+  /* What the slots are as GL memory: RGBA, 2D, the dumb buffer's pitch. */
+  gst_video_info_set_format(&ls->vinfo, GST_VIDEO_FORMAT_RGBA, ls->w, ls->h);
+  ls->vinfo.fps_n = vi.fps_n; ls->vinfo.fps_d = vi.fps_d; ls->vinfo.par_n = vi.par_n; ls->vinfo.par_d = vi.par_d;
+  return ls;
+fail:
+  GST_WARNING("glwall: linear upload slots unavailable: %s", g_strerror(errno));
+  lin_unref(ls);
+  return NULL;
+}
+
+typedef struct { lin_set *ls; int i; } lin_ref;
+
+static void lin_slot_done(gpointer d) {
+  lin_ref *r = d;
+  g_mutex_lock(&r->ls->lock);
+  r->ls->s[r->i].busy = 0;
+  g_cond_broadcast(&r->ls->cond);
+  g_mutex_unlock(&r->ls->lock);
+  lin_unref(r->ls);
+  g_free(r);
+}
+
+/* Copy the frame in b (RGBA, system memory) into a free slot and return a
+ * GL-memory buffer wrapping it with b's timing; NULL if no slot came free
+ * within 100 ms (the frame is dropped) or the copy failed. */
+static GstBuffer *lin_copy(glwall_layer *l, GstBuffer *b, GstCaps *caps) {
+  lin_set *ls = l->lin;
+  GstVideoInfo vi; GstVideoFrame fr;
+  if (!gst_video_info_from_caps(&vi, caps) || vi.width != ls->w || vi.height != ls->h) return NULL;
+  gint64 until = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
+  int i = -1;
+  g_mutex_lock(&ls->lock);
+  while (i < 0) {
+    for (int k = 0; k < LIN_SLOTS; k++) if (!ls->s[k].busy) { i = k; break; }
+    if (i < 0 && !g_cond_wait_until(&ls->cond, &ls->lock, until)) break;
+  }
+  if (i >= 0) { ls->s[i].busy = 1; ls->refs++; }
+  g_mutex_unlock(&ls->lock);
+  if (i < 0) return NULL;
+  lin_ref *r = g_new0(lin_ref, 1); r->ls = ls; r->i = i;
+  if (!gst_video_frame_map(&fr, &vi, b, GST_MAP_READ)) { lin_slot_done(r); return NULL; }
+  const guint8 *src = GST_VIDEO_FRAME_PLANE_DATA(&fr, 0);
+  int sstride = GST_VIDEO_FRAME_PLANE_STRIDE(&fr, 0), row = ls->w * 4;
+  for (int y = 0; y < ls->h; y++) memcpy(ls->s[i].map + (size_t)y * ls->s[i].pitch, src + (size_t)y * sstride, row);
+  gst_video_frame_unmap(&fr);
+  GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_gl_handle(W.ctx, NULL, &ls->vinfo, 0, NULL,
+    GST_GL_TEXTURE_TARGET_2D, GST_GL_RGBA, GUINT_TO_POINTER(ls->s[i].tex), r, lin_slot_done);
+  GstBuffer *out = gst_buffer_new();
+  gpointer wd[1] = { GUINT_TO_POINTER(ls->s[i].tex) };
+  if (!gst_gl_memory_setup_buffer(gst_gl_memory_allocator_get_default(W.ctx), out, params, NULL, wd, 1)) {
+    gst_gl_allocation_params_free((GstGLAllocationParams *)params); gst_buffer_unref(out);
+    return NULL; /* the params' notify has released the slot */
+  }
+  gst_gl_allocation_params_free((GstGLAllocationParams *)params);
+  gst_buffer_copy_into(out, b, GST_BUFFER_COPY_TIMESTAMPS | GST_BUFFER_COPY_FLAGS, 0, -1);
+  return out;
+}
+
 /* The mixer needs each frame's start and end: a frame without a duration
  * makes it wait for the next frame to learn where this one ends, and a
  * still never sends one, so the whole wall stopped (a BMP or GIF still, one
@@ -733,8 +875,15 @@ static gpointer pump(gpointer data) {
     GstSample *s = gst_app_sink_try_pull_sample(GST_APP_SINK(l->appsink), 200 * GST_MSECOND);
     if (!s) { if (gst_app_sink_is_eos(GST_APP_SINK(l->appsink))) break; continue; }
     l->pulled++;
-    GstBuffer *b = gst_buffer_ref(gst_sample_get_buffer(s));
-    const GstSegment *seg = gst_sample_get_segment(s);
+    GstBuffer *b;
+    if (l->lin) {
+      b = lin_copy(l, gst_sample_get_buffer(s), gst_sample_get_caps(s));
+      if (!b) { gst_sample_unref(s); continue; }
+    } else {
+      b = gst_buffer_ref(gst_sample_get_buffer(s));
+    }
+    GstSegment segc; const GstSegment *seg = NULL;
+    if (gst_sample_get_segment(s)) { gst_segment_copy_into(gst_sample_get_segment(s), &segc); seg = &segc; }
     GstClockTime pts = GST_BUFFER_PTS(b);
     gst_sample_unref(s);
     b = gst_buffer_make_writable(b);
@@ -767,6 +916,11 @@ glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, 
     gint fn = 0, fd = 1;
     GstStructure *st = gst_caps_get_structure(lc, 0);
     l->still = gst_structure_get_fraction(st, "framerate", &fn, &fd) && fn == 0;
+  }
+  if (!l->still && (l->lin = lin_new(lc)) != NULL) {
+    /* The layer's frames arrive as GL memory (the slots), not RGBA in RAM. */
+    gst_caps_set_features(lc, 0, gst_caps_features_new(GST_CAPS_FEATURE_MEMORY_GL_MEMORY, NULL));
+    gst_caps_set_simple(lc, "texture-target", G_TYPE_STRING, "2D", NULL);
   }
   l->appsink = gst_object_ref(appsink);
   l->cue = GST_ELEMENT(gst_element_get_parent(appsink)); /* ref'd; released in free */
@@ -869,6 +1023,7 @@ void glwall_layer_free(glwall_layer *l) {
     if (GST_OBJECT_PARENT(els[i]) == GST_OBJECT(W.wall)) gst_bin_remove(GST_BIN(W.wall), els[i]);
     else gst_object_unref(els[i]);
   }
+  if (l->lin) lin_unref(l->lin); /* the slots go when the mixer has released the last one */
   if (l->cue) gst_object_unref(l->cue);
   if (l->appsink) gst_object_unref(l->appsink);
   g_free(l);

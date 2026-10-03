@@ -613,9 +613,16 @@ wall pipeline (always running)                                    ▼
   threads (GL thread, mixer output thread, pull, presenter, layer pumps) starved: the whole wall missed refreshes,
   every layer with it (ProRes 4444: 49 presented a second, about 40 skipped). They run at nice −10 (about ten times a
   decoder thread's share, no real-time scheduling): the same file then presents 59–61 with 0–1 skips, and fades on the
-  ISP route keep 60 steps a second at any decode rate. Still open: the RGBA upload of an alpha layer is CPU work on
-  the GL thread itself (V3D tiles system-memory textures on the CPU), so alpha video at 1080p still costs the wall
-  refreshes (fades 36–56 steps a second); it needs the upload off the mixer's thread or out of system memory.
+  ISP route keep 60 steps a second at any decode rate.
+- **Alpha frames are copied, not uploaded, off the GL thread.** A moving RGBA layer (the alpha route) was uploaded
+  by `glupload` on the GL thread, where V3D tiles a system-memory upload on the CPU (7.2 ms a 1080p frame,
+  `tools/gpu-wall/linearsource`), and the mixer could not render meanwhile: beside a 25 fps alpha GIF the wall
+  presented 35–39 frames a second. Now each such layer has four linear dumb buffers on the display card, imported
+  once as AB24 textures; its pump copies every frame into a free one (a plain `memcpy`, 4.4 ms, on the pump's thread)
+  and pushes it as GL memory, so `glupload` passes it through; a buffer is free again when the mixer releases it. The
+  GPU converts the linear buffer to its tiled layout once per output frame (a TFU job, about 2.4 ms of GPU time), so
+  stills keep `glupload` (uploaded once). Result: the wall presents 59–61 beside the alpha GIF, which shows all 25 of
+  its frames, and every alpha file fades at 60 steps a second.
 - **One owner frees a layer.** Stop (which keeps the cue for a resume) and the cue's teardown can run at once; the
   layer is taken out of its record under the lock, so only one of them frees it (both freeing it released its mixer
   pad twice and crashed the service).
@@ -653,8 +660,8 @@ Since then (same day): the support test measures the GL wall per presented frame
 the decoder told through QoS, frames without timing no longer stall the wall, alpha is taken from the import
 metadata, and a fade-in waits for its layer. The codec batch on the GL wall is in the README beside the plane wall's.
 Fades are now stepped per output frame and the wall's threads run ahead of the decoders (above). Open on the GL
-wall: H.264 1080p60 (memory bandwidth, above), the alpha upload on the GL thread, rotation/mirror and crop, warm
-preroll, the audio offset, and the first-play loss after the service starts.
+wall: H.264 1080p60 (memory bandwidth, above), rotation/mirror and crop, warm preroll, the audio offset, and the
+first-play loss after the service starts. Alpha layers now copy their frames off the GL thread (above).
 
 **Build order.** Each step lands only once measured on the Pi (frame rate traced per refresh, as in TEST_REPORT O1),
 with the KMS plane wall as the default until the GPU wall covers everything it does:

@@ -927,6 +927,40 @@ The alpha route is what remains: its RGBA frames are uploaded from system memory
 an upload on the CPU, so each 1080p frame holds the mixer up (the more frames, the worse: the 25 fps GIF is the
 lowest). (The support set's `prores_4444` is encoded `yuva444p10le` and so has an alpha channel, even if opaque.)
 
+## GPU wall: alpha frames copied into linear buffers off the GL thread (2026-10-03)
+
+`tools/gpu-wall/linearsource` (headless, beside the running service), one 1080p RGBA frame a frame for 300 frames:
+
+| Route | CPU per frame (thread) | Draw sampling it | V3D jobs (kprobes) |
+|---|---|---|---|
+| `glTexSubImage2D` into a texture (what `glupload` does) | 7.21 ms, worst 10.4 (the GL thread) | 6.63 ms | – |
+| `memcpy` into a mapped linear dumb buffer imported as the texture | 4.42 ms, worst 8.4 (any thread) | 9.02 ms | one TFU job a frame (300) |
+
+Both read back the frame just written (no stale frames). Mesa converts the linear buffer with the TFU on every draw,
+so the copy route costs about 2.4 ms more GPU time a frame and is used only for moving layers.
+
+In the service (CUTEPI_WALL=gl), each moving RGBA layer now gets four such buffers and its pump copies into them
+(DESIGN §6.1.1). Animated alpha GIF, through the probe: before, the wall presented 35–39 a second with 11–15 skips
+every half second; after, 59–61 presented, 0–1 skips, the GIF's 25 frames a second all shown, no lag.
+
+Alpha files through `support.py` (fade steps in / out; fps steady):
+
+| File | Before (GL upload) | After (linear copy) |
+|---|---|---|
+| GIF animated alpha | 37 / 37 steps, 17.3 fps | 60 / 60, 25.1 fps: Supported |
+| GIF, PNG, TIFF, WebP alpha stills | 59.9–60.0 | 59.9–60.1: Supported (stills keep `glupload`) |
+| PNG in MOV / MKV alpha | 34.6 / 51.3, 29.7 fps | 60 / 60, 32.9 / 31.8 fps |
+| HAP alpha MOV | 32.8 / 32.8, 10.4 fps | 59.8 / 59.8, 37 fps |
+| FFV1 alpha MKV | 38.3 / 38.3, 19.4 fps | 60 / 60, 21.5 fps |
+| ProRes 4444 alpha MOV | 34.7 / 45.4, 15 fps | 60 / 60, 19.1 fps |
+| VP9 alpha MKV | 32.7 / 32.7, 13.7 fps | 60.1 / 60.1, 14.9 fps |
+| QuickTime Animation alpha MOV | 34.2 / 34.2, 15 fps | 59.9 / 59.9, 4.6 fps (varies run to run) |
+
+Alpha video is now bound by its software decoders, not by the wall. Lifetime: the service's DMA-buffer descriptors
+went 8 → 12 on every play of an alpha cue and back to 8 on every stop (six rounds), so the buffers are released;
+50 random play / stop / ESC fade / crossfade rounds over alpha and opaque files: no crash, no GStreamer assertion, no
+ring exhaustion.
+
 ## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
 
 Pi 4 Model B Rev 1.5, KMS planes, live service; the full support set (94 files) rerun, then the slow-clip rows rerun
