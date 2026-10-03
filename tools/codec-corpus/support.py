@@ -165,7 +165,16 @@ def tr(p):
         return f.read()
 
 
+_tracing_was = None
+
+
 def probes_on():
+    # Recording must be on: another tool may have left tracing_on at 0, and
+    # then every file failed with "no vblank events traced". The previous
+    # value is put back by probes_off.
+    global _tracing_was
+    _tracing_was = tr("tracing_on").strip()
+    tw("tracing_on", "1")
     for p in PROBES:
         tw("kprobe_events", p + "\n", "a")
     tw("trace_clock", "mono")
@@ -184,6 +193,8 @@ def probes_off():
         except OSError:
             pass
     tw("trace_clock", "local")
+    if _tracing_was in ("0", "1"):
+        tw("tracing_on", _tracing_was)
 
 
 def trace_start():

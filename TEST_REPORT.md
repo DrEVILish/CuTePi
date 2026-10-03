@@ -1019,6 +1019,28 @@ names what reaches the appsink), and a zero-length ramp started now gave a NaN l
 Suite: `go test ./...` green twice; in one of three full runs `TestWarmVideoPrewarmAndRelink` failed ("no slot armed
 after video Warm") with packages running in parallel; it passed 3/3 alone and 3/3 with the whole `gsp` package.
 
+## Regression check after the GPU-wall work (2026-10-03)
+
+**`TestWarmVideoPrewarmAndRelink` flake: older than this work, fixed in the test.** Under four busy CPU loops,
+15 runs of the warm tests: 1 failure on the current code, 7 on `5ec128b` (before the GPU wall entered the service).
+Instrumented: every failure had the previous test's `warm-noop.wav` still current and the generation moving by one
+during this test's `Warm` (its end-of-stream teardown, `clearIfCurrent`), so `Warm` dropped its slot as stale. The
+test now stops what the previous one left playing and waits until the generation is still for 300 ms
+(`quiescePlayback`): 40 runs under the same load, all pass. Product note, not changed: a prewarm being built at
+the moment the current clip ends naturally is dropped (the next GO is a cold start), while an already-armed slot
+survives a natural end.
+
+**`support.py` and `tracing_on`.** A default-path check failed every video and image file with "no vblank events
+traced": kprobe runs during the GPU-wall work had left `/sys/kernel/tracing/tracing_on` at 0, and `support.py`
+assumed the default. It now switches recording on for its run and restores the previous value; verified by starting
+from 0 (it ran, then left 0), after which the kernel default (1) was restored.
+
+**Default (plane) path, against its README rows** (measured 2026-10-01/02): H.264 High MOV 59.6 steady (58.5), MPEG-2
+60.0 (58.6), VP9 41.6 (35.1), GIF animated 24.9 (25.1), PNG / PNG alpha / WebP alpha stills fade 55–57.8 steps (55–57.8),
+alpha still reaching the plane as AB24 with Coverage blending, AAC running. HEVC fades 41–43 in / 29–32 out against 52
+/ 52.2 in the README, but a build of `5ec128b` installed in its place gave the same 41–43 / 28.9–32.2 (three runs each),
+so this is not from this work (HEVC on the plane wall is CPU-bound at 1–2 fps).
+
 ## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
 
 Pi 4 Model B Rev 1.5, KMS planes, live service; the full support set (94 files) rerun, then the slow-clip rows rerun

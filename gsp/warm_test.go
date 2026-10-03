@@ -189,6 +189,11 @@ func TestWarmVideoPrewarmAndRelink(t *testing.T) {
 	}
 
 	t.Setenv("CUTEPI_WALL_SINK", "fakesink") // headless env: no display sink
+	// The previous test leaves its clip playing; its natural end (EOS
+	// teardown bumps the generation) landing during this Warm's preroll made
+	// Warm treat its slot as stale and arm nothing (flaky under load:
+	// "no slot armed after video Warm").
+	quiescePlayback(t)
 	// Hold: both sinks are sync=false fakesinks, so the 2s fixture would
 	// EOS-teardown before the assertions below (now that a GLib main loop
 	// actually dispatches bus messages). Held, the end parks the last
@@ -256,6 +261,26 @@ func runCmd(name string, args ...string) error {
 
 // LoadOpts comparability is load-bearing: warm activation compares the
 // whole opts struct. A pointer/list field would silently break equality.
+// quiescePlayback stops whatever an earlier test left playing and waits
+// until the playback generation has not moved for 300 ms (no teardown or
+// fade still in flight), so a test's own Warm/Load sees only its own
+// decisions.
+func quiescePlayback(t *testing.T) {
+	t.Helper()
+	Stop()
+	deadline := time.Now().Add(3 * time.Second)
+	last, since := Generation(), time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		if g := Generation(); g != last {
+			last, since = g, time.Now()
+		} else if time.Since(since) >= 300*time.Millisecond {
+			return
+		}
+	}
+	t.Logf("playback generation still moving after 3 s")
+}
+
 func TestWarmOptsEquality(t *testing.T) {
 	if (LoadOpts{Volume: 6} != LoadOpts{Volume: 6}) {
 		t.Fatalf("LoadOpts lost comparability — warm equality relies on it")
