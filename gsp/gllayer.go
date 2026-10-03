@@ -262,6 +262,36 @@ func glShow(p *gst.Pipeline, level float64) {
 	l.layer.SetAlpha(l.opacity * level)
 }
 
+// glCurve maps a cue's fade curve name to the wall's.
+func glCurve(curve string) glwall.Curve {
+	switch curve {
+	case "smooth":
+		return glwall.CurveSmooth
+	case "log":
+		return glwall.CurveLog
+	case "exp":
+		return glwall.CurveExp
+	}
+	return glwall.CurveLinear
+}
+
+// glRamp hands a fade to the wall: level from -> to over dur along curve,
+// started at start (in the past when a fade has been running). The wall
+// evaluates it for each output frame, so the fade steps every refresh.
+// Calling it again with the same fade is harmless (fade loops re-send it
+// each tick, which also re-anchors a fade-in that was held).
+func glRamp(p *gst.Pipeline, from, to float64, start time.Time, dur time.Duration, curve string) {
+	glMu.Lock()
+	defer glMu.Unlock()
+	l := glLayers[p]
+	if l == nil || l.layer == nil || !l.visible {
+		return
+	}
+	since := time.Since(start)
+	l.level = from + (to-from)*fadeShape(curve, float64(since)/float64(dur))
+	l.layer.Ramp(l.opacity*from, l.opacity*to, glwall.Now()-uint64(since), dur, glCurve(curve))
+}
+
 // glOnWall reports whether p's layer is attached and shown: a fade-in's
 // clock waits for it (a cue's first frame can reach the wall well after
 // Play, e.g. a still through decodebin3, and a fade that ran before then

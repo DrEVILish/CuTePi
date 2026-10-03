@@ -870,6 +870,63 @@ on the plane wall. It is not a superset; what changed against the first GL batch
 
 
 
+## GPU wall: fades stepped per output frame, wall threads ahead of the decoders (2026-10-03)
+
+**Fades as ramps.** Each fade is handed to the wall as a ramp (from, to, start on the wall's clock, duration, curve)
+and the mixer sets each fading layer's alpha for each output frame's own clock time as it selects that frame's inputs
+(DESIGN §6.1.1). Measured with the presented-frame counters (`support.py`, GL wall), steps per second in / out:
+
+| File | Go timer (before) | Ramp |
+|---|---|---|
+| PNG still | 58.8 / 59.9 | 60.0 / 60.0 |
+| JPEG still | 57.3 / 59.7 | 60.0 / 60.0 |
+| TIFF with alpha | 58.9 / 60.1 | 59.9 / 59.9 |
+| HEVC | 58.7 / 58.7 | 59.6–59.8 / 59.6–59.8 |
+
+The fade-out window now starts at the first opacity step seen on screen: a ramp is evaluated at each frame's own time
+and a frame is shown about 90 ms later, so the steps reach the screen 116–153 ms after `POST /api/fadeOut` (the
+request itself, the wall's latency and the 30 ms polling), and a window starting 50 ms after the request counted ~40
+ms of a fade that had not reached the screen yet (57.7–57.8 for every file, the first run with ramps). The fade
+in's window already started at the first frame shown. After a fade-out the teardown waits 64 ms plus the wall's delay
+(100 ms) so the last steps are shown.
+
+**Wall threads at nice −10.** With ramps, the CPU-heavy files still showed 45–48 steps: the wall itself was missing
+refreshes. ProRes 4444 (avdec_prores on all four cores) through the probe: mixed in bursts up to 109 a second,
+presented 49 a second, 20–26 presenter skips every half second, no frame without its mixer snapshot. The wall's
+threads were starved by the decoder's. With the GL thread, the mixer's output thread, the pull and presenter threads
+and the layer pumps at nice −10 (`ps -L` shows `gstglcontext`, `m:src`, `glwall-present`, `glwall-pull` at −10): 59–61
+presented, 0–1 skips, on the same file.
+
+| File (route) | Fade steps in / out, ramps only | + wall threads at nice −10 |
+|---|---|---|
+| CineForm 422 MOV (ISP) | – | 60.1 / 60.1 |
+| H.264 High 10 MOV (software, ISP) | – | 60.1 / 60.1 |
+| ProRes LT MOV (ISP) | – | 60.0 / 60.0 |
+| MPEG-2 MKV (ISP) | – | 60.0 / 60.0, 60 fps: Supported |
+| ProRes 4444 MOV (alpha route) | 48.2 / 48.2 | 47.3 / 55.9 |
+| QuickTime Animation alpha MOV (alpha route) | 45.8 / 45.8 | 49.9 / 49.9 |
+| Animated GIF with alpha (alpha route) | – | 36.1 / 36.1 |
+
+**QoS only below 0.5 s of lag.** The full batch on this build (41 of 95 Supported) had DNxHR HQ at 2.5 fps where
+the previous one had 55.8. A 9 s probe showed the decoder dropping nearly everything (1–2 frames shown a second, lag
+growing to 4 s): intra-only decoders cannot skip decoding on QoS, only drop decoded frames, so a decoder at about real
+time never catches up once behind. QoS is now sent only while the lag is under 0.5 s; beyond that frames are shown as
+they come. Probes after the change: DNxHR HQ 1.1 s behind at 3 s, decoding 62–77 a second, on time at 60 from 7 s;
+VP9 on time at 60 from 7.6 s; ProRes 422 35–40 fps, 0.1 s behind. The same batch's ProRes 4444 alpha MKV row was a test
+artifact: its upload took a minute (import workers busy), Play returned after a 3 s preroll, and the test timed its
+windows from before the call; GPU-wall windows are now timed from when Play returns. Animated images may now miss one
+frame per 0.9 s window, as video may (59 of 60): the GIF at 25 fps measured 24.2 against a 24.5 threshold, one frame.
+
+**Full batch after the QoS limit** (README GPU-wall table): 42 of 95 Supported (plane wall 17). Slow decoders now
+show many more frames in step with the sound: ProRes 4444 14–15 fps (0.9 before), AV1 20.7 (0.6), CineForm 422
+11.5–12.2 (0.3), H.264 High 10 11–18 (0.9), VP9 40.8 (5.8), DNxHR HQ 60 steady; fades on the ISP route 59.8–60.1
+steps. H.264 High 57.8–58.4 (with the wall's threads ahead of everything else; 37–51 two batches ago), still short
+of 59. QuickTime Animation varies between runs (9.7 here, 38.3 before).
+
+The alpha route is what remains: its RGBA frames are uploaded from system memory on the GL thread, and V3D tiles such
+an upload on the CPU, so each 1080p frame holds the mixer up (the more frames, the worse: the 25 fps GIF is the
+lowest). (The support set's `prores_4444` is encoded `yuva444p10le` and so has an alpha channel, even if opaque.)
+
 ## Codec support round 2: straight alpha, animated images, fade pacing (2026-10-02)
 
 Pi 4 Model B Rev 1.5, KMS planes, live service; the full support set (94 files) rerun, then the slow-clip rows rerun

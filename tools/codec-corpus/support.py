@@ -11,8 +11,9 @@ kernel, outside the service. A codec+container is listed **Supported** only if:
          opacity >= 59 times a second (a smooth fade at the display rate);
   image  a 1080p still whose fades change the opacity >= 59 times a second;
          an animated image (GIF, APNG, WebP) also presents every one of its
-         frames (>= 98 % of the file's own frame rate) through the fades and
-         steady play, since GIF timing cannot express 60 fps;
+         frames (all but one per measuring window, as 59 of 60 for video)
+         through the fades and steady play, since GIF timing cannot express
+         60 fps;
   alpha  (files named *alpha*, video or image) also: the picture reaches the
          display plane in a pixel format with an alpha channel, blended as
          straight (non-premultiplied) alpha ("pixel blend mode" Coverage),
@@ -482,7 +483,9 @@ def run(path, mdl):
             t_play = time.monotonic()
             call("POST", "/api/cue/%d/play" % pos)
             samples = []
-            t_due = t_play + FADE_S + STEADY_S   # when the fade out is triggered
+            # Play returns once the cue has prerolled (seconds for a heavy
+            # file); the steady window must not shrink by that.
+            t_due = time.monotonic() + FADE_S + STEADY_S   # when the fade out is triggered
             t_fo = None
             while time.monotonic() < t_due + FADE_S + 0.3:
                 if t_fo is None and time.monotonic() >= t_due:
@@ -501,8 +504,16 @@ def run(path, mdl):
             # The fade in starts with the first frame shown; both fade windows
             # leave 50 ms at each end, so no frame before or after a fade is
             # counted as a missing step.
+            # The fade out reaches the screen one wall latency (~90 ms) after
+            # it is asked for: the wall steps it per output frame from each
+            # frame's own time, and a frame is shown that long after it. Its
+            # window starts at the first opacity step seen on screen, as the
+            # fade in's starts at the first frame shown.
+            st_fo = next((smp[2] for smp in samples if smp[0] >= t_fo), None)
+            t_fo_seen = next((smp[0] for smp in samples if smp[0] >= t_fo and st_fo is not None and smp[2] > st_fo), t_fo)
+            res["fade_out_delay_ms"] = round((t_fo_seen - t_fo) * 1000)
             win = {"fade_in": (t_first + 0.05, t_first + FADE_S - 0.05), "steady": (t_first + FADE_S + 0.3, t_fo - 0.1),
-                   "fade_out": (t_fo + 0.05, t_fo + FADE_S - 0.05)}
+                   "fade_out": (t_fo_seen + 0.05, t_fo_seen + FADE_S - 0.05)}
             hz = gl_rate(samples, t_first, samples[-1][0] + 0.001, 3)
             res["refresh_hz"] = round(hz, 2) if hz is not None else None
             for w, (lo, hi) in win.items():
@@ -555,7 +566,10 @@ def run(path, mdl):
         else:
             # Video: a new frame every refresh. Animated images: every frame of
             # the file, at its own rate (GIF cannot express 60 fps).
-            need = MIN_FPS if not animated else 0.98 * (src_fps or 60)
+            # Animated images: every frame of the file, less one per window (as
+            # 59 of 60 for video): at 25 fps a 0.9 s window holds ~22 frames,
+            # so one frame either side moves the rate by 1.1 fps.
+            need = MIN_FPS if not animated else (src_fps or 60) - 1 / (FADE_S - 0.1)
             res["need_fps"] = round(need, 1)
             ok = smooth and all((res[w + "_fps"] or 0) >= need for w in win)
         if is_alpha and GL:

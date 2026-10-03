@@ -582,7 +582,11 @@ wall pipeline (always running)                                    ▼
   so a full report on every frame made the decoder drop nearly everything (0–2 frames a second); showing late frames
   without any report kept the picture moving but let it drift seconds behind the sound. Measured with the halved,
   rate-limited report: DNxHR HQ 60 fps on time (0 before; 13.7 on the plane wall), VP9 back on time within 1.5 s then
-  60, ProRes 422 35–40 fps within 0.1 s of the sound.
+  60, ProRes 422 35–40 fps within 0.1 s of the sound. The report is sent only while the frame is less than 0.5 s late: an intra-only decoder (DNxHR,
+  ProRes) cannot skip decoding, only drop frames after decoding them, so one running at about real time never gets
+  ahead and then drops nearly every frame (DNxHR HQ fell into that: 1–2 frames a second, 4 s behind). Beyond 0.5 s
+  each frame is shown as it comes, the picture moves at the decoder's speed, and a decoder with any headroom catches
+  up (DNxHR HQ: 1.1 s behind, decoding 62–77 a second, on time at 60 after 7 s).
 - **Every frame has a start and an end.** A frame without a duration makes the mixer wait for the next one to learn
   where it ends; a still sends no next one, so a BMP or GIF still (one buffer, no duration, framerate 0/1) stopped the
   whole wall. The bridge gives a frame without a timestamp the current time, a still a duration of a day (it lasts
@@ -595,6 +599,23 @@ wall pipeline (always running)                                    ▼
   format, except GIF. Alpha sources take the RGBA upload route; the ISP and the hardware decoders' formats
   have no alpha. That route is a CPU upload (V3D tiles system-memory textures on the CPU): stills fade at 60 steps,
   but alpha video is slow (QuickTime Animation 2 fps, HAP 8.5, against 42.8 and 18.1 on the plane wall). Open.
+- **Fades are stepped per output frame (2026-10-03).** A fade (fade-in, ESC fade-out, the outgoing cue of a
+  crossfade) is handed to the wall whole: from and to level, start time on the wall's clock, duration and curve. As
+  the mixer selects the inputs of each output frame (`samples-selected`, before it renders) it sets each fading
+  layer's alpha for that frame's own clock time (`base time + running time`), so the opacity changes on every refresh
+  however busy the CPU is. The Go fade loops still drive the sound and re-send the same ramp each tick (harmless; a
+  held fade-in, paused or not yet on the wall, is a plain level instead). A set level ends a ramp. Before, a Go timer
+  wrote levels every 8–10 ms and a late tick repeated a level on a frame (57–59 steps a second on stills, 15–35 beside
+  a busy software decoder). Because a frame is shown about 90 ms after its time (the mixer's latency and the wall
+  sink's wait), a fade reaches the screen that much after it is asked for, in step with the video it fades; teardown
+  after a fade-out waits 64 ms plus that delay (`fadeLand`).
+- **The wall's threads run ahead of the decoders.** A software decoder keeps all four cores busy, and the wall's own
+  threads (GL thread, mixer output thread, pull, presenter, layer pumps) starved: the whole wall missed refreshes,
+  every layer with it (ProRes 4444: 49 presented a second, about 40 skipped). They run at nice −10 (about ten times a
+  decoder thread's share, no real-time scheduling): the same file then presents 59–61 with 0–1 skips, and fades on the
+  ISP route keep 60 steps a second at any decode rate. Still open: the RGBA upload of an alpha layer is CPU work on
+  the GL thread itself (V3D tiles system-memory textures on the CPU), so alpha video at 1080p still costs the wall
+  refreshes (fades 36–56 steps a second); it needs the upload off the mixer's thread or out of system memory.
 - **One owner frees a layer.** Stop (which keeps the cue for a resume) and the cue's teardown can run at once; the
   layer is taken out of its record under the lock, so only one of them frees it (both freeing it released its mixer
   pad twice and crashed the service).
@@ -631,10 +652,9 @@ import metadata, measuring stills and test patterns, and `support.py` on the GL 
 Since then (same day): the support test measures the GL wall per presented frame (above), late frames are shown and
 the decoder told through QoS, frames without timing no longer stall the wall, alpha is taken from the import
 metadata, and a fade-in waits for its layer. The codec batch on the GL wall is in the README beside the plane wall's.
-Open on the GL wall: H.264 1080p60 (memory bandwidth, above), alpha video speed, fades driven per output frame from a
-ramp in C (the Go fade timer misses a refresh under CPU load: 15–57 steps a second while a software decoder uses all
-four cores, and an occasional 58.9 on a still), rotation/mirror and crop, warm preroll, the audio offset, and the
-first-play loss after the service starts.
+Fades are now stepped per output frame and the wall's threads run ahead of the decoders (above). Open on the GL
+wall: H.264 1080p60 (memory bandwidth, above), the alpha upload on the GL thread, rotation/mirror and crop, warm
+preroll, the audio offset, and the first-play loss after the service starts.
 
 **Build order.** Each step lands only once measured on the Pi (frame rate traced per refresh, as in TEST_REPORT O1),
 with the KMS plane wall as the default until the GPU wall covers everything it does:

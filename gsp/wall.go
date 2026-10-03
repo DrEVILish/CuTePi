@@ -326,6 +326,21 @@ func restackLocked(w *KMSWall) {
 	}
 }
 
+// setLayerRamp applies a fade in progress: level from -> to over dur along
+// curve, started at start. The GPU wall evaluates it for every output frame;
+// the plane wall takes the level for now.
+func setLayerRamp(p *gst.Pipeline, from, to float64, start time.Time, dur time.Duration, curve string) {
+	if glOpen {
+		glRamp(p, from, to, start, dur, curve)
+		return
+	}
+	t := 1.0
+	if dur > 0 {
+		t = math.Min(1, float64(time.Since(start))/float64(dur))
+	}
+	setLayerLevel(p, from+(to-from)*fadeShape(curve, t))
+}
+
 // setLayerLevel applies a fade level (0..1) to p's layer: alpha = opacity x level.
 func setLayerLevel(p *gst.Pipeline, level float64) {
 	if glOpen {
@@ -438,12 +453,12 @@ func fadeOutgoing(o *outgoing, durMs int) {
 		}
 		t := math.Min(1, float64(time.Since(start))/float64(total))
 		k := 1 - fadeShape(o.curve, t)
-		setLayerLevel(o.p, o.level*k)
+		setLayerRamp(o.p, o.level, 0, start, total, o.curve)
 		if o.volumeEl != nil {
 			o.volumeEl.Set("volume", o.gain*k)
 		}
 		if t >= 1 {
-			time.Sleep(alphaLand) // let the last alpha land before teardown
+			time.Sleep(fadeLand()) // let the last alpha land before teardown
 			return
 		}
 	}
@@ -490,6 +505,20 @@ const fadeTick = 8 * time.Millisecond
 // the layer down, so the final alpha (0) is on screen first: the writer may
 // be mid-step (up to two refreshes) plus the commit's own vblank wait.
 const alphaLand = 64 * time.Millisecond
+
+// glWallDelay is how much later the GPU wall shows a frame than its time:
+// the mixer's latency and the wall sink's wait (measured 87 ms). A fade
+// there is stepped per output frame from each frame's own time, so its last
+// step reaches the screen this much after the fade ends.
+const glWallDelay = 100 * time.Millisecond
+
+// fadeLand is how long to wait after a fade's last level before teardown.
+func fadeLand() time.Duration {
+	if glOpen {
+		return alphaLand + glWallDelay
+	}
+	return alphaLand
+}
 
 // wallRect resolves a cue's geometry (x, y, width, height; each "" for the
 // default, "N" or "Npx" for pixels, or "N%" of the display) to a rectangle.

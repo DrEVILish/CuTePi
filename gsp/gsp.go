@@ -44,6 +44,10 @@ type manager struct {
 	mute         bool
 	panEl        *gst.Element
 	fadeIn       int
+	// fadeRamp is the picture fade in progress (fadeIn, FadeAndStop), so
+	// applyBrightness can hand the whole fade to the GPU wall; nil when the
+	// level is simply set.
+	fadeRamp     *levelRamp
 	fadeCurve    string
 	fitMode      string  // fit|stretch frame fitting ("", fit = letterbox)
 	rotation     int     // 0|90|180|270 clockwise degrees
@@ -1178,17 +1182,28 @@ func FadeAndStop(durMs int) {
 			return
 		}
 		mgr.fadeLevel = startLevel * (1 - fadeShape(fadeCurve, t))
+		mgr.fadeRamp = &levelRamp{from: startLevel, to: 0, start: start, dur: total, curve: fadeCurve}
 		mgr.applyGain()
 		mgr.applyBrightness()
+		mgr.fadeRamp = nil
 		mgr.mu.Unlock()
 		if t >= 1 {
 			break
 		}
 	}
 	if Layered() {
-		time.Sleep(alphaLand) // the last alpha lands before the plane goes
+		time.Sleep(fadeLand()) // the last alpha lands before the plane goes
 	}
 	mgr.clearIfCurrent(p)
+}
+
+// levelRamp is a fade of the picture level: from -> to over dur along curve,
+// started at start.
+type levelRamp struct {
+	from, to float64
+	start    time.Time
+	dur      time.Duration
+	curve    string
 }
 
 // Caller holds mu; live changes and both fades share the same effective gain.
@@ -1205,8 +1220,13 @@ func (m *manager) effectiveGain() float64 {
 func (m *manager) applyBrightness() {
 	if kmsWall() != nil {
 		// Plane alpha over the black primary: a true fade (colours scale,
-		// never shift), no re-render, applied at the next vblank.
-		setLayerLevel(m.pipeline, m.fadeLevel)
+		// never shift), no re-render, applied at the next vblank. A fade in
+		// progress goes to the wall whole (the GPU wall steps it per frame).
+		if r := m.fadeRamp; r != nil {
+			setLayerRamp(m.pipeline, r.from, r.to, r.start, r.dur, r.curve)
+		} else {
+			setLayerLevel(m.pipeline, m.fadeLevel)
+		}
 		return
 	}
 	if m.brightEl == nil {
@@ -1361,12 +1381,19 @@ func fadeIn(p *gst.Pipeline, gen uint64) {
 		// A still ends (and holds, paused) the moment its one frame is
 		// out, so its fade clock cannot wait for PLAYING.
 		// On the GPU wall the clock also waits for the layer to be shown.
-		if (state == gst.StatePlaying || mgr.still) && onWall {
+		advancing := (state == gst.StatePlaying || mgr.still) && onWall
+		if advancing {
 			elapsed += delta
 		}
 		mgr.fadeLevel = fadeShape(mgr.fadeCurve, math.Min(1, float64(elapsed)/float64(duration)))
+		if advancing {
+			// Started `elapsed` ago: the wall steps the rest per frame. A
+			// held fade (paused, not on the wall yet) is a plain level.
+			mgr.fadeRamp = &levelRamp{from: 0, to: 1, start: now.Add(-elapsed), dur: duration, curve: mgr.fadeCurve}
+		}
 		mgr.applyGain()
 		mgr.applyBrightness()
+		mgr.fadeRamp = nil
 		done := mgr.fadeLevel == 1
 		mgr.mu.Unlock()
 		if done {

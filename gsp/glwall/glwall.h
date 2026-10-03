@@ -31,6 +31,13 @@ void glwall_prepare_sink(GstElement *appsink, int pool_buffers);
 glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, char **err);
 void glwall_layer_set_alpha(glwall_layer *l, double alpha);
 void glwall_layer_set_zorder(glwall_layer *l, int zorder);
+/* A fade evaluated for every output frame from that frame's clock time:
+ * alpha = from + (to - from) * curve((T - start_ns) / dur_ns), holding `to`
+ * once done. start_ns is on the system clock (glwall_now). A set_alpha ends
+ * it. Curves as gsp's fadeShape. */
+enum { GLWALL_CURVE_LINEAR, GLWALL_CURVE_SMOOTH, GLWALL_CURVE_LOG, GLWALL_CURVE_EXP };
+void glwall_layer_ramp(glwall_layer *l, double from, double to, uint64_t start_ns, uint64_t dur_ns, int curve);
+uint64_t glwall_now(void);
 /* keep_aspect: letterbox inside the rectangle (fit) rather than stretch. */
 void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h, int keep_aspect);
 /* Every cue pipeline runs on the system clock, like the wall, so the pump's
@@ -54,6 +61,7 @@ typedef struct {
   /* GPU time from fence to signal when the presenter had to wait (µs), and
    * how late mixed frames left the wall's sink against their due time (µs) */
   uint64_t gpu_us, gpu_max_us, late_us, late_max_us;
+  uint64_t unsnapped; /* frames presented without a mixer snapshot (uncounted) */
   int allocated, onscreen, queued;
 } glwall_pool_stats_t;
 void glwall_pool_stats(glwall_pool_stats_t *st);

@@ -7,6 +7,7 @@ package glwall
 
 /*
 #cgo pkg-config: gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-gl-1.0 gstreamer-allocators-1.0 libdrm egl glesv2
+#cgo LDFLAGS: -lm
 #include <stdlib.h>
 #include "glwall.h"
 */
@@ -64,6 +65,27 @@ func Attach(appsink *gst.Element, colorimetry string) (*Layer, error) {
 // SetAlpha sets the layer's opacity (0..1), applied on the next output frame.
 func (l *Layer) SetAlpha(a float64) { C.glwall_layer_set_alpha(l.l, C.double(a)) }
 
+// Curve is a fade envelope (as gsp's fadeShape).
+type Curve int
+
+const (
+	CurveLinear Curve = iota
+	CurveSmooth
+	CurveLog
+	CurveExp
+)
+
+// Ramp fades the layer from one opacity to another, evaluated by the wall
+// for every output frame from that frame's own clock time, so the opacity
+// changes on every refresh. start is a time on the wall's clock (Now). A
+// SetAlpha ends it; once done it holds `to`.
+func (l *Layer) Ramp(from, to float64, start uint64, dur time.Duration, curve Curve) {
+	C.glwall_layer_ramp(l.l, C.double(from), C.double(to), C.uint64_t(start), C.uint64_t(dur), C.int(curve))
+}
+
+// Now is the wall's clock (the system clock, ns).
+func Now() uint64 { return uint64(C.glwall_now()) }
+
 // SetZOrder sets the stacking order (higher is on top).
 func (l *Layer) SetZOrder(z int) { C.glwall_layer_set_zorder(l.l, C.int(z)) }
 
@@ -119,6 +141,7 @@ type PoolStats struct {
 	FenceUs, FenceMaxUs, FlipUs, FlipMaxUs, FlipsLong uint64
 	// GPU time when the presenter waited, and lateness of mixed frames (µs).
 	GpuUs, GpuMaxUs, LateUs, LateMaxUs uint64
+	Unsnapped                          uint64 // frames presented without a mixer snapshot
 	Allocated, OnScreen, Queued        int
 }
 
@@ -132,7 +155,8 @@ func Pool() PoolStats {
 		Skipped: uint64(st.skipped),
 		FenceUs: uint64(st.fence_us), FenceMaxUs: uint64(st.fence_max_us), FlipUs: uint64(st.flip_us),
 		FlipMaxUs: uint64(st.flip_max_us), FlipsLong: uint64(st.flips_long),
-		GpuUs: uint64(st.gpu_us), GpuMaxUs: uint64(st.gpu_max_us), LateUs: uint64(st.late_us), LateMaxUs: uint64(st.late_max_us),
+		Unsnapped: uint64(st.unsnapped),
+		GpuUs:     uint64(st.gpu_us), GpuMaxUs: uint64(st.gpu_max_us), LateUs: uint64(st.late_us), LateMaxUs: uint64(st.late_max_us),
 		Allocated: int(st.allocated), OnScreen: int(st.onscreen), Queued: int(st.queued),
 	}
 }
