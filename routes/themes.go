@@ -34,6 +34,8 @@ type Theme struct {
 	// Scheme is "light" or "dark": how Bootstrap's data-bs-theme is set while
 	// the theme is active.
 	Scheme string `json:"scheme"`
+	// Version is the generated ftl-themes CSS content hash for cache busting.
+	Version string `json:"version"`
 	// Variants are the theme's sub-themes (html[data-variant=<id>]), offered
 	// beneath it in the picker (contract "Palette variants").
 	Variants []ThemeVariant `json:"variants,omitempty"`
@@ -86,6 +88,7 @@ func Themes() []Theme {
 		Slug     string         `json:"slug"`
 		Label    string         `json:"label"`
 		Scheme   string         `json:"scheme"`
+		Version  string         `json:"version"`
 		Variants []ThemeVariant `json:"variants"`
 		Tint     *ThemeTint     `json:"tint"`
 	}
@@ -109,6 +112,7 @@ func Themes() []Theme {
 			// the layers so the app's unlayered CSS always wins.
 			Href:     "/ftl/themes/" + m.Slug + ".css",
 			Scheme:   scheme,
+			Version:  m.Version,
 			Variants: m.Variants,
 			Tint:     validTint(m.Tint),
 		})

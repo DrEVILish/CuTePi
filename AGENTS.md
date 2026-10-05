@@ -10,7 +10,7 @@ Environment notes for agents working on this repo.
 | Dev  | `192.168.10.162` | 3001 | `cutepi-dev.drevilish.com`  |
 
 - Both names are reverse proxies to the machines above.
-- The app refuses any public Host name it doesn't know with HTTP 421 (DNS-rebinding guard, `routes/origin.go`). Each proxy name must be listed in `allowed_hosts` in that machine's `/root/cutepi/config/config.json`, and the service restarted.
+- Reverse proxies must always work: the app answers under any Host name (`routes/origin.go` has no Host allow-list, and there is no `allowed_hosts` setting). Do not add a Host check, allow-list or DNS-rebinding guard that refuses requests by name. The only cross-site protection is the Origin/Referer check on state-changing requests.
 - The proxy (Nginx Proxy Manager, `192.168.10.120`) serves these names over HTTP only. HTTPS fails at the TLS handshake until a certificate is attached to each proxy host.
 - SSH to the other machine with `root@<ip-address>`.
 - Both machines have the repo checked out under `/opt`.

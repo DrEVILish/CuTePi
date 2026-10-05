@@ -125,6 +125,18 @@ htmx.on("htmx:after:request", (e) => {
     if (ok) hideModal("ytdlModal");
     return;
   }
+  if (el && el.id === "live-cue-form") {
+    const err = document.getElementById("live-error");
+    if (ok) {
+      el.reset();
+      if (err) { err.textContent = ""; err.classList.add("d-none"); }
+      hideModal("liveModal");
+    } else if (err) {
+      err.textContent = (e.detail.ctx?.text || "").trim() || "Could not add the live page.";
+      err.classList.remove("d-none");
+    }
+    return;
+  }
   if (el && el.id === "dropform" && ok) hideModal("uploadModal");
   if (el && el.id === "testHideBtn" && ok) { hideModal("testModal"); setTestPressed(false); }
   if (el && el.id === "deleteConfirmBtn" && ok) hideModal("deleteModal");
@@ -359,6 +371,7 @@ try {
     appThemeMap[DEFAULT_THEME_ID] = {
       name: document.documentElement.dataset.theme,
       href: boot.getAttribute("href"),
+      version: "",
     };
   }
 } catch (e) {}
@@ -368,7 +381,7 @@ fetch("/api/themes", { headers: { Accept: "application/json" } })
     if (Array.isArray(list)) {
       list.forEach((t) => {
         if (t && t.id && t.name && t.href) {
-          appThemeMap[t.id] = { name: t.name, href: t.href, scheme: t.scheme, variants: t.variants || [], tint: t.tint || null };
+          appThemeMap[t.id] = { name: t.name, href: t.href, scheme: t.scheme, version: t.version || "", variants: t.variants || [], tint: t.tint || null };
         }
       });
     }
@@ -468,10 +481,8 @@ function applyAppTheme(id) {
   applyIconSprite(id);
   const link = document.getElementById("cutepi-theme-css");
   if (link) {
-    // Keep the ?v= stamp the boot script put on the link so the swapped-in
-    // stylesheet caches under the same deployment version.
-    const v = (link.getAttribute("href") || "").split("?")[1];
-    link.href = appThemeMap[id].href + (v ? "?" + v : "");
+    const version = appThemeMap[id].version || document.documentElement.dataset.assetStamp || "";
+    link.href = appThemeMap[id].href + "?v=" + encodeURIComponent(version);
   }
   // The outgoing theme's tint token must not linger on <html>.
   const prev = appThemeMap[document.documentElement.dataset.themeId];
@@ -2547,10 +2558,11 @@ document.addEventListener("click", (e) => {
     if (btn) btn.disabled = false;
   });
 
+  // DOMParser builds an inert document: unlike innerHTML on a live-document
+  // element, an <img onerror> echoed back in an error message never runs.
   function stripHtml(html) {
-    var d = document.createElement("div");
-    d.innerHTML = (html || "").trim();
-    return (d.textContent || "").trim();
+    var doc = new DOMParser().parseFromString((html || "").trim(), "text/html");
+    return (doc.body.textContent || "").trim();
   }
 })();
 

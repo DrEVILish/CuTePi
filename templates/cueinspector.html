@@ -1,5 +1,5 @@
 {{ define "cueinspector.html" }}
-<div id="cueinspector-body" class="cueinspector-body"{{ if hasPrefix .Cue.Mimetype "image/" }} data-no-audio-tab{{ end }}>
+<div id="cueinspector-body" class="cueinspector-body"{{ if or (hasPrefix .Cue.Mimetype "image/") (eq .Cue.SourceKind "endpoint") }} data-no-audio-tab{{ end }}>
   {{ if not .Selected }}
   <p class="text-muted small mb-0">Select a cue to edit its time, video, audio and colour settings.</p>
   {{ else }}
@@ -31,7 +31,69 @@
     hx-trigger="change delay:200ms from:'findAll input', change delay:200ms from:'findAll select', submit, ctp-save">
     <div class="inspector-tabpanes d-flex flex-column" data-active-tab="time">
       <div class="inspector-tabpane" data-tabpane="time">
-        {{ if not (hasPrefix .Cue.Mimetype "image/") }}
+        {{ if eq .Cue.SourceKind "endpoint" }}
+        <div class="insp-time-row mt-xs">
+          <div class="insp-time-fields">
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-live-fadein">Fade In</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-fadein" name="fadeIn" data-fade-in class="form-control form-control-sm" value="{{ formatTime .Cue.FadeIn }}" placeholder="1:05, 1m5s or 65" title="Fade the page in from black (seconds)">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-live-prewait">PreWait</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the page shows">
+            </div>
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-live-postwait">PostWait</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the page is taken down">
+            </div>
+            <div class="insp-time-field insp-schedule">
+              <input type="hidden" name="schedule_block" value="1">
+              <div class="row is-items-center is-gap-xs">
+                <input class="form-check-input" type="checkbox" id="insp-live-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
+                <label class="small" for="insp-live-schedule">Schedule</label>
+                <input id="insp-live-schedule-time" name="schedule_time" type="time" class="input" step="1"
+                  value="{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}"
+                  aria-label="Time of day, to the second" title="Time of day, to the second">
+                <details class="day-picker" id="insp-live-schedule-days">
+                  <summary aria-label="Pick the days of week">Days&hellip;</summary>
+                  <div class="day-picker-list">
+                    {{ range $i, $d := listDays }}
+                    <label><input type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if or (hasBit $.Cue.ScheduleDays $i) (eq $.Cue.ScheduleDays 0) }}checked{{ end }}> {{ $d }}</label>
+                    {{ end }}
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+          <div class="insp-time-right">
+            <div class="insp-time-field insp-live-url">
+              <label class="insp-field-label" for="insp-live-url">Page URL</label>
+              <input id="insp-live-url" name="endpointUrl" type="url" required class="form-control form-control-sm"
+                value="{{ .Cue.EndpointURL }}" placeholder="https://timerpi.local/d/room"
+                autocomplete="off" spellcheck="false" title="The page shown on the wall (http or https). A change reloads it if this cue is live.">
+            </div>
+            <div class="row is-items-center is-gap-xs">
+              <label class="insp-field-label" for="insp-live-fadeaction">Fade-stop others</label>
+              <select id="insp-live-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
+                <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
+                <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
+                <option value="all" {{ if eq .Cue.FadeAction "all" }}selected{{ end }}>All</option>
+              </select>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-fadeout" name="fadeOut" class="input" style="width:4.5em"
+                value="{{ if .Cue.FadeOut }}{{ formatTime .Cue.FadeOut }}{{ end }}" placeholder="0:00" title="Fade/stop time (seconds)">
+              <select id="insp-live-fadecurve" name="fadeCurve" class="select" style="width:auto"
+                title="Fade envelope shape: linear, smooth S-curve, logarithmic or exponential">
+                <option value="linear" {{ if eq .Cue.FadeCurve "linear" }}selected{{ end }}>Linear</option>
+                <option value="smooth" {{ if eq .Cue.FadeCurve "smooth" }}selected{{ end }}>S-curve</option>
+                <option value="log" {{ if eq .Cue.FadeCurve "log" }}selected{{ end }}>Log</option>
+                <option value="exp" {{ if eq .Cue.FadeCurve "exp" }}selected{{ end }}>Exp</option>
+              </select>
+              <svg class="fade-curve-preview" data-curve-for="insp-live-fadecurve" viewBox="0 0 40 16" width="40" height="16" aria-hidden="true"><path d="M1 15 L39 1"/></svg>
+            </div>
+            <div class="text-muted small mt-1">A live page has no length: it stays on the wall until Stop, Panic or another cue replaces it. If the page stops answering, the panic holding image shows until it comes back.</div>
+          </div>
+        </div>
+       {{ else if not (hasPrefix .Cue.Mimetype "image/") }}
         <div class="insp-time-row mt-xs">
           <div class="insp-time-fields">
             <div class="insp-time-field">
@@ -213,7 +275,7 @@
         </div>
       {{ end }}
       </div>
-      {{ if not (hasPrefix .Cue.Mimetype "image/") }}
+      {{ if and (not (hasPrefix .Cue.Mimetype "image/")) (ne .Cue.SourceKind "endpoint") }}
       <div class="inspector-tabpane" data-tabpane="audio">
         <div class="insp-audio-wrap">
           <div class="insp-volume">
@@ -262,7 +324,7 @@
       </div>
       {{ end }}
       <div class="inspector-tabpane" data-tabpane="video">
-        {{ if not (hasPrefix .Cue.Mimetype "image/") }}
+        {{ if and (not (hasPrefix .Cue.Mimetype "image/")) (ne .Cue.SourceKind "endpoint") }}
         <div class="insp-time-field insp-fadein mt-xs">
           <label class="insp-field-label" for="insp-video-fadein">Fade In</label>
           <input id="insp-video-fadein" data-fade-in data-validate="time" inputmode="decimal" autocomplete="off" class="input"

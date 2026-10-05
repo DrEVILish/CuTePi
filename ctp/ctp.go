@@ -8,6 +8,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +26,9 @@ import (
 type Media struct {
 	Media_id         int       `db:"media_id"`
 	Filename         string    `db:"filename"`
+	SourceKind       string    `db:"source_kind"` // "file" or "endpoint"
+	EndpointURL      string    `db:"endpoint_url"`
+	EndpointTitle    string    `db:"endpoint_title"`
 	Mimetype         string    `db:"mimetype"`
 	Size             int       `db:"size"`
 	Duration         float64   `db:"duration"`
@@ -95,6 +99,18 @@ type Cue struct {
 	WaitLeftS       int    // whole seconds left in that wait (render-time)
 	WaitPct         int    // 0..100 through the current wait phase (render-time)
 }
+
+// cueColumns lists fields represented by Cue explicitly. Avoid cuesheet.*
+// because databases can carry newer optional columns that this binary does
+// not map (for example opacity on a newer TimerPi install).
+const cueColumns = `cuesheet.cue_id, cuesheet.cuePos, cuesheet.cueNum, cuesheet.media_id,
+	cuesheet.title, cuesheet.posStart, cuesheet.posEnd, cuesheet.preWait, cuesheet.cueDuration,
+	cuesheet.postWait, cuesheet.hold, cuesheet.loop, cuesheet.loop_count, cuesheet.color,
+	cuesheet.parent, cuesheet.fadeOut, cuesheet.fadeAction, cuesheet.autoContinue, cuesheet.volume,
+	cuesheet.fadeIn, cuesheet.rate, cuesheet.balance, cuesheet.mute, cuesheet.last_result,
+	cuesheet.last_played_at, cuesheet.sheet_index, cuesheet.fade_curve, cuesheet.fit_mode,
+	cuesheet.rotation, cuesheet.flip, cuesheet.schedule_enabled, cuesheet.schedule_days,
+	cuesheet.schedule_time_ms`
 
 type Cuesheet struct {
 	Cues   []Cue
@@ -189,7 +205,11 @@ func GetCueByID(id int) (Cue, error) {
 
 func GetCue(cuePos string) (cue Cue, err error) {
 	query := `
-		SELECT *
+		SELECT ` + cueColumns + `, COALESCE(mediapool.filename, '') AS filename,
+			mediapool.source_kind, mediapool.endpoint_url, mediapool.endpoint_title,
+			mediapool.mimetype, mediapool.size, mediapool.duration, mediapool.resolution,
+			mediapool.thumbnail_pending, mediapool.waveform, mediapool.media_meta,
+			mediapool.waveform_pending, mediapool.missing, mediapool.date_added, mediapool.loudness_gain
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
 		WHERE cuePos = :cuePos
@@ -214,6 +234,8 @@ func GetCue(cuePos string) (cue Cue, err error) {
 // for the cue row's media-type icon and the fade/stop logic.
 func mediaTypeFromMimetype(mimetype string) string {
 	switch {
+	case mimetype == "application/x-cutepi-endpoint":
+		return "endpoint"
 	case strings.HasPrefix(mimetype, "video/"):
 		return "video"
 	case strings.HasPrefix(mimetype, "audio/"):
@@ -1175,7 +1197,11 @@ func GetCuesheet() (cuesheet Cuesheet, err error) {
 	var cues []Cue
 
 	query := `
-		SELECT *
+		SELECT ` + cueColumns + `, COALESCE(mediapool.filename, '') AS filename,
+			mediapool.source_kind, mediapool.endpoint_url, mediapool.endpoint_title,
+			mediapool.mimetype, mediapool.size, mediapool.duration, mediapool.resolution,
+			mediapool.thumbnail_pending, mediapool.waveform, mediapool.media_meta,
+			mediapool.waveform_pending, mediapool.missing, mediapool.date_added, mediapool.loudness_gain
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
 		ORDER BY cuesheet.sheet_index, cuesheet.cuePos
@@ -1218,7 +1244,10 @@ func GetMediapool() (pool Mediapool, err error) {
 	// resolution, so a multi-file upload can easily register several rows
 	// with an identical date_added, which would otherwise leave their
 	// relative order (newest-first, per spec) unspecified.
-	query := `SELECT * FROM mediapool ORDER BY date_added DESC, media_id DESC`
+	query := `SELECT media_id, COALESCE(filename,'') AS filename, source_kind, endpoint_url, endpoint_title,
+		mimetype, size, duration, resolution, thumbnail_pending, waveform, media_meta,
+		waveform_pending, missing, date_added, loudness_gain FROM mediapool
+		WHERE source_kind = 'file' ORDER BY date_added DESC, media_id DESC`
 	err = db.Select(&medias, query)
 	if err != nil {
 		log.Printf("Error GetMediapool: %v", err)
@@ -1227,12 +1256,217 @@ func GetMediapool() (pool Mediapool, err error) {
 	return Mediapool{medias}, nil
 }
 
+// AddEndpoint stores a live HTTP(S) page source. Live pages are not pool
+// items: each live cue owns its own row (hidden from the pool, the HyperDeck
+// clip list and the media worker), so editing one cue's URL never changes
+// another cue. It has no file path, duration, thumbnail or waveform.
+func AddEndpoint(title, rawURL string) (int, error) {
+	title = strings.TrimSpace(title)
+	u, err := validateEndpointURL(rawURL)
+	if err != nil {
+		return 0, err
+	}
+	if title == "" {
+		title = u.Host
+	}
+	var id int
+	err = db.QueryRow(`INSERT INTO mediapool (filename, source_kind, endpoint_url, endpoint_title, mimetype,
+		size, duration, resolution, thumbnail_pending, waveform, waveform_pending, missing, media_meta)
+		VALUES (NULL, 'endpoint', ?, ?, 'application/x-cutepi-endpoint', 0, 0, '', 0, '', 0, 0, '') RETURNING media_id`,
+		u.String(), title).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// AddLiveCue appends a live-page cue to the end of the sheet (where pool
+// adds land too) and selects it, so the inspector opens on it. Returns the
+// new cue's position.
+func AddLiveCue(title, rawURL string) (int, error) {
+	id, err := AddEndpoint(title, rawURL)
+	if err != nil {
+		return 0, err
+	}
+	if err := AddEndpointCue(id, "", 0, false); err != nil {
+		_, _ = db.Exec(`DELETE FROM mediapool WHERE media_id = ?`, id)
+		return 0, err
+	}
+	var pos int
+	if err := db.Get(&pos, `SELECT cuePos FROM cuesheet WHERE media_id = ?`, id); err != nil {
+		return 0, err
+	}
+	if err := SetCue(strconv.Itoa(pos)); err != nil {
+		return pos, err
+	}
+	return pos, nil
+}
+
+// SetCueEndpointURL points a live cue at a different page.
+func SetCueEndpointURL(cuePos int, rawURL string) error {
+	u, err := validateEndpointURL(rawURL)
+	if err != nil {
+		return err
+	}
+	res, err := db.Exec(`UPDATE mediapool SET endpoint_url = ?
+		WHERE source_kind = 'endpoint' AND media_id = (SELECT media_id FROM cuesheet WHERE cuePos = ?)`, u.String(), cuePos)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("cue %d is not a live page", cuePos)
+	}
+	bumpCuesheetVersion()
+	return nil
+}
+
+// PruneEndpoints removes live-page sources no cue uses any more (their cue
+// was deleted, or a show was cleared). They are invisible anyway; this just
+// keeps the table tidy. Run at startup.
+func PruneEndpoints() error {
+	_, err := db.Exec(`DELETE FROM mediapool WHERE source_kind = 'endpoint'
+		AND media_id NOT IN (SELECT media_id FROM cuesheet)`)
+	return err
+}
+
+// ValidateEndpointURL reports whether rawURL is acceptable as a live page:
+// an absolute http(s) URL with no embedded credentials.
+func ValidateEndpointURL(rawURL string) error {
+	_, err := validateEndpointURL(rawURL)
+	return err
+}
+
+func validateEndpointURL(rawURL string) (*url.URL, error) {
+	u, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return nil, fmt.Errorf("endpoint URL must be an absolute http or https URL without embedded credentials")
+	}
+	return u, nil
+}
+
+// AddEndpointCue inserts an endpoint into the sheet using the normal cue
+// numbering and ordering rules. It intentionally skips file-only semantics.
+func AddEndpointCue(mediaID int, cuePos string, groupID int, first bool) error {
+	var title, kind string
+	if err := db.QueryRow(`SELECT endpoint_title, source_kind FROM mediapool WHERE media_id = ?`, mediaID).Scan(&title, &kind); err != nil {
+		return err
+	}
+	if kind != "endpoint" {
+		return fmt.Errorf("media %d is not an endpoint", mediaID)
+	}
+	title, err := uniqueCueField("title", title)
+	if err != nil {
+		return err
+	}
+	if groupID != 0 {
+		var header float64
+		if err := db.Get(&header, `SELECT sheet_index FROM cue_group WHERE group_id = ?`, groupID); err != nil {
+			return err
+		}
+		if err := ExpandGroup(groupID); err != nil {
+			return err
+		}
+		var next int
+		if err := db.Get(&next, `SELECT COALESCE(MAX(cuePos),0)+1 FROM cuesheet`); err != nil {
+			return err
+		}
+		seat := header + 1
+		if !first {
+			var last sql.NullFloat64
+			_ = db.Get(&last, `SELECT MAX(sheet_index) FROM cuesheet WHERE parent = ?`, groupID)
+			if last.Valid {
+				seat = last.Float64 + 1
+			}
+		}
+		return insertCueForMediaID(mediaID, title, next, seat, groupID)
+	}
+	next := 0
+	if cuePos == "" {
+		if err := db.Get(&next, `SELECT COALESCE(MAX(cuePos),0)+1 FROM cuesheet`); err != nil {
+			return err
+		}
+	} else if n, err := strconv.Atoi(strings.Trim(cuePos, "/")); err == nil {
+		next = n
+	} else {
+		return err
+	}
+	idx := 0.0
+	parent := 0
+	if cuePos == "" {
+		if err := db.Get(&idx, `SELECT COALESCE(MAX(sheet_index),0)+1000 FROM cuesheet`); err != nil {
+			return err
+		}
+	} else {
+		seq, err := loadSheetSequence()
+		if err != nil {
+			return err
+		}
+		at := len(seq)
+		for i, it := range seq {
+			if it.Kind == "cue" && it.CuePos == next {
+				at = i
+				break
+			}
+		}
+		if at > 0 && at < len(seq) && seq[at].Kind == "cue" && seq[at-1].Kind == "group" {
+			var cueParent int
+			if err := db.Get(&cueParent, `SELECT parent FROM cuesheet WHERE cuePos = ?`, next); err == nil && cueParent == seq[at-1].GroupID {
+				at--
+			}
+		}
+		idx, err = gapSheetIndex(seq, at)
+		if err != nil {
+			return err
+		}
+		withNew := append(append(append([]SheetItem{}, seq[:at]...), SheetItem{Kind: "cue", CuePos: next}), seq[at:]...)
+		parent, err = gapOwner(withNew, at)
+		if err != nil {
+			return err
+		}
+	}
+	return insertCueForMediaID(mediaID, title, next, idx, parent)
+}
+
+func insertCueForMediaID(mediaID int, title string, pos int, sheetIndex float64, parent int) error {
+	// Read settings BEFORE the tx opens: SQLite runs on one connection, so a
+	// pool query while the tx holds it deadlocks the whole server.
+	autoNumber := GetAutoNumber()
+	numStep := GetCueNumStep()
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	positions := []int{}
+	if err := tx.Select(&positions, `SELECT cuePos FROM cuesheet WHERE cuePos >= ? ORDER BY cuePos DESC`, pos); err != nil {
+		return err
+	}
+	for _, p := range positions {
+		if _, err := tx.Exec(`UPDATE cuesheet SET cuePos=cuePos+1 WHERE cuePos=?`, p); err != nil {
+			return err
+		}
+	}
+	num, err := nextCueNum(tx, sheetIndex, autoNumber, numStep)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO cuesheet (cuePos,cueNum,media_id,title,hold,loop,loop_count,sheet_index,parent,autoContinue)
+		VALUES (?,?,?,?,0,0,0,?,?,0)`, pos, num, mediaID, title, sheetIndex, parent); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	bumpCuesheetVersion()
+	return nil
+}
+
 // MarkMissingFiles flags mediapool rows whose source file is no longer on
 // disk. Runs once at startup (see main.go): no periodic scan. A file that is
 // only temporarily absent is re-flagged as present on the next startup.
 func MarkMissingFiles() {
 	var filenames []string
-	if err := db.Select(&filenames, `SELECT filename FROM mediapool`); err != nil {
+	if err := db.Select(&filenames, `SELECT filename FROM mediapool WHERE source_kind = 'file' AND filename IS NOT NULL`); err != nil {
 		log.Printf("Error scanning media for missing files: %v", err)
 		return
 	}
@@ -2298,36 +2532,39 @@ func boolToInt(b bool) int {
 // ScheduleInfo holds one row of the schedule query for the
 // scheduler; it carries only the fields the scheduler needs.
 type ScheduleInfo struct {
-	CueID        int     `db:"cue_id"` // stable identity: cuePos changes on reorder
-	CuePos       int     `db:"cuePos"`
-	Title        string  `db:"title"`
-	Filename     string  `db:"filename"`
-	ScheduleMs   int     `db:"schedule_time_ms"`
-	PosStart     int     `db:"posStart"`
-	PosEnd       int     `db:"posEnd"`
-	Hold         bool    `db:"hold"`
-	Loop         bool    `db:"loop"`
-	LoopCount    int     `db:"loop_count"`
-	Volume       float64 `db:"volume"`
-	LoudnessGain float64 `db:"loudness_gain"`
-	Rate         float64 `db:"rate"`
-	Balance      float64 `db:"balance"`
-	Mute         bool    `db:"mute"`
-	FadeIn       int     `db:"fadeIn"`
-	FadeCurve    string  `db:"fade_curve"`
-	FitMode      string  `db:"fit_mode"`
-	Rotation     int     `db:"rotation"`
-	Flip         string  `db:"flip"`
-	Opacity      float64 `db:"opacity"`
-	GeomX        string  `db:"geom_x"`
-	GeomY        string  `db:"geom_y"`
-	GeomW        string  `db:"geom_w"`
-	GeomH        string  `db:"geom_h"`
-	CropL        string  `db:"crop_l"`
-	CropR        string  `db:"crop_r"`
-	CropT        string  `db:"crop_t"`
-	CropB        string  `db:"crop_b"`
-	Mimetype     string  `db:"mimetype"`
+	CueID         int     `db:"cue_id"` // stable identity: cuePos changes on reorder
+	CuePos        int     `db:"cuePos"`
+	Title         string  `db:"title"`
+	Filename      string  `db:"filename"`
+	SourceKind    string  `db:"source_kind"`
+	EndpointURL   string  `db:"endpoint_url"`
+	EndpointTitle string  `db:"endpoint_title"`
+	ScheduleMs    int     `db:"schedule_time_ms"`
+	PosStart      int     `db:"posStart"`
+	PosEnd        int     `db:"posEnd"`
+	Hold          bool    `db:"hold"`
+	Loop          bool    `db:"loop"`
+	LoopCount     int     `db:"loop_count"`
+	Volume        float64 `db:"volume"`
+	LoudnessGain  float64 `db:"loudness_gain"`
+	Rate          float64 `db:"rate"`
+	Balance       float64 `db:"balance"`
+	Mute          bool    `db:"mute"`
+	FadeIn        int     `db:"fadeIn"`
+	FadeCurve     string  `db:"fade_curve"`
+	FitMode       string  `db:"fit_mode"`
+	Rotation      int     `db:"rotation"`
+	Flip          string  `db:"flip"`
+	Opacity       float64 `db:"opacity"`
+	GeomX         string  `db:"geom_x"`
+	GeomY         string  `db:"geom_y"`
+	GeomW         string  `db:"geom_w"`
+	GeomH         string  `db:"geom_h"`
+	CropL         string  `db:"crop_l"`
+	CropR         string  `db:"crop_r"`
+	CropT         string  `db:"crop_t"`
+	CropB         string  `db:"crop_b"`
+	Mimetype      string  `db:"mimetype"`
 }
 
 // AsCue rebuilds the cue-level view of a scheduled row (the subset the
@@ -2337,7 +2574,7 @@ type ScheduleInfo struct {
 // keeps late edits honest.
 func (s ScheduleInfo) AsCue() Cue {
 	return Cue{
-		Media:     Media{Filename: s.Filename, Mimetype: s.Mimetype, LoudnessGain: s.LoudnessGain},
+		Media:     Media{Filename: s.Filename, SourceKind: s.SourceKind, EndpointURL: s.EndpointURL, EndpointTitle: s.EndpointTitle, Mimetype: s.Mimetype, LoudnessGain: s.LoudnessGain},
 		CuePos:    s.CuePos,
 		Title:     s.Title,
 		PosStart:  s.PosStart,
@@ -2418,7 +2655,7 @@ func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
 	timeMs := now.Hour()*3600*1000 + now.Minute()*60*1000 + now.Second()*1000
 	var rows []ScheduleInfo
 	err := db.Select(&rows, `
-		SELECT c.cue_id, c.cuePos, c.title, m.filename, c.schedule_time_ms, c.posStart, c.posEnd,
+		SELECT c.cue_id, c.cuePos, c.title, COALESCE(m.filename, '') AS filename, m.source_kind, m.endpoint_url, m.endpoint_title, c.schedule_time_ms, c.posStart, c.posEnd,
 			c.hold, c.loop, c.loop_count, c.volume, m.loudness_gain,
 			c.rate, c.balance, c.mute, c.fadeIn, c.fade_curve,
 			c.fit_mode, c.rotation, c.flip, c.opacity, c.geom_x, c.geom_y, c.geom_w, c.geom_h, c.crop_l, c.crop_r, c.crop_t, c.crop_b,
@@ -2701,7 +2938,7 @@ func RegisterMedia(filename string, size int64, meta media.Metadata, title strin
 // them up (including after a restart, since the pending flags are persisted
 // in the DB rather than an in-memory queue).
 func PendingThumbnails() (medias []Media, err error) {
-	err = db.Select(&medias, `SELECT * FROM mediapool WHERE thumbnail_pending = 1 OR waveform_pending = 1`)
+	err = db.Select(&medias, `SELECT * FROM mediapool WHERE source_kind = 'file' AND (thumbnail_pending = 1 OR waveform_pending = 1)`)
 	if err != nil {
 		log.Printf("Error listing pending media work: %v", err)
 		return nil, err

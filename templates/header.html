@@ -1,6 +1,6 @@
 {{ define "header.html" }}
 <!DOCTYPE html>
-<html data-bs-theme="dark">
+<html data-bs-theme="dark" data-asset-stamp="{{ assetStamp }}">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -33,7 +33,6 @@
       (function () {
         var THEMES = {{ themeMap }};
         var DEFAULT_ID = "{{ defaultThemeID }}";
-        var stamp = "?v={{ assetStamp }}";
         var id = DEFAULT_ID;
         try { id = localStorage.getItem("cutepi.theme") || DEFAULT_ID; } catch (_) {}
         // ?theme=<id> previews a theme for this page view only — never saved,
@@ -53,7 +52,7 @@
         document.documentElement.dataset.bsTheme =
           (THEMES[id] && THEMES[id].scheme) || "dark";
         var link = document.getElementById("cutepi-theme-css");
-        if (link) link.href = THEMES[id].href + stamp;
+        if (link) link.href = THEMES[id].href + "?v=" + encodeURIComponent(THEMES[id].version || "{{ assetStamp }}");
         document.documentElement.dataset.theme = theme;
         document.documentElement.dataset.themeId = id;
         // Sub-theme and tint, saved per theme in this browser (ftl-themes

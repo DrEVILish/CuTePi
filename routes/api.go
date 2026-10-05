@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,11 +37,6 @@ var (
 	shutdownServer = shutdownProcess
 	startTime      = time.Now()
 )
-
-func mustInt(s string) int {
-	v, _ := strconv.Atoi(s)
-	return v
-}
 
 func intOrZero(p *int) int {
 	if p == nil {
@@ -111,8 +107,27 @@ var builtinTestPatterns = []struct {
 }
 
 // lastTestPattern is what the Tests toggle re-shows; the default SMPTE
-// bars until the operator picks another (in-memory only).
-var lastTestPattern = "smpte"
+// bars until the operator picks another (in-memory only). Handlers run
+// concurrently, so it is only touched through get/setLastTestPattern.
+var (
+	lastTestPatternMu sync.Mutex
+	lastTestPattern   = "smpte"
+)
+
+func getLastTestPattern() string {
+	lastTestPatternMu.Lock()
+	defer lastTestPatternMu.Unlock()
+	return lastTestPattern
+}
+
+func setLastTestPattern(p string) {
+	lastTestPatternMu.Lock()
+	lastTestPattern = p
+	lastTestPatternMu.Unlock()
+}
+
+// waveSlots caps concurrent waveform-window decodes (GET .../wave).
+var waveSlots = make(chan struct{}, 2)
 
 // shutdownProcess terminates this process after a short grace so the HTTP
 // response making the request can flush first. SIGTERM is handled in
@@ -130,12 +145,23 @@ func shutdownProcess(grace time.Duration) {
 // this process to exit (freeing the port) before starting.
 func restartProcess(grace time.Duration) error {
 	if unit := systemdUnit(); unit != "" {
-		cmd := exec.Command("systemctl", "restart", unit)
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		// The stop job SIGTERMs this whole cgroup, systemctl included, so a
+		// blocking `systemctl restart` run inside the request never returns
+		// cleanly: the handler answered 500 while the restart went ahead.
+		// Answer first, then queue the job (--no-block) after the grace.
+		systemctl, err := exec.LookPath("systemctl")
+		if err != nil {
 			return err
 		}
+		go func() {
+			time.Sleep(grace)
+			cmd := exec.Command(systemctl, "--no-block", "restart", unit)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				logs.Printf(logs.RTERestart, "systemctl restart %s: %v", unit, err)
+			}
+		}()
 		return nil
 	}
 	exe, err := os.Executable()
@@ -189,6 +215,7 @@ func Api(rg *gin.RouterGroup) {
 	registerDisplayRoute(rg)
 	registerAudioRoute(rg)
 	registerDiskRoute(rg)
+	registerLiveRoutes(rg)
 	rg.GET("/ws", func(c *gin.Context) {
 		ws.Handle(c.Writer, c.Request)
 	})
@@ -236,7 +263,10 @@ func Api(rg *gin.RouterGroup) {
 		if c.Request.TLS != nil {
 			scheme = "https"
 		}
-		if proto := c.Request.Header.Get("X-Forwarded-Proto"); proto != "" {
+		// The reverse proxy reports the client-facing scheme. Any client can
+		// send the header, so only the two real values are honoured.
+		switch proto := strings.ToLower(strings.TrimSpace(c.Request.Header.Get("X-Forwarded-Proto"))); proto {
+		case "http", "https":
 			scheme = proto
 		}
 		host := c.Request.Host
@@ -244,9 +274,6 @@ func Api(rg *gin.RouterGroup) {
 			host = fmt.Sprintf("localhost:%d", config.Port())
 		}
 		target := fmt.Sprintf("%s://%s/upload", scheme, host)
-		if override := c.Query("url"); override != "" {
-			target = override
-		}
 		if c.Query("type") == "wifi" {
 			// Wi-Fi join code (Android hostapd 2.x syntax): clients scan it
 			// straight into their network list - used by the Network tab.
@@ -310,8 +337,12 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		applied := gsp.SetVolume(v)
+		// The live change already applied; failing to remember it on the
+		// cue is worth a warning, not a failed request.
 		if pos := gsp.CurrentCuePos(); pos > 0 {
-			_ = ctp.UpdateCue(strconv.Itoa(pos), "volume", strconv.FormatFloat(applied, 'f', -1, 64))
+			if err := ctp.UpdateCue(strconv.Itoa(pos), "volume", strconv.FormatFloat(applied, 'f', -1, 64)); err != nil {
+				logs.PrintfWarn(logs.RTEEdit, "saving volume on cue %d: %v", pos, err)
+			}
 		}
 		c.Status(http.StatusOK)
 	})
@@ -395,7 +426,7 @@ func Api(rg *gin.RouterGroup) {
 		}
 		pattern := strings.TrimPrefix(c.Param("pattern"), "/")
 		if pattern == "" {
-			pattern = lastTestPattern
+			pattern = getLastTestPattern()
 		}
 		// "toggle" rides the wildcard (gin forbids a static sibling next
 		// to /*pattern): the Tests button. On when dark (shows the last
@@ -407,7 +438,7 @@ func Api(rg *gin.RouterGroup) {
 				c.JSON(http.StatusOK, gin.H{"showing": false})
 				return
 			}
-			pattern = lastTestPattern
+			pattern = getLastTestPattern()
 			if err := gsp.ShowTest(pattern); err != nil {
 				logs.Printf(logs.RTETest, "show test failed pattern=%q error=%v", pattern, err)
 				respondError(c, http.StatusInternalServerError, err.Error())
@@ -428,7 +459,7 @@ func Api(rg *gin.RouterGroup) {
 			c.String(http.StatusBadRequest, "unknown test pattern")
 			return
 		}
-		lastTestPattern = pattern
+		setLastTestPattern(pattern)
 		if err := gsp.ShowTest(pattern); err != nil {
 			logs.Printf(logs.RTETest, "show test failed pattern=%q error=%v", pattern, err)
 			respondError(c, http.StatusInternalServerError, err.Error())
@@ -449,7 +480,7 @@ func Api(rg *gin.RouterGroup) {
 		gsp.SetTestOverlay(on)
 		// A pattern on the wall picks the change up at once.
 		if gsp.TestShowing() && !ctp.GetShowMode() {
-			if err := gsp.ShowTest(lastTestPattern); err != nil {
+			if err := gsp.ShowTest(getLastTestPattern()); err != nil {
 				c.String(http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -468,7 +499,7 @@ func Api(rg *gin.RouterGroup) {
 			"builtin": builtin,
 			"custom":  ctp.TestPatterns(),
 			"showing": gsp.TestShowing(),
-			"current": lastTestPattern,
+			"current": getLastTestPattern(),
 			"overlay": ctp.GetTestOverlay(),
 		})
 	})
@@ -479,6 +510,10 @@ func Api(rg *gin.RouterGroup) {
 		on := strings.TrimSpace(c.PostForm("on")) == "1"
 		var err error
 		if on {
+			if ok, merr := ctp.MediaRegistered(filename); merr != nil || !ok {
+				c.String(http.StatusNotFound, "media not found")
+				return
+			}
 			err = ctp.AddTestPattern(filename)
 		} else {
 			err = ctp.RemoveTestPattern(filename)
@@ -639,9 +674,22 @@ func Api(rg *gin.RouterGroup) {
 			c.String(http.StatusBadRequest, "bins out of range")
 			return
 		}
+		if ok, merr := ctp.MediaRegistered(filename); merr != nil || !ok {
+			c.String(http.StatusNotFound, "media not found")
+			return
+		}
 		src := filepath.Join(config.MediaLocation(), filename)
 		if _, err := os.Stat(src); err != nil {
 			c.String(http.StatusNotFound, "media not found")
+			return
+		}
+		// Each window is an ffmpeg decode: zooming the trim timeline must
+		// not stack decoders against the playing show. Wait for a slot, or
+		// give up when the client has moved on.
+		select {
+		case waveSlots <- struct{}{}:
+			defer func() { <-waveSlots }()
+		case <-c.Request.Context().Done():
 			return
 		}
 		peaks, err := media.GeneratePeaksWindow(src, from, to, bins)
@@ -1035,6 +1083,8 @@ func Api(rg *gin.RouterGroup) {
 			return true
 		}
 		portChanged := body.Port > 0 && body.Port != config.Port()
+		displayBefore := config.Display()
+		displayChanged := hasDisplay && (body.DisplayResolution != displayBefore.Resolution || body.DisplayRefresh != displayBefore.RefreshHz || body.DisplayUseEDID != displayBefore.UseEDID)
 		if body.Port > 0 && fail(config.SetPort(body.Port)) {
 			return
 		}
@@ -1084,9 +1134,10 @@ func Api(rg *gin.RouterGroup) {
 			}
 			ApplyRemote()
 		}
+		restartNeeded := portChanged || displayChanged
 		msg := "Saved."
-		if portChanged {
-			msg = "Saved. The new port takes effect after a server restart."
+		if restartNeeded {
+			msg = "Saved. CuTePi is restarting to apply the display or port change."
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"port":         config.Port(),
@@ -1094,7 +1145,16 @@ func Api(rg *gin.RouterGroup) {
 			"authEnabled":  config.HasAuth(),
 			"remoteStatus": RemoteStatus(),
 			"message":      msg,
+			"restarting":   restartNeeded,
 		})
+		if restartNeeded {
+			go func() {
+				time.Sleep(500 * time.Millisecond) // let the JSON response flush
+				if err := restartServer(300 * time.Millisecond); err != nil {
+					logs.Printf(logs.RTERestart, "settings-triggered restart failed: %v", err)
+				}
+			}()
+		}
 	})
 
 	// Restart / Shutdown the server process itself. Both respond first (so
@@ -1297,6 +1357,24 @@ func Api(rg *gin.RouterGroup) {
 				fields["schedule_time_ms"] = strconv.Itoa((hh*3600 + mm*60 + ss) * 1000)
 			}
 		}
+		// Live page: the URL lives on the cue's own (hidden) source row.
+		// Validated before anything else is saved.
+		liveURLChanged := false
+		if raw, present := c.GetPostForm("endpointUrl"); present {
+			before, err := ctp.GetCue(cuePos)
+			if err != nil {
+				respondError(c, http.StatusNotFound, err.Error())
+				return
+			}
+			if strings.TrimSpace(raw) != before.EndpointURL {
+				pos, _ := strconv.Atoi(cuePos)
+				if err := ctp.SetCueEndpointURL(pos, raw); err != nil {
+					respondError(c, http.StatusBadRequest, err.Error())
+					return
+				}
+				liveURLChanged = true
+			}
+		}
 		if err := ctp.UpdateCueFields(cuePos, fields); err != nil {
 			respondError(c, http.StatusBadRequest, err.Error())
 			return
@@ -1305,6 +1383,12 @@ func Api(rg *gin.RouterGroup) {
 		if err != nil {
 			respondError(c, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if liveURLChanged && gsp.CurrentCuePos() == cue.CuePos {
+			// On the wall now: show the new page straight away.
+			if err := loadAndPlayCue(cue); err != nil {
+				logs.PrintfWarn(logs.RTEEdit, "reloading live cue %d: %v", cue.CuePos, err)
+			}
 		}
 		if gsp.CurrentCuePos() == cue.CuePos {
 			gsp.SetMute(cue.Mute)
@@ -1347,7 +1431,12 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/cue/:cuePos/move/up", func(c *gin.Context) {
 		cuePos := c.Param("cuePos")
 		logs.Printf(logs.RTEUp, "Move Cue Up%s", cuePos)
-		err := ctp.MoveSheetCue(mustInt(cuePos), -1)
+		pos, perr := strconv.Atoi(cuePos)
+		if perr != nil {
+			c.String(http.StatusBadRequest, "invalid cue position")
+			return
+		}
+		err := ctp.MoveSheetCue(pos, -1)
 		if err != nil {
 			respondError(c, http.StatusInternalServerError, err.Error())
 			return
@@ -1359,7 +1448,12 @@ func Api(rg *gin.RouterGroup) {
 	rg.POST("/cue/:cuePos/move/down", func(c *gin.Context) {
 		cuePos := c.Param("cuePos")
 		logs.Printf(logs.RTEDown, "Move Cue Down%s", cuePos)
-		err := ctp.MoveSheetCue(mustInt(cuePos), 1)
+		pos, perr := strconv.Atoi(cuePos)
+		if perr != nil {
+			c.String(http.StatusBadRequest, "invalid cue position")
+			return
+		}
+		err := ctp.MoveSheetCue(pos, 1)
 		if err != nil {
 			respondError(c, http.StatusInternalServerError, err.Error())
 			return

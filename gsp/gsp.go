@@ -26,24 +26,26 @@ import (
 // can't race on the pipeline handle - the historical cause of "multiple
 // pipelines" / "losing reference, can't stop playback" bugs.
 type manager struct {
-	mu           sync.Mutex
-	pipeline     *gst.Pipeline
-	currentFile  string // filename currently loaded, "" if none/test pattern
-	version      uint64 // bumped on every client-visible state change/position tick
-	lastPos      float64
-	inPoint      float64      // seconds; playback starts here (0 = start of file)
-	outPoint     float64      // seconds; playback auto-stops here (0 = end of file)
-	hold         bool         // freeze the last frame at end-of-stream / trim-out
-	loop         bool         // restart from the in-point when the clip reaches its end
-	loopRemain   int          // passes left in a finite loop (loopCount); 0 = infinite
-	volumeEl     *gst.Element // per-audio-branch "volume" element (last wins)
-	volume       float64      // requested cue volume in dB
-	loudnessGain float64
-	rate         float64
-	balance      float64
-	mute         bool
-	panEl        *gst.Element
-	fadeIn       int
+	mu                sync.Mutex
+	pipeline          *gst.Pipeline
+	currentFile       string // filename currently loaded, "" if none/test pattern
+	liveEndpoint      bool
+	onEndpointFailure func(pos int, title string, generation uint64)
+	version           uint64 // bumped on every client-visible state change/position tick
+	lastPos           float64
+	inPoint           float64      // seconds; playback starts here (0 = start of file)
+	outPoint          float64      // seconds; playback auto-stops here (0 = end of file)
+	hold              bool         // freeze the last frame at end-of-stream / trim-out
+	loop              bool         // restart from the in-point when the clip reaches its end
+	loopRemain        int          // passes left in a finite loop (loopCount); 0 = infinite
+	volumeEl          *gst.Element // per-audio-branch "volume" element (last wins)
+	volume            float64      // requested cue volume in dB
+	loudnessGain      float64
+	rate              float64
+	balance           float64
+	mute              bool
+	panEl             *gst.Element
+	fadeIn            int
 	// fadeRamp is the picture fade in progress (fadeIn, FadeAndStop), so
 	// applyBrightness can hand the whole fade to the GPU wall; nil when the
 	// level is simply set.
@@ -246,6 +248,7 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	m.clearPlayback()
 	m.pipeline = newPipeline
 	m.currentFile = currentFile
+	m.liveEndpoint = opts.LiveEndpoint
 	m.cuePos = opts.CuePos // with the pipeline, so no reader sees a cue-less load
 	m.still = isStillFile(currentFile)
 	m.stillEnded = false
@@ -287,6 +290,7 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 // version so clients re-render. Callers must hold m.mu.
 func (m *manager) clearPlayback() {
 	m.currentFile = ""
+	m.liveEndpoint = false
 	m.still = false
 	m.stillEnded = false
 	m.inPoint = 0
@@ -324,6 +328,20 @@ func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 	m.mu.Unlock()
 }
 
+func (m *manager) endpointFailed(p *gst.Pipeline) {
+	m.mu.Lock()
+	if m.pipeline != p || !m.liveEndpoint {
+		m.mu.Unlock()
+		return
+	}
+	pos, title, cb := m.cuePos, strings.TrimPrefix(m.currentFile, "Live: "), m.onEndpointFailure
+	m.mu.Unlock()
+	m.clearIfCurrent(p)
+	if cb != nil {
+		go cb(pos, title, Generation())
+	}
+}
+
 // LoadOpts describes how a clip should play: an optional in/out trim window
 // (seconds), whether the last frame is held on-screen when it ends, whether
 // the clip loops back to its in-point at end-of-stream, and the per-cue
@@ -350,7 +368,8 @@ type LoadOpts struct {
 	// preroll with the video branch on fakesink (nothing displayed, decoders
 	// primed) and swap the real wall sink in at activation. Set by the opts
 	// builder so Warm-arms and their later fire compare equal by construction.
-	WarmPreroll bool
+	WarmPreroll  bool
+	LiveEndpoint bool
 	// Wall layer (KMS): opacity 0..1 (0 = unset = fully opaque) and the
 	// picture's box on the display — each "" (fill), pixels, or "N%".
 	Opacity                    float64
@@ -499,6 +518,7 @@ func Panic() {
 		// "nothing is armed", without bumping the generation (no new
 		// decision was taken).
 		mgr.currentFile = ""
+		mgr.liveEndpoint = false
 		mgr.cuePos = 0
 		mgr.lastPos = 0
 		mgr.starting = false
@@ -524,6 +544,7 @@ func Stop() {
 		// mid-flight can leave a cuePos with no pipeline behind it.
 		mgr.mu.Lock()
 		mgr.currentFile = ""
+		mgr.liveEndpoint = false
 		mgr.cuePos = 0
 		mgr.lastPos = 0
 		mgr.starting = false
@@ -553,6 +574,7 @@ func Stop() {
 	// end without re-arming the chain; that is the operator's explicit choice.
 	mgr.mu.Lock()
 	mgr.currentFile = ""
+	mgr.liveEndpoint = false
 	mgr.cuePos = 0
 	mgr.lastPos = 0
 	mgr.starting = false
@@ -642,6 +664,44 @@ func LoadWithOpts(filename string, opts LoadOpts) error {
 	logs.Printf(logs.GSPFireTiming, "cue load %q: build %.1fms + preroll %.1fms",
 		filename, buildMS, time.Since(start).Seconds()*1000)
 	return nil
+}
+
+// LoadEndpointWithOpts renders a web page through the WPE GStreamer source
+// into the appliance's existing HDMI wall sink.
+func LoadEndpointWithOpts(title, endpointURL string, opts LoadOpts) error {
+	gstInit()
+	if !strings.HasPrefix(endpointURL, "http://") && !strings.HasPrefix(endpointURL, "https://") {
+		return fmt.Errorf("endpoint URL must use http or https")
+	}
+	// A live page is picture only, never ends by itself and has no media
+	// timeline: none of the file-only playback options apply.
+	opts.LiveEndpoint = true
+	opts.InPoint, opts.OutPoint, opts.Rate = 0, 0, 1
+	opts.Hold, opts.Loop, opts.LoopCount = false, false, 0
+	opts.WarmPreroll = false
+	p, err := buildPipeline(pipelineSpec{endpointURL: endpointURL, liveTitle: title, opts: opts})
+	if err != nil {
+		return err
+	}
+	mgr.swap(p, "Live: "+title, opts)
+	watchAndPlay(p)
+	return nil
+}
+
+func SetEndpointFailureHook(cb func(pos int, title string, generation uint64)) {
+	mgr.mu.Lock()
+	mgr.onEndpointFailure = cb
+	mgr.mu.Unlock()
+}
+
+func FailEndpoint(generation uint64) {
+	mgr.mu.Lock()
+	p := mgr.pipeline
+	current := mgr.liveEndpoint && mgr.gen == generation && p != nil
+	mgr.mu.Unlock()
+	if current {
+		mgr.endpointFailed(p)
+	}
 }
 
 // takeWarm empties the warm slot and returns its pipeline (nil if none) for
@@ -1034,8 +1094,9 @@ func CurrentPosition() float64 {
 	// stall every other playback call). Same shape as CurrentDuration.
 	mgr.mu.Lock()
 	p := mgr.pipeline
+	live := mgr.liveEndpoint
 	mgr.mu.Unlock()
-	if p == nil {
+	if p == nil || live {
 		return 0
 	}
 	ok, pos := p.QueryPosition(gst.FormatTime)
@@ -1058,8 +1119,9 @@ func CurrentPosition() float64 {
 func CurrentDuration() float64 {
 	mgr.mu.Lock()
 	p := mgr.pipeline
+	live := mgr.liveEndpoint
 	mgr.mu.Unlock()
-	if p == nil {
+	if p == nil || live {
 		return 0
 	}
 	ok, dur := p.QueryDuration(gst.FormatTime)
@@ -1498,10 +1560,11 @@ func seekAtRate(p *gst.Pipeline, seconds float64) bool {
 func Seek(seconds float64) {
 	mgr.mu.Lock()
 	p := mgr.pipeline
+	live := mgr.liveEndpoint
 	inPoint := mgr.inPoint
 	outPoint := mgr.outPoint
 	mgr.mu.Unlock()
-	if p == nil {
+	if p == nil || live {
 		return
 	}
 	ok, dur := p.QueryDuration(gst.FormatTime)
@@ -1531,6 +1594,11 @@ func (m *manager) handleEnd(p *gst.Pipeline) bool {
 	m.mu.Lock()
 	if m.pipeline != p {
 		m.mu.Unlock()
+		return false
+	}
+	if m.liveEndpoint {
+		m.mu.Unlock()
+		m.endpointFailed(p)
 		return false
 	}
 	hold := m.hold
@@ -1633,7 +1701,14 @@ func watchAndPlay(p *gst.Pipeline) error {
 			gerr := msg.ParseError()
 			logs.Printf(logs.GSPPipeDebug, "gsp: pipeline error debug: %s", gerr.DebugString())
 			logs.Printf(logs.GSPPipeStopped, "gsp: pipeline stopped: %s", gerr.Error())
-			mgr.clearIfCurrent(p)
+			mgr.mu.Lock()
+			live := mgr.liveEndpoint
+			mgr.mu.Unlock()
+			if live {
+				mgr.endpointFailed(p)
+			} else {
+				mgr.clearIfCurrent(p)
+			}
 			return false
 		}
 		return true
@@ -1657,6 +1732,7 @@ func startPlayback(p *gst.Pipeline) error {
 		return nil
 	}
 	gen := mgr.gen
+	live := mgr.liveEndpoint
 	mgr.starting = true
 	mgr.fadeLevel = 1
 	if mgr.fadeIn > 0 {
@@ -1677,7 +1753,7 @@ func startPlayback(p *gst.Pipeline) error {
 	if !current {
 		return nil
 	}
-	if result == gst.StateChangeFailure || result == gst.StateChangeAsync {
+	if result == gst.StateChangeFailure || (result == gst.StateChangeAsync && !live) {
 		mgr.clearIfCurrent(p)
 		reason := "preroll failed"
 		if result == gst.StateChangeAsync {
@@ -1756,6 +1832,8 @@ type pipelineSpec struct {
 	isTest      bool
 	testPattern string
 	filename    string
+	endpointURL string
+	liveTitle   string
 	// warmSink routes the video branch to fakesink instead of the wall: a
 	// warm-slot build may not display anything or its first frame would
 	// colour over the live cue (see Warm). Activation relinks the wall.
@@ -1794,6 +1872,13 @@ func flipMethod(f string) string {
 // file-playback pipeline (filesrc -> decodebin -> auto{audio,video}sink),
 // depending on spec. This replaces the previous buildFilePipeline/
 // buildTestPipeline, which were ~90% duplicated.
+// endpointFPS is the live-page render rate. TimerPi pages are text and
+// countdowns (changing once a second; the overtime pulse twice), and fades
+// run on the display plane, not the page, so 15 fps loses nothing visible.
+// Measured on a Pi 4 at 1080p: each frame is copied into the display plane,
+// costing CuTePi about 54% of a core at 30 fps.
+const endpointFPS = 15
+
 func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	pipeline, err := gst.NewPipeline("")
 	if err != nil {
@@ -1855,6 +1940,25 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			plain.Set("caps", gst.NewCapsFromString("video/x-raw"))
 			srcChain = append(srcChain, txt, plain)
 		}
+	} else if spec.endpointURL != "" {
+		// Live page (DESIGN §12.14): WPE renders the page off-screen (no
+		// window, no DRM master) at the display's size. Its raw frames pass
+		// straight through decodebin into the same wall tail as any video.
+		src, err = gst.NewElement("wpevideosrc")
+		if err != nil {
+			return nil, errors.New("live pages need the WPE renderer: install the gstreamer1.0-wpe package")
+		}
+		src.Set("location", spec.endpointURL)
+		dw, dh, _ := DisplayMode()
+		if dw <= 0 || dh <= 0 {
+			dw, dh = 1920, 1080
+		}
+		caps, err := gst.NewElement("capsfilter")
+		if err != nil {
+			return nil, err
+		}
+		caps.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=BGRA,width=%d,height=%d,framerate=%d/1,pixel-aspect-ratio=1/1", dw, dh, endpointFPS)))
+		srcChain = append(srcChain, caps)
 	} else {
 		src, err = gst.NewElement("filesrc")
 		if err != nil {
@@ -1868,8 +1972,10 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	// stateless V4L2 decoder negotiates DMABuf output; decodebin exposes such a
 	// pad with system-memory tiled caps first and never renegotiates
 	// (TEST_REPORT, GPU wall step 2).
+	// Live pages stay on decodebin: its raw passthrough is what was verified
+	// for wpevideosrc's frames.
 	decoderBin := "decodebin"
-	if glOpen {
+	if glOpen && spec.endpointURL == "" {
 		decoderBin = "decodebin3"
 	}
 	decodebin, err := gst.NewElement(decoderBin)

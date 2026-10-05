@@ -153,7 +153,7 @@ func awardsGO(g ctp.Group) error {
 	if err != nil {
 		return err
 	}
-	if err := gsp.LoadWithOpts(cue.Filename, cueOpts(cue, false)); err != nil {
+	if err := loadCueSource(cue, cueOpts(cue, false)); err != nil {
 		ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
 		return err
 	}

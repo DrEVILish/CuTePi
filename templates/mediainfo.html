@@ -24,7 +24,7 @@
       {{ $t := or .PlayingCueTitle .Filename }}<span title="{{ $t }}">{{ $t }}</span>
     </div>
     <div class="row is-items-center is-gap-xs mt-1">
-      <button type="button" class="btn btn-sm {{ if .Paused }}ftl-btn-warning{{ else }}btn-secondary{{ end }}" id="pause-btn" hx-post="/api/togglePause" hx-swap="none"
+      <button type="button" class="btn btn-sm {{ if .Paused }}btn-warning{{ else }}btn-secondary{{ end }}" id="pause-btn" hx-post="/api/togglePause" hx-swap="none"
         title="{{ if .Paused }}Paused — click to resume{{ else }}Pause{{ end }}" aria-label="{{ if .Paused }}Resume{{ else }}Pause{{ end }}" aria-pressed="{{ if .Paused }}true{{ else }}false{{ end }}">
         <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ if .Paused }}play{{ else }}pause{{ end }}"/></svg>{{ if .Paused }}&nbsp;PAUSED{{ end }}
       </button>

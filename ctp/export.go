@@ -12,84 +12,91 @@ import (
 // referenced file is carried in the ZIP instead. Group membership is exported
 // once Cue Groups exist; the manifest reserves that shape via file layout.
 type ExportCue struct {
-	Filename     string  `json:"filename"`
-	CueNum       string  `json:"cueNum"`
-	Title        string  `json:"title"`
-	PosStart     int     `json:"posStart"`
-	PosEnd       int     `json:"posEnd"`
-	PreWait      int     `json:"preWait"`
-	CueDuration  int     `json:"cueDuration"`
-	PostWait     int     `json:"postWait"`
-	Hold         bool    `json:"hold"`
-	Loop         bool    `json:"loop"`
-	LoopCount    int     `json:"loopCount"`
-	AutoContinue bool    `json:"autoContinue"`
-	Color        string  `json:"color"`
-	Parent       int     `json:"parent"`
-	FadeOut      int     `json:"fadeOut"`
-	FadeAction   string  `json:"fadeAction"`
-	FadeCurve    string  `json:"fadeCurve"`
-	FitMode      string  `json:"fitMode"`
-	Rotation     int     `json:"rotation"`
-	Flip         string  `json:"flip"`
-	Opacity      float64 `json:"opacity,omitempty"` // 0/absent (older shows) = 100 %
-	GeomX        string  `json:"geomX,omitempty"`
-	GeomY        string  `json:"geomY,omitempty"`
-	GeomW        string  `json:"geomW,omitempty"`
-	GeomH        string  `json:"geomH,omitempty"`
-	CropL        string  `json:"cropL,omitempty"`
-	CropR        string  `json:"cropR,omitempty"`
-	CropT        string  `json:"cropT,omitempty"`
-	CropB        string  `json:"cropB,omitempty"`
-	Volume       float64 `json:"volume"`
-	FadeIn       int     `json:"fadeIn"`
-	Rate         float64 `json:"rate"`
-	Balance      float64 `json:"balance"`
-	Mute         bool    `json:"mute"`
+	Filename      string  `json:"filename"`
+	SourceKind    string  `json:"sourceKind,omitempty"`
+	EndpointURL   string  `json:"endpointUrl,omitempty"`
+	EndpointTitle string  `json:"endpointTitle,omitempty"`
+	CueNum        string  `json:"cueNum"`
+	Title         string  `json:"title"`
+	PosStart      int     `json:"posStart"`
+	PosEnd        int     `json:"posEnd"`
+	PreWait       int     `json:"preWait"`
+	CueDuration   int     `json:"cueDuration"`
+	PostWait      int     `json:"postWait"`
+	Hold          bool    `json:"hold"`
+	Loop          bool    `json:"loop"`
+	LoopCount     int     `json:"loopCount"`
+	AutoContinue  bool    `json:"autoContinue"`
+	Color         string  `json:"color"`
+	Parent        int     `json:"parent"`
+	FadeOut       int     `json:"fadeOut"`
+	FadeAction    string  `json:"fadeAction"`
+	FadeCurve     string  `json:"fadeCurve"`
+	FitMode       string  `json:"fitMode"`
+	Rotation      int     `json:"rotation"`
+	Flip          string  `json:"flip"`
+	Opacity       float64 `json:"opacity,omitempty"` // 0/absent (older shows) = 100 %
+	GeomX         string  `json:"geomX,omitempty"`
+	GeomY         string  `json:"geomY,omitempty"`
+	GeomW         string  `json:"geomW,omitempty"`
+	GeomH         string  `json:"geomH,omitempty"`
+	CropL         string  `json:"cropL,omitempty"`
+	CropR         string  `json:"cropR,omitempty"`
+	CropT         string  `json:"cropT,omitempty"`
+	CropB         string  `json:"cropB,omitempty"`
+	Volume        float64 `json:"volume"`
+	FadeIn        int     `json:"fadeIn"`
+	Rate          float64 `json:"rate"`
+	Balance       float64 `json:"balance"`
+	Mute          bool    `json:"mute"`
 }
 
 // ExportCues lists every cue (sheet order) as an ExportCue plus the currently
 // selected cue position, for building a .CTP manifest.
 func ExportCues() (cues []ExportCue, selected int, err error) {
 	type row struct {
-		CueNum       string  `db:"cueNum"`
-		Title        string  `db:"title"`
-		Filename     string  `db:"filename"`
-		PosStart     int     `db:"posStart"`
-		PosEnd       int     `db:"posEnd"`
-		PreWait      int     `db:"preWait"`
-		CueDuration  int     `db:"cueDuration"`
-		PostWait     int     `db:"postWait"`
-		Hold         bool    `db:"hold"`
-		Loop         bool    `db:"loop"`
-		LoopCount    int     `db:"loop_count"`
-		AutoContinue bool    `db:"autoContinue"`
-		Color        string  `db:"color"`
-		Parent       int     `db:"parent"`
-		FadeOut      int     `db:"fadeOut"`
-		FadeAction   string  `db:"fadeAction"`
-		FadeCurve    string  `db:"fade_curve"`
-		FitMode      string  `db:"fit_mode"`
-		Rotation     int     `db:"rotation"`
-		Flip         string  `db:"flip"`
-		Opacity      float64 `db:"opacity"`
-		GeomX        string  `db:"geom_x"`
-		GeomY        string  `db:"geom_y"`
-		GeomW        string  `db:"geom_w"`
-		GeomH        string  `db:"geom_h"`
-		CropL        string  `db:"crop_l"`
-		CropR        string  `db:"crop_r"`
-		CropT        string  `db:"crop_t"`
-		CropB        string  `db:"crop_b"`
-		Volume       float64 `db:"volume"`
-		FadeIn       int     `db:"fadeIn"`
-		Rate         float64 `db:"rate"`
-		Balance      float64 `db:"balance"`
-		Mute         bool    `db:"mute"`
+		CueNum        string  `db:"cueNum"`
+		Title         string  `db:"title"`
+		Filename      string  `db:"filename"`
+		SourceKind    string  `db:"source_kind"`
+		EndpointURL   string  `db:"endpoint_url"`
+		EndpointTitle string  `db:"endpoint_title"`
+		PosStart      int     `db:"posStart"`
+		PosEnd        int     `db:"posEnd"`
+		PreWait       int     `db:"preWait"`
+		CueDuration   int     `db:"cueDuration"`
+		PostWait      int     `db:"postWait"`
+		Hold          bool    `db:"hold"`
+		Loop          bool    `db:"loop"`
+		LoopCount     int     `db:"loop_count"`
+		AutoContinue  bool    `db:"autoContinue"`
+		Color         string  `db:"color"`
+		Parent        int     `db:"parent"`
+		FadeOut       int     `db:"fadeOut"`
+		FadeAction    string  `db:"fadeAction"`
+		FadeCurve     string  `db:"fade_curve"`
+		FitMode       string  `db:"fit_mode"`
+		Rotation      int     `db:"rotation"`
+		Flip          string  `db:"flip"`
+		Opacity       float64 `db:"opacity"`
+		GeomX         string  `db:"geom_x"`
+		GeomY         string  `db:"geom_y"`
+		GeomW         string  `db:"geom_w"`
+		GeomH         string  `db:"geom_h"`
+		CropL         string  `db:"crop_l"`
+		CropR         string  `db:"crop_r"`
+		CropT         string  `db:"crop_t"`
+		CropB         string  `db:"crop_b"`
+		Volume        float64 `db:"volume"`
+		FadeIn        int     `db:"fadeIn"`
+		Rate          float64 `db:"rate"`
+		Balance       float64 `db:"balance"`
+		Mute          bool    `db:"mute"`
 	}
 	var rows []row
 	err = db.Select(&rows, `
-		SELECT cuesheet.cueNum, cuesheet.title, mediapool.filename,
+		SELECT cuesheet.cueNum, cuesheet.title, COALESCE(mediapool.filename,'') AS filename,
+			mediapool.source_kind, mediapool.endpoint_url, mediapool.endpoint_title,
 			cuesheet.posStart, cuesheet.posEnd, cuesheet.preWait,
 			cuesheet.cueDuration, cuesheet.postWait, cuesheet.hold,
 			cuesheet.loop, cuesheet.loop_count, cuesheet.autoContinue,
@@ -106,40 +113,43 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 	cues = make([]ExportCue, 0, len(rows))
 	for _, r := range rows {
 		cues = append(cues, ExportCue{
-			Filename:     r.Filename,
-			CueNum:       r.CueNum,
-			Title:        r.Title,
-			PosStart:     r.PosStart,
-			PosEnd:       r.PosEnd,
-			PreWait:      r.PreWait,
-			CueDuration:  r.CueDuration,
-			PostWait:     r.PostWait,
-			Hold:         r.Hold,
-			Loop:         r.Loop,
-			LoopCount:    r.LoopCount,
-			AutoContinue: r.AutoContinue,
-			Color:        r.Color,
-			Parent:       r.Parent,
-			FadeOut:      r.FadeOut,
-			FadeAction:   r.FadeAction,
-			FadeCurve:    r.FadeCurve,
-			FitMode:      r.FitMode,
-			Opacity:      r.Opacity,
-			GeomX:        r.GeomX,
-			GeomY:        r.GeomY,
-			GeomW:        r.GeomW,
-			GeomH:        r.GeomH,
-			CropL:        r.CropL,
-			CropR:        r.CropR,
-			CropT:        r.CropT,
-			CropB:        r.CropB,
-			Rotation:     r.Rotation,
-			Flip:         r.Flip,
-			Volume:       r.Volume,
-			FadeIn:       r.FadeIn,
-			Rate:         r.Rate,
-			Balance:      r.Balance,
-			Mute:         r.Mute,
+			Filename:      r.Filename,
+			SourceKind:    r.SourceKind,
+			EndpointURL:   r.EndpointURL,
+			EndpointTitle: r.EndpointTitle,
+			CueNum:        r.CueNum,
+			Title:         r.Title,
+			PosStart:      r.PosStart,
+			PosEnd:        r.PosEnd,
+			PreWait:       r.PreWait,
+			CueDuration:   r.CueDuration,
+			PostWait:      r.PostWait,
+			Hold:          r.Hold,
+			Loop:          r.Loop,
+			LoopCount:     r.LoopCount,
+			AutoContinue:  r.AutoContinue,
+			Color:         r.Color,
+			Parent:        r.Parent,
+			FadeOut:       r.FadeOut,
+			FadeAction:    r.FadeAction,
+			FadeCurve:     r.FadeCurve,
+			FitMode:       r.FitMode,
+			Opacity:       r.Opacity,
+			GeomX:         r.GeomX,
+			GeomY:         r.GeomY,
+			GeomW:         r.GeomW,
+			GeomH:         r.GeomH,
+			CropL:         r.CropL,
+			CropR:         r.CropR,
+			CropT:         r.CropT,
+			CropB:         r.CropB,
+			Rotation:      r.Rotation,
+			Flip:          r.Flip,
+			Volume:        r.Volume,
+			FadeIn:        r.FadeIn,
+			Rate:          r.Rate,
+			Balance:       r.Balance,
+			Mute:          r.Mute,
 		})
 	}
 	selected, err = SelectedCuePos()
@@ -289,6 +299,18 @@ func uniqueCueField(field, value string) (string, error) {
 // appendingStillToEnd, if nonzero, overrides the cue's exported cuePos and
 // assigns the next free position (append mode). Returns the assigned cuePos.
 func AddCueFull(c ExportCue) (cuePos int, err error) {
+	mediaID := 0
+	if c.SourceKind == "endpoint" {
+		mediaID, err = AddEndpoint(c.EndpointTitle, c.EndpointURL)
+		if err != nil {
+			return 0, err
+		}
+		c.PosStart, c.PosEnd, c.CueDuration, c.Hold, c.Loop, c.LoopCount, c.AutoContinue = 0, 0, 0, false, false, 0, false
+	} else {
+		if err = db.Get(&mediaID, `SELECT media_id FROM mediapool WHERE source_kind = 'file' AND filename = ?`, c.Filename); err != nil {
+			return 0, fmt.Errorf("media %q not found", c.Filename)
+		}
+	}
 	if c.Rate == 0 {
 		c.Rate = 1
 	} // manifests predating playback rate
@@ -323,12 +345,12 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 			INSERT INTO cuesheet (cuePos, cueNum, media_id, title, posStart, posEnd,
 			preWait, cueDuration, postWait, hold, loop, loop_count, color,
 			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index)
-		SELECT :cuePos, :cueNum, mp.media_id, :title, :posStart, :posEnd,
+		VALUES (:cuePos, :cueNum, :mediaID, :title, :posStart, :posEnd,
 			:preWait, :cueDuration, :postWait, :hold, :loop, :loop_count, :color,
-			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0
-		FROM (SELECT media_id FROM mediapool WHERE filename = :filename) AS mp
+			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0)
 	`,
 		sql.Named("cuePos", cuePos),
+		sql.Named("mediaID", mediaID),
 		sql.Named("cueNum", cueNum),
 		sql.Named("title", title),
 		sql.Named("posStart", c.PosStart),
@@ -362,7 +384,6 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 		sql.Named("rate", rate),
 		sql.Named("balance", balance),
 		sql.Named("mute", boolInt(c.Mute)),
-		sql.Named("filename", c.Filename),
 	)
 	if err != nil {
 		log.Printf("Error adding imported cue: %v", err)

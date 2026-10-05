@@ -69,27 +69,16 @@ func TestSameOriginCSRF(t *testing.T) {
 	}
 }
 
-// C1 (DNS rebinding): a request arriving under a foreign domain name is
-// refused even for GET; IP literals, localhost, the machine name and
-// configured allowed_hosts are served.
-func TestSameOriginHostAllowList(t *testing.T) {
+// Any Host name is served (no allow-list), so any reverse proxy in front
+// of the app works without configuration.
+func TestSameOriginServesAnyHost(t *testing.T) {
 	r := originRouter()
 	hostname, _ := os.Hostname()
-	ok := []string{"192.168.1.20", "192.168.1.20:80", "[::1]:3001", "localhost:3001", strings.ToLower(hostname) + ".local"}
-	for _, h := range ok {
+	for _, h := range []string{"192.168.1.20", "192.168.1.20:80", "[::1]:3001", "localhost:3001",
+		strings.ToLower(hostname) + ".local", "cutepi.lan:8080",
+		"cutepi-test.drevilish.com", "cutepi-dev.drevilish.com"} {
 		if got := originReq(r, "GET", h, "", ""); got != http.StatusOK {
 			t.Errorf("host %q: got %d, want 200", h, got)
-		}
-	}
-	// mDNS conflict renames and router-local names still work.
-	for _, h := range []string{"cutepi-2.local", "cutepi", "cutepi.lan:8080", "show.home.arpa"} {
-		if got := originReq(r, "GET", h, "", ""); got != http.StatusOK {
-			t.Errorf("local host %q: got %d, want 200", h, got)
-		}
-	}
-	for _, h := range []string{"attacker.example", "cutepi.evil.com", "local.evil.com"} {
-		if got := originReq(r, "GET", h, "", ""); got != http.StatusMisdirectedRequest {
-			t.Errorf("rebinding host %q: got %d, want 421", h, got)
 		}
 	}
 }

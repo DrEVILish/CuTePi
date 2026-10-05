@@ -42,16 +42,17 @@ body.upload-body {
   padding: 0;
 }
 
+/* Full width at every screen size. ftl-themes caps the shell at --app-max
+   (1800px) and centres it on wider screens (CONTRACT.md "XL gutters"); a
+   cue console wants every pixel, so lift the cap. html:root out-ranks a
+   theme's own :root default. */
+html:root {
+  --app-max: 100vw;
+}
+
 .navbar .container-fluid {
   flex-wrap: wrap;
   gap: 0.5rem;
-}
-
-/* bg-dark's Bootstrap rule is !important and would beat a shared theme's
-   .app-bar background, so the utility is gone from the topbar markup
-   and the identical colour lives here at zero specificity instead. */
-:where(.app-shell) > :where(nav.navbar) {
-  background-color: #212529;
 }
 
 .navbar #mediainfo {
@@ -588,6 +589,8 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   accent-color: var(--ctp-accent);
 }
 .insp-fadein { max-width: 11rem; }
+/* Live page cue: the URL sits atop the wide right column. */
+.insp-live-url { max-width: 48rem; }
 .insp-audio-wrap { display: flex; gap: 3rem; align-items: flex-start; justify-content: flex-start; padding-top: 0.75rem; }
 .insp-audio-settings { display: flex; flex-direction: column; gap: 0.45rem; }
 .insp-audio-settings input[type="range"] { min-width: 0; }
@@ -697,11 +700,9 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
 
 /* --- Sticky footer: panel toggles, Tests, Settings, Edit/Show mode ------ */
 /* === ftl-themes shell adoption ==========================================
-   .app-shell mirrors the library's .ft-app contract: topbar = bar,
-   app-content = main, footer = status, plus an aria-hidden decorative rail.
-   Under this app's own themes no ftl stylesheet is linked, so the .ftl-*
-   classes are inert and :where() (zero specificity) keeps these rules from
-   out-ranking a shared theme's shell rules when one IS linked. */
+   The theme owns the .app grid and its responsive arrangement. Keep only
+   the app's available-height constraint here; don't replace the grid with a
+   flex column or hide the theme's decorative rail. */
 :where(body.app-body) > :where(.app-shell) {
   flex: 1 1 auto;
   min-height: 0;
@@ -709,23 +710,11 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
   flex-direction: column;
 }
 
-/* Hidden by default (empty aside); a shared theme's own .app-rail rule,
-   which loads later at equal specificity, turns the rail on. */
-.app-rail {
-  display: none;
-}
-
-/* The footer's own id-level background/border must not out-rank a shared
-   theme's .app-status styling: :where() drops it to zero specificity
-   while rendering identically under this app's own themes. */
+/* Keep the empty footer in the theme's status row without overriding its
+   spacing, surface, or border tokens. */
 :where(#app-footer) {
   flex: 0 0 auto;
-  border-top: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
-  background-color: var(--ctp-surface, #07172a);
   overflow-x: auto;
-  /* replaces the px-2/py-1 utilities (those are !important and would beat a
-     shared theme's .app-status padding) */
-  padding: 0.25rem 0.5rem;
 }
 
 /* Settings modal: the .field wrappers in the markup give a shared theme

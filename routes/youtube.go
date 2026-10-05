@@ -43,7 +43,7 @@ func handleYoutubeDownload(c *gin.Context) {
 		return
 	}
 
-	c.Header("Content-Type", "text/event-stream")
+	c.Header("Content-Type", "application/x-ndjson")
 	c.Header("Cache-Control", "no-cache")
 	// yt-dlp's stdout and stderr are pumped on separate goroutines; gin's
 	// ResponseWriter is not safe for concurrent use, so every write to the
@@ -79,6 +79,15 @@ func handleYoutubeDownload(c *gin.Context) {
 	defer os.RemoveAll(tmpDir)
 	dlPath := filepath.Join(tmpDir, filename)
 	logs.Printf(logs.YDLDownload, "stage=complete filename=%q", filename)
+
+	// A download never silently replaces a pool file of the same name (the
+	// upload path asks first; here there is nobody to ask): keep both, and
+	// the operator can rename it from the done dialog.
+	if mediaFileExists(filename) {
+		dlName := filename
+		filename = freeMediaName(filename)
+		logs.Printf(logs.YDLDownload, "stage=rename reason=name_taken from=%q to=%q", dlName, filename)
+	}
 
 	stage("importing")
 	logs.Printf(logs.YDLProbe, "stage=start filename=%q path=%q", filename, dlPath)
@@ -190,12 +199,22 @@ func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) 
 	defer cancel()
 	printCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", "--", url)
 	printCmd.Dir = tmpDir
-	nameOut, err := printCmd.CombinedOutput()
+	// stdout only: anything yt-dlp says on stderr (notices, deprecation
+	// warnings) must not end up in the filename.
+	var nameErr strings.Builder
+	printCmd.Stderr = &nameErr
+	nameOut, err := printCmd.Output()
 	if err != nil {
 		os.RemoveAll(tmpDir)
-		return "", "", fmt.Errorf("could not resolve output filename: %w: %s", err, strings.TrimSpace(string(nameOut)))
+		return "", "", fmt.Errorf("could not resolve output filename: %w: %s", err, strings.TrimSpace(nameErr.String()))
 	}
-	filename := strings.TrimSpace(string(nameOut))
+	// --print emits the filename as its own line; take the last one.
+	filename := ""
+	for _, line := range strings.Split(string(nameOut), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			filename = line
+		}
+	}
 	if filename == "" {
 		os.RemoveAll(tmpDir)
 		return "", "", fmt.Errorf("yt-dlp returned an empty filename")
@@ -325,24 +344,24 @@ func handleYoutubeRename(c *gin.Context) {
 		return
 	}
 	mediaDir := config.MediaLocation()
-	oldPath := filepath.Join(mediaDir, base)
+	newPath := filepath.Join(mediaDir, base)
 	oldFile := filepath.Join(mediaDir, filepath.Base(old))
 	if _, err := os.Stat(oldFile); err != nil {
 		respondError(c, http.StatusNotFound, "source file not found on disk")
 		return
 	}
-	if _, err := os.Stat(oldPath); err == nil {
+	if _, err := os.Stat(newPath); err == nil {
 		respondError(c, http.StatusConflict, fmt.Sprintf("a file named %q already exists", base))
 		return
 	}
-	if err := os.Rename(oldFile, oldPath); err != nil {
+	if err := os.Rename(oldFile, newPath); err != nil {
 		logs.PrintfWarn(logs.YDLRename, "old=%q new=%q error=%v", old, base, err)
 		respondError(c, http.StatusInternalServerError, "could not rename file on disk: "+err.Error())
 		return
 	}
 	if err := ctp.RenameMedia(filepath.Base(old), base); err != nil {
 		// Roll the file back so DB and disk stay consistent.
-		_ = os.Rename(oldPath, oldFile)
+		_ = os.Rename(newPath, oldFile)
 		logs.PrintfWarn(logs.YDLRename, "old=%q new=%q revert=%t error=%v", old, base, true, err)
 		respondError(c, http.StatusConflict, err.Error())
 		return

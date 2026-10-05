@@ -115,6 +115,7 @@
                     </button>
                   </div>
                   <div class="field-hint text-muted">Modes reported by the connected display. &ldquo;(file&rsquo;s own)&rdquo; forces nothing.</div>
+                  <div class="field-hint text-muted">CuTePi restarts automatically if changing the display mode requires it.</div>
                 </div>
                 <div class="field">
                   <label class="label" for="settingsDisplayRefresh">Refresh rate (Hz)</label>
@@ -163,7 +164,7 @@
                 <div class="field">
                   <label class="label" for="settingsPort">Web port</label>
                   <input class="input settings-short" id="settingsPort" name="port" type="text" inputmode="numeric" data-validate="int" data-min="1" data-max="65535" required />
-                  <div class="field-hint text-muted">Takes effect after a restart.</div>
+                  <div class="field-hint text-muted">CuTePi restarts automatically when the saved port changes.</div>
                 </div>
               </div>
 

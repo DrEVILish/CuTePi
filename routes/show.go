@@ -157,6 +157,9 @@ func Show(rg *gin.RouterGroup) {
 			return
 		}
 		for _, cue := range manifest.Cues {
+			if cue.SourceKind == "endpoint" {
+				continue
+			}
 			if !registered[cue.Filename] {
 				if _, inZip := mediaFiles[cue.Filename]; !inZip {
 					c.String(http.StatusUnprocessableEntity, fmt.Sprintf("cue %q references %q, which is neither in the .CTP nor the local media pool", cue.Title, cue.Filename))
@@ -170,6 +173,9 @@ func Show(rg *gin.RouterGroup) {
 		// media entries were streamed to temp files during parsing;
 		// importMedia moves each into place (rename, or copy across mounts).
 		for _, cue := range manifest.Cues {
+			if cue.SourceKind == "endpoint" {
+				continue
+			}
 			if registered[cue.Filename] {
 				continue
 			}
@@ -184,6 +190,30 @@ func Show(rg *gin.RouterGroup) {
 			}
 		}
 
+		// Only after the media is in place: overwrite clears the sheet (and
+		// any local groups — stale folders would otherwise survive the
+		// import). This must run BEFORE ImportGroups: ClearCueSheet deletes
+		// every group, so clearing afterwards dropped the show's own groups
+		// and left its cues pointing at deleted parents. If an insert below
+		// fails mid-way, the cues and groups inserted so far are rolled back
+		// so the sheet is left empty-but-consistent (with an audit note)
+		// instead of a random half-show.
+		appendedOffset := 0
+		switch mode {
+		case "overwrite":
+			if err := ctp.ClearCueSheet(); err != nil {
+				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
+				return
+			}
+		case "append":
+			count, err := ctp.CueCount()
+			if err != nil {
+				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
+				return
+			}
+			appendedOffset = count
+		}
+
 		// Groups are created before cues: cue Parent values reference group
 		// ids, and the manifest's ids are remapped through the returned map
 		// (imported groups get fresh local ids). v1 manifests have no groups,
@@ -193,32 +223,6 @@ func Show(rg *gin.RouterGroup) {
 		if err != nil {
 			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
-		}
-
-		appendedOffset := 0
-		if mode == "append" {
-			if count, err := ctp.CueCount(); err != nil {
-				ctp.ImportGroupsRollback(idMap)
-				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
-				return
-			} else {
-				appendedOffset = count
-			}
-		}
-
-		// Only after the media is in place: overwrite clears the sheet (and
-		// any local groups — stale folders would otherwise survive the
-		// import), then cues are inserted. If an insert fails mid-way, the
-		// cues and groups inserted so far are rolled back so the sheet is
-		// left empty-but-consistent (with an audit note) instead of a random
-		// half-show.
-		if mode == "overwrite" {
-			if err := ctp.ClearCueSheet(); err != nil {
-				ctp.ImportGroupsRollback(idMap)
-				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
-				return
-			}
-			appendedOffset = 0
 		}
 		inserted := 0
 		for _, cue := range manifest.Cues {
@@ -281,6 +285,10 @@ func writeShowZip(dst io.Writer, m showManifest) error {
 
 	written := map[string]bool{}
 	for _, cue := range m.Cues {
+		// Live pages carry their URL in the manifest and have no file.
+		if cue.SourceKind == "endpoint" || cue.Filename == "" {
+			continue
+		}
 		// One entry per file: cues sharing media must not duplicate it.
 		if written[cue.Filename] {
 			continue
@@ -291,7 +299,9 @@ func writeShowZip(dst io.Writer, m showManifest) error {
 		if err != nil {
 			continue
 		}
-		w, err := zw.Create("media/" + cue.Filename)
+		// Stored, not deflated: media is already compressed, and deflating
+		// a multi-GB show burns the Pi's CPU (possibly mid-show) for ~0 gain.
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: "media/" + cue.Filename, Method: zip.Store, Modified: time.Now()})
 		if err != nil {
 			f.Close()
 			return err
@@ -429,6 +439,14 @@ func parseShowZip(path string) (_ showManifest, _ map[string]string, err error) 
 		return showManifest{}, nil, fmt.Errorf("missing cutepi.json manifest")
 	}
 	for _, cue := range m.Cues {
+		// Live pages have no file: check the URL now, before an overwrite
+		// import clears the sheet.
+		if cue.SourceKind == "endpoint" {
+			if err := ctp.ValidateEndpointURL(cue.EndpointURL); err != nil {
+				return showManifest{}, nil, fmt.Errorf("manifest cue %q: %w", cue.Title, err)
+			}
+			continue
+		}
 		if !safeMediaName(cue.Filename) {
 			return showManifest{}, nil, fmt.Errorf("manifest cue %q has an unsafe media filename %q", cue.Title, cue.Filename)
 		}

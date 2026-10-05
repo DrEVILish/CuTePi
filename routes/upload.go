@@ -176,7 +176,9 @@ func handleUpload(c *gin.Context) {
 // written file is removed and the import is rejected, per spec (a media
 // file with unextractable duration/resolution/codec is not imported).
 func saveUploadedFile(fh *multipart.FileHeader, filename string) error {
-	if filename == "" || filename == "." || filename == string(filepath.Separator) {
+	// ".." survives the multipart parser's filepath.Base and would make the
+	// media dir's parent the import target.
+	if !safeMediaName(filename) {
 		return fmt.Errorf("invalid filename")
 	}
 	// No extension allow-list: ffprobe and the decode check below decide
@@ -202,6 +204,17 @@ func saveUploadedFile(fh *multipart.FileHeader, filename string) error {
 		return err
 	}
 	tmpPath := dst.Name()
+	// A part over the multipart memory limit was already spooled to a temp
+	// file (TMPDIR is the data dir's tmp/, see main.go): move that file into
+	// the staging name instead of writing a multi-GB upload a second time.
+	// net/http's MultipartForm.RemoveAll later ignores the vanished spool.
+	if f, ok := src.(*os.File); ok {
+		if err := os.Rename(f.Name(), tmpPath); err == nil {
+			dst.Close()
+			return importMedia(filename, tmpPath)
+		}
+		// Different filesystem (TMPDIR overridden): copy as before.
+	}
 	if _, err = io.Copy(dst, src); err != nil {
 		dst.Close()
 		os.Remove(tmpPath)

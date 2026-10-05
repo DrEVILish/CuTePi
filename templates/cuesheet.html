@@ -74,6 +74,7 @@
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/preWait" hx-swap="outerHTML">{{ .Cue.PreWaitFmt }}</span>
           </td>
           <td class="cue-time cue-dur">
+            {{ if ne .Cue.SourceKind "endpoint" }}
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/cueDuration" hx-swap="outerHTML">{{ .Cue.CueDurationFmt }}</span>
             {{ if .Cue.Playing }}
             <div class="cue-progress-bar" data-pos="{{ .Cue.PlayPos }}" data-dur="{{ .Cue.PlayDur }}" role="progressbar" tabindex="0"
@@ -81,6 +82,7 @@
               <div class="cue-progress-fill" style="width: {{ progressPct .Cue.PlayPos .Cue.PlayDur }}%"></div>
             </div>
             {{ end }}
+            {{ else }}<span class="small text-muted" title="Live pages continue until the operator changes the output">Live</span>{{ end }}
           </td>
           <td class="cue-time cue-wait-cell">
             {{ if eq .Cue.WaitKind "post" }}<div class="cue-wait-progress" aria-hidden="true"><div class="cue-progress-fill" style="width: {{ .Cue.WaitPct }}%"></div></div>{{ end }}

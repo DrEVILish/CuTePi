@@ -34,12 +34,8 @@ body.upload-body {
    .app-bar when one is linked (Bootstrap's bg-* utility, which these
    !importants used to outrank, is no longer on the topbar markup). */
 .navbar {
-  background: var(--ctp-surface);
-  border-bottom: 1px solid var(--ctp-border);
-}
-
-.navbar-brand {
-  color: var(--ctp-text);
+  background: var(--app-bar-bg, var(--ctp-surface));
+  border-bottom: var(--app-bar-rule-width, 1px) solid var(--app-bar-rule, var(--ctp-border));
 }
 
 .cutepi-logo {
@@ -49,12 +45,12 @@ body.upload-body {
 }
 
 .app-pane,
-.inspector-panel,
-.card,
-.modal-content {
+.inspector-panel {
   background-color: var(--ctp-surface);
   border-color: var(--ctp-border) !important;
 }
+.card { background-color: var(--card-bg, var(--ctp-surface)); }
+.modal-content { background-color: var(--modal-bg, var(--ctp-surface)); }
 
 /* Scrollbars: slim console rails. Transparent track (the pane surface shows
    through — no boxed gutter), translucent thumb that brightens toward the
@@ -156,26 +152,26 @@ body.upload-body {
   border-color: var(--ctp-accent-2);
 }
 
-.btn {
+html[data-theme-id^="app:"] .btn {
   border-radius: var(--ctp-radius);
 }
 
-.btn-primary {
+html[data-theme-id^="app:"] .btn-primary {
   --bs-btn-bg: var(--ctp-accent);
   --bs-btn-border-color: var(--ctp-accent);
   --bs-btn-hover-bg: var(--ctp-accent-2);
   --bs-btn-hover-border-color: var(--ctp-accent-2);
 }
 
-.btn-outline-primary {
+html[data-theme-id^="app:"] .btn-outline-primary {
   --bs-btn-color: var(--ctp-accent-2);
   --bs-btn-border-color: var(--ctp-accent-2);
   --bs-btn-hover-bg: var(--ctp-accent-2);
   --bs-btn-hover-border-color: var(--ctp-accent-2);
 }
 
-.btn-danger,
-.btn-outline-danger {
+html[data-theme-id^="app:"] .btn-danger,
+html[data-theme-id^="app:"] .btn-outline-danger {
   --bs-btn-bg: var(--ctp-danger);
   --bs-btn-border-color: var(--ctp-danger);
   --bs-btn-color: #fff;
@@ -183,13 +179,13 @@ body.upload-body {
   --bs-btn-hover-border-color: var(--ctp-accent);
 }
 
-.btn-success {
+html[data-theme-id^="app:"] .btn-success {
   --bs-btn-bg: var(--ctp-success);
   --bs-btn-border-color: var(--ctp-success);
   --bs-btn-color: #07131a;
 }
 
-.btn-warning {
+html[data-theme-id^="app:"] .btn-warning {
   --bs-btn-bg: var(--ctp-accent-2);
   --bs-btn-border-color: var(--ctp-accent-2);
   --bs-btn-color: #10101a;

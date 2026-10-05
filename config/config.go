@@ -18,13 +18,9 @@ type Config struct {
 	// AuthPassword is the optional operator password (HTTP Basic). It is
 	// stored in PLAIN TEXT in config.json (file mode 0600): anyone who can
 	// read the data directory can read it. See DESIGN.md "Operator password".
-	AuthPassword string `json:"auth_password,omitempty"` // empty = no auth (LAN default)
-	// AllowedHosts lists extra Host header names (e.g. a reverse-proxy
-	// domain) the server answers to, beyond IP literals, localhost, the
-	// machine hostname and <hostname>.local. DNS-rebinding guard.
-	AllowedHosts   []string `json:"allowed_hosts,omitempty"`
-	WorkingDir     string   `json:"working_dir"`
-	ConfigFilePath string   `json:"config_file_path"`
+	AuthPassword   string `json:"auth_password,omitempty"` // empty = no auth (LAN default)
+	WorkingDir     string `json:"working_dir"`
+	ConfigFilePath string `json:"config_file_path"`
 	Db             struct {
 		Location string `json:"location"`
 	} `json:"db"`
@@ -396,13 +392,6 @@ func SetAuthPassword(pw string) error {
 	conf.AuthPassword = strings.TrimSpace(pw)
 	confMu.Unlock()
 	return SaveConfig()
-}
-
-// AllowedHosts returns the operator-configured extra Host names.
-func AllowedHosts() []string {
-	confMu.RLock()
-	defer confMu.RUnlock()
-	return append([]string(nil), conf.AllowedHosts...)
 }
 
 // TmpDir is the scratch directory for uploads, show imports and downloads:

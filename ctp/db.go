@@ -47,7 +47,10 @@ func InitDB() error {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS mediapool (
 			media_id INTEGER PRIMARY KEY NOT NULL,
-			filename TEXT UNIQUE NOT NULL,
+			filename TEXT UNIQUE,
+			source_kind TEXT NOT NULL DEFAULT 'file',
+			endpoint_url TEXT NOT NULL DEFAULT '',
+			endpoint_title TEXT NOT NULL DEFAULT '',
 			mimetype TEXT,
 			size INTEGER,
 			duration REAL,
@@ -72,11 +75,64 @@ func InitDB() error {
 		{"missing", "BOOLEAN NOT NULL DEFAULT 0"},
 		{"media_meta", "TEXT NOT NULL DEFAULT ''"}, // JSON MediaInfo for the inspector's Media tab
 		{"loudness_gain", "REAL NOT NULL DEFAULT 0"},
+		{"source_kind", "TEXT NOT NULL DEFAULT 'file'"},
+		{"endpoint_url", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoint_title", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, nc := range mpNewCols {
 		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE mediapool ADD COLUMN %s %s;`, nc.name, nc.ddl))
 		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return fmt.Errorf("ctp: adding %s column: %w", nc.name, err)
+		}
+	}
+	// File-backed entries historically required a filename. Endpoint sources
+	// have no file path, so rebuild that table once to make filename nullable.
+	// Keep the referenced mediapool table name stable for cuesheet's FK.
+	var filenameNotNull int
+	if err := db.Get(&filenameNotNull, `SELECT "notnull" FROM pragma_table_info('mediapool') WHERE name = 'filename'`); err != nil {
+		return fmt.Errorf("ctp: checking mediapool filename constraint: %w", err)
+	}
+	if filenameNotNull != 0 {
+		if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+			return fmt.Errorf("ctp: disabling foreign keys for mediapool migration: %w", err)
+		}
+		tx, err := db.Beginx()
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`CREATE TABLE mediapool_new (
+			media_id INTEGER PRIMARY KEY NOT NULL, filename TEXT UNIQUE,
+			source_kind TEXT NOT NULL DEFAULT 'file', endpoint_url TEXT NOT NULL DEFAULT '', endpoint_title TEXT NOT NULL DEFAULT '',
+			mimetype TEXT, size INTEGER, duration REAL, resolution TEXT,
+			thumbnail_pending BOOLEAN NOT NULL DEFAULT 1, waveform TEXT NOT NULL DEFAULT '',
+			waveform_pending BOOLEAN NOT NULL DEFAULT 0, missing BOOLEAN NOT NULL DEFAULT 0,
+			loudness_gain REAL NOT NULL DEFAULT 0, media_meta TEXT NOT NULL DEFAULT '',
+			date_added DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
+		if err == nil {
+			_, err = tx.Exec(`INSERT INTO mediapool_new (media_id, filename, source_kind, endpoint_url, endpoint_title, mimetype,
+				size, duration, resolution, thumbnail_pending, waveform, waveform_pending, missing,
+				loudness_gain, media_meta, date_added)
+				SELECT media_id, filename, source_kind, endpoint_url, endpoint_title, mimetype, size, duration, resolution,
+				thumbnail_pending, waveform, waveform_pending, missing, loudness_gain, media_meta, date_added
+				FROM mediapool`)
+		}
+		if err == nil {
+			_, err = tx.Exec(`DROP TABLE mediapool`)
+		}
+		if err == nil {
+			_, err = tx.Exec(`ALTER TABLE mediapool_new RENAME TO mediapool`)
+		}
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+		_, fkErr := db.Exec(`PRAGMA foreign_keys = ON`)
+		if err != nil {
+			return fmt.Errorf("ctp: making mediapool filename nullable: %w", err)
+		}
+		if fkErr != nil {
+			return fmt.Errorf("ctp: restoring foreign keys after mediapool migration: %w", fkErr)
 		}
 	}
 	// Rows existing before the waveform column existed hold NULL; backfill to

@@ -79,6 +79,10 @@ func main() {
 	if err := ctp.HealSheet(); err != nil {
 		log.Printf("CuTePi: sheet heal: %v", err)
 	}
+	// Live-page sources belong to their cue; drop the ones whose cue is gone.
+	if err := ctp.PruneEndpoints(); err != nil {
+		log.Printf("CuTePi: pruning live-page sources: %v", err)
+	}
 
 	go worker.RunThumbnailWorker(2 * time.Second)
 	go routes.RunScheduler()

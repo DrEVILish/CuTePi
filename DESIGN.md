@@ -15,7 +15,8 @@ selection, settings).
 - **Client**: HTML5/CSS3/vanilla JS, deps vendored under `public/src/` (no CDN).
 - **Media tooling**: ffmpeg/ffprobe (metadata, thumbnails, waveforms), yt-dlp
   (URL downloads).
-- **Playback**: GStreamer, including test-pattern playback.
+- **Playback**: GStreamer, including test-pattern playback; live web pages use
+  the optional WPE source from Debian's `gstreamer1.0-wpe` package.
 - **DB**: SQLite3 via `sqlx`
 - **Config/defaults**: `~/cutepi/config/config.json` (env-overridable), port
   3001 default in dev, port 80 in production and test, media in
@@ -82,6 +83,11 @@ selection, settings).
   **append to end or overwrite**.
 - **Logs**: viewable in the Web UI with level filter + clear; changing the level changes what is **recorded** (runtime switch). Structured playback events form an **audit trail** (append-only ring; clearing the log never clears it).
 - **yt-dlp**: URL import is a core, imperative feature (not a convenience).
+- **Live endpoint cues**: TimerPi display pages are video-only and use
+  WebSocket updates with a fallback transport. They have no natural end and
+  stay on the wall until Stop/Clear or another cue is triggered. Pairing,
+  authentication and credential storage are deferred until the playback path
+  works; see §12.14.
 
 ## 3. Architecture & repo layout
 
@@ -115,7 +121,9 @@ Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
   `duration` (float sec), `resolution`, `thumbnail_pending`, `waveform`
   (JSON peaks), `waveform_pending`, `missing` (source absent from disk),
   `loudness_gain` (EBU R128), `media_meta` (ffprobe JSON for the Media tab),
-  `date_added`. `codec` and `media_title` were removed by migration
+  `date_added`. Live endpoint entries will need a source kind and endpoint URL
+  (with file-only fields nullable or in a separate endpoint table); they must
+  not be represented as fake filenames. `codec` and `media_title` were removed by migration
   (write-only, read by nothing) — codec detail lives in `media_meta`.
   Sort newest-first (`date_added DESC, media_id DESC`).
 - `cuesheet`: `cue_id`, order `cuePos` (unique, stable identity — never
@@ -142,7 +150,7 @@ Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
   anchor + set), `escFadeMs`, `goAdvance`, `showMode`, `autoNumberCues`,
   `panicHoldImage`, `testPatterns` (pinned custom patterns).
 - `config.json`: port, `loop` (direct-load default), `auth_password`,
-  `allowed_hosts`, working-dir paths, audio device/channels/rate, hotspot
+  working-dir paths, audio device/channels/rate, hotspot
   SSID/password, remote enable flags + ports (see §12.8). Written atomically
   (temp file + rename) with file mode `0600`.
 - `<working dir>/tmp`: scratch space for uploads, `.CTP` imports and yt-dlp
@@ -895,12 +903,10 @@ moves the generation. Keep them consistent.
   (anything but GET/HEAD/OPTIONS) whose `Origin`/`Referer` names another
   host get 403 — browsers attach cached Basic credentials to cross-site
   form posts, so the password alone does not stop CSRF. Requests with
-  neither header (curl, Companion) pass. The `Host` header must be an IP
-  literal, `localhost`, a dotless name, a name under a local-only suffix
-  (`.local`, `.lan`, `.home.arpa`, `.internal`), the machine hostname, or be
-  listed in config `allowed_hosts` (e.g. a reverse-proxy domain); anything
-  else gets 421 (DNS-rebinding guard: public DNS can't serve those names). The WebSocket handshake checks
-  `Origin` the same way.
+  neither header (curl, Companion) pass. The `Host` header is not
+  restricted: the app answers under any name so any reverse proxy works
+  without configuration. The WebSocket handshake checks `Origin` the same
+  way.
 - **Resource bounds**: request bodies cap at 2 GiB; a `.CTP` import is
   refused (507) when its declared media size plus 256 MiB headroom exceeds
   the media volume's free space. Scratch files live in `<working dir>/tmp`
@@ -1211,3 +1217,111 @@ single member, without the selection ever leaving the group header.
 - **Scope**: the member list is the group's subtree in sheet order (same
   scope as `playFirstGroupMember`/slideshow), snapshotted when the session
   starts.
+
+### 12.14 Live endpoint cues (TimerPi display pages, issue #4)
+
+Add a media-pool source that renders a live HTTP(S) page into CuTePi's existing
+HDMI wall path. It must participate in the normal cue transport, fades, waits,
+selection and recovery behavior. Keep the renderer behind a source interface
+so the cue engine does not depend on a particular browser implementation.
+TimerPi pages are video-only. They remain active until Stop/Clear or a user
+triggers another cue: there is no duration timeout, natural EOS, or automatic
+advance from AutoContinue. A replacement cue follows the existing cue-switch
+fade behavior; Stop/Clear and Panic retain their normal semantics.
+
+- **Renderer**: the first implementation uses GStreamer's `wpevideosrc` from
+  `gstreamer1.0-wpe`; it feeds the standard video processing path and wall
+  sink. The package is required on a Pi that will play endpoint cues, but is
+  optional on development systems that do not use them. Measure CPU/GPU/memory
+  use and confirm usable output on Pi 4 and Pi 5 before treating either model
+  as supported for live pages. Keep normal file playback working when the
+  plugin is absent; firing an endpoint then gives an actionable dependency
+  error.
+  *Measured on a Pi 4 (1080p60 KMS wall, 2026-10-05):* `wpevideosrc` →
+  BGRA `capsfilter` at the display size → `decodebin` (raw passthrough) →
+  the normal KMS tail, rendered at 15 fps (`endpointFPS`; fades run on the
+  plane, not the page). Pages render exactly as designed, animations
+  included: CuTePi never forces reduced motion on a display output. The
+  TimerPi display page's ftl-themes background drift costs WPE ~200–310%
+  CPU (a static page ~0.5%). CuTePi itself ~28% of a core at 15 fps (~54%
+  at 30). The display commits one frame per
+  rendered frame. WebKit's two helper processes (~210 MB RSS) stay resident
+  and are reused after Stop; they do not accumulate.
+- **Renderer spike / fallback**: if WPE cannot meet the wall's resource budget,
+  evaluate a headless render-to-texture path. Do not use a normal desktop
+  browser or let a renderer compete with the wall for the display. Record the
+  measured minimum Pi model and supported frame size/rate before rollout.
+  The renderer must produce frames without taking DRM master.
+- **WebSocket and fallback**: the embedded TimerPi page owns its WebSocket
+  connection and its fallback update transport; WPE displays the page as
+  delivered. CuTePi probes the page's HTTP availability and responds to
+  renderer errors, but does not inspect whether TimerPi's WebSocket is fresh.
+  TimerPi must keep its own display current when WebSocket drops.
+- **Source model**: live pages are not media-pool items. The clock button in
+  the pool's add-buttons group opens "Add live page cue" (URL, optional name;
+  blank name = the page's host), which appends a cue to the sheet and
+  selects it (`POST /api/cue/live`). Each live cue owns one hidden
+  `mediapool` row (`source_kind = 'endpoint'`, URL, title); those rows are
+  excluded from the pool view, the HyperDeck clip list and the media worker,
+  and orphaned ones are pruned at startup. Editing a cue's URL (Cue
+  Inspector, Time tab) changes only that cue, and reloads the page if the
+  cue is on the wall. Authentication fields are reserved for the deferred
+  pairing work. Validate `http`/`https` URLs and reject local-file, script,
+  credential-bearing and other schemes, including in imported shows.
+  Endpoint cues use ordinary pre-wait, post-wait and fade fields, but have no
+  finite cue duration, trim, loop or EOS semantics; AutoContinue does not end
+  them. Keep endpoint fields in show export/import
+  and define an explicit credential policy before enabling endpoint export.
+  The pool and inspector must not show file-only duration, waveform, thumbnail,
+  re-link or missing-file actions for endpoint entries; endpoint reachability
+  is runtime health, not the file startup scan's `missing` flag. Include a DB
+  migration and update any file-source assumptions in media lookup/deletion.
+- **Pairing credential (deferred)**: authentication and credential design are
+  explicitly deferred until unauthenticated playback works end to end. Before
+  authenticated endpoints ship, support a room-scoped revocable TimerPi device token.
+  Store credentials separately from display titles and cue text; never include
+  them in logs, errors, WebSocket state, or exported show manifests by default.
+  Build the authenticated request only at runtime and redact the token from
+  renderer diagnostics. Prefer a renderer request/header mechanism; if the
+  TimerPi contract requires a URL parameter, ensure the URL is not persisted
+  and is stripped from logs/history. Provide re-pair / revoke guidance in the
+  editor. Define storage permissions and backup behavior for credentials.
+- **Playback integration**: implement endpoint playback as a video source
+  feeding CuTePi's existing wall sink, not a separately displayed window.
+  Make source switching use the same serialized
+  pipeline ownership and generation guards as file cues. Respect pre-wait,
+  cue start, Stop/Clear, replacement cue, post-wait and the cue's fade
+  settings. A live page has no natural EOS; only an operator transport action
+  ends it. TimerPi produces no audio; endpoint playback is video-only and must
+  not create or route a second audio stream. Ignore AutoContinue for endpoint
+  cues so it cannot end a page without an operator action.
+  Stopping or replacing it must release renderer and pipeline resources.
+- **Failure and recovery**: distinguish initial load failure from an active
+  endpoint dropping. Surface a clear cue error at initial failure. During an
+  active cue, transition to the configured panic holding image (existing
+  fallback to black if unavailable), then retry with bounded exponential
+  backoff. On recovery, restore the endpoint only if the same cue generation
+  is still current; Stop, Panic, or a newer cue always wins. Report state and
+  failure through the cue result indicator. Authentication is deferred, so
+  this first path does not carry credentials.
+- **Phased delivery**:
+  1. Measure the renderer spike on supported Pi hardware and document resource
+     limits and package/runtime dependencies.
+  2. Add endpoint source storage, validation and pool UI (without
+     authentication in this first working path);
+     cover database migration and `.CTP` import/export behavior.
+  3. Add renderer lifecycle and GStreamer wall-source integration with ordinary
+     cue transport, fade and teardown behavior.
+  4. Add disconnect detection, panic-image fallback, backoff and guarded
+     recovery; expose useful operator status and errors.
+  5. Verify using a TimerPi test page that changes over time over WebSocket and
+     fallback transport; test WebSocket loss, endpoint loss/recovery, cue
+     replacement/Stop/Panic during retry, and repeated cue fire/teardown for
+     leaks or stuck layers. Add authentication and revoked-token checks when
+     the deferred credential work is implemented.
+- **Acceptance**: an operator can add an endpoint and fire it through
+  the normal cue list; genuinely live page changes appear on HDMI; cue fades
+  and end behavior match other visual cues; endpoint loss shows the panic
+  image and recovers automatically only while that cue remains active; missing
+  or invalid endpoints produce actionable errors; no browser window, stuck
+  layer, leaked renderer, or credential disclosure occurs.

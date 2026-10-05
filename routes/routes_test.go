@@ -1301,16 +1301,16 @@ func TestTransportControlsEndpoints(t *testing.T) {
 // CUTEPI_SERVICE override. Outside a unit it is "", so standalone launches keep
 // the self re-exec restart path.
 func TestSystemdUnitResolution(t *testing.T) {
+	// t.Setenv restores the original values afterwards: clearing them for
+	// good changed which restart path the rest of the suite would take.
 	setenv := func(kv map[string]string) {
 		for k, v := range kv {
+			t.Setenv(k, v)
 			if v == "" {
 				os.Unsetenv(k)
-			} else {
-				os.Setenv(k, v)
 			}
 		}
 	}
-	defer setenv(map[string]string{"INVOCATION_ID": "", "CUTEPI_SERVICE": ""})
 
 	setenv(map[string]string{"INVOCATION_ID": "", "CUTEPI_SERVICE": "custom"})
 	if got := systemdUnit(); got != "" {
@@ -2623,7 +2623,7 @@ func TestScheduleNextEndpoint(t *testing.T) {
 }
 
 // The client caches nothing except images: static assets get no-store,
-// image paths get a short public cache.
+// image paths get a short private cache; pool files under /media never.
 func TestCachePolicy(t *testing.T) {
 	r := gin.New()
 	r.Use(CachePolicy())
@@ -2634,8 +2634,8 @@ func TestCachePolicy(t *testing.T) {
 		t.Fatalf("GET /src/ui.js Cache-Control = %q, want no-store", cc)
 	}
 	w = get(t, r, "/img/cutepi-logo.svg")
-	if cc := w.Header().Get("Cache-Control"); cc != "public, max-age=3600" {
-		t.Fatalf("GET /img/cutepi-logo.svg Cache-Control = %q, want public, max-age=3600", cc)
+	if cc := w.Header().Get("Cache-Control"); cc != "private, max-age=3600" {
+		t.Fatalf("GET /img/cutepi-logo.svg Cache-Control = %q, want private, max-age=3600", cc)
 	}
 	w = get(t, r, "/")
 	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {

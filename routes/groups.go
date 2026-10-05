@@ -803,8 +803,8 @@ func slideshowRunner(g ctp.Group) {
 				opts.Crossfade = fade
 			}
 			slideStart := time.Now()
-			if err := gsp.LoadWithOpts(cue.Filename, opts); err != nil {
-				log.Printf("slideshow: loading %q failed: %v", cue.Filename, err)
+			if err := loadCueSource(cue, opts); err != nil {
+				log.Printf("slideshow: loading %q failed: %v", cue.Title, err)
 				ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
 				return
 			}
