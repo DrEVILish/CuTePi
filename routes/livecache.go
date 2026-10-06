@@ -28,6 +28,11 @@ const liveCacheTick = 5 * time.Second
 // the next try (offline server, bad certificate, ...).
 const livePreloadRetry = time.Minute
 
+// sandboxSweep is how often WebKit's leftover sandbox folders (one per web
+// process launch, never removed by WebKit) are cleared: at start, then this
+// often.
+const sandboxSweep = time.Minute
+
 var (
 	liveCacheMu sync.Mutex
 	// preloaded: source id -> URL preloaded this run; failed: id -> next try.
@@ -41,8 +46,15 @@ func RunLiveCacheKeeper() {
 	if !caching {
 		logs.Printf(logs.GSPPipeDebug, "live-page cache: WebKit not available, cache keeping off")
 	}
+	var lastSweep time.Time
 	for {
 		keepLiveCache(caching)
+		if time.Since(lastSweep) >= sandboxSweep {
+			if n := gsp.PruneWebKitSandboxes(); n > 0 {
+				logs.Printf(logs.GSPPipeDebug, "live-page cache: removed %d stale WebKit sandbox folders", n)
+			}
+			lastSweep = time.Now()
+		}
 		time.Sleep(liveCacheTick)
 	}
 }

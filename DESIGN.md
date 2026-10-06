@@ -1308,6 +1308,11 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
     `libWPEWebKit-2.0.so.1`, `gsp/webcache`), so no WebKit development
     package is needed to build. Without WebKit, caching is off and the
     keeper only prunes rows.
+  - **Sandbox folders:** WebKit leaves a sandbox folder per web-process
+    launch in `~/.cache/.flatpak/webkit-<pid>-<n>` and never removes it. The
+    keeper deletes the stale ones (owner gone, or sandboxed process exited)
+    at start and once a minute. It keeps the folder of the web process
+    WebKit holds for reuse. 78 had piled up on the test Pi.
   *Measured on a Pi 4, TimerPi page:* on screen 0.7 s after Fire with a warm
   cache, 1.9–2.5 s cold. Removing a site took its 25 cached records to 0
   and left other sites' records alone.

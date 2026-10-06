@@ -36,3 +36,9 @@ var ErrPreloadStopped = webcache.ErrStopped
 func WallIdle() bool {
 	return CurrentPlaying() == "" && !TestShowing()
 }
+
+// PruneWebKitSandboxes removes WebKit's stale per-launch sandbox folders
+// (~/.cache/.flatpak/webkit-*), which WebKit never removes itself.
+func PruneWebKitSandboxes() int {
+	return webcache.PruneSandboxDirs()
+}
