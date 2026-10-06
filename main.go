@@ -59,7 +59,11 @@ func main() {
 	// Load configuration before anything that depends on it (DB path, media
 	// path, etc). ctp.InitDB must run after this, not via package init(),
 	// so a config-file-specified DB path is actually honored.
-	config.LoadConfig()
+	// A malformed config.json is recovered from its last good copy, or
+	// stops the start: never run on a half-read configuration.
+	if err := config.LoadConfig(); err != nil {
+		log.Fatalf("CuTePi: %v", err)
+	}
 	prepareTmpDir()
 	releaseConsole := gsp.ClaimWallConsole()
 	gsp.OpenWall()
@@ -95,17 +99,9 @@ func main() {
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)
-	// Cross-site guard (CSRF + DNS rebinding): runs before auth so a hostile
-	// page never gets a Basic-auth prompt or a response to read.
-	r.Use(routes.SameOrigin())
-	// Optional operator password (config.json auth_password / Settings).
-	// Applies to every route group below, including the WebSocket handshake.
-	r.Use(routes.AuthMiddleware())
-	// Client cache policy: no-store everywhere except images.
-	r.Use(routes.CachePolicy())
-	// Cap request bodies: one giant POST must not fill the disk or OOM the
-	// in-memory .CTP parse.
-	r.Use(routes.LimitBody())
+	// Cross-site guard, operator password, cache policy and body caps, in
+	// that order (routes.UseMiddleware).
+	routes.UseMiddleware(r)
 
 	// Single template function map (routes.TemplateFuncs): server renders and
 	// tests parse the same templates, so the map must be identical in both.
@@ -154,6 +150,11 @@ func main() {
 		os.Exit(0)
 	}()
 
+	if config.HasAuth() {
+		// Basic auth sends the password in the clear (DESIGN §7).
+		log.Printf("CuTePi: WARNING: the operator password is sent with HTTP Basic auth over plain HTTP; " +
+			"if CuTePi is reachable outside a trusted LAN, put an HTTPS reverse proxy in front of it")
+	}
 	printNetworkInfo()
 	log.Printf("CuTePi: listening on %s", address)
 	// A bind failure (port already in use - e.g. the restart handover losing

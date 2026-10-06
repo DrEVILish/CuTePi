@@ -1552,6 +1552,68 @@ func SetRate(rate float64) {
 	}
 }
 
+// SetCueVolume applies a live gain (dB) to the playing pipeline and reports
+// the clamped value and the cue position that pipeline plays, read under
+// the same lock. The caller persists the value on exactly that cue: reading
+// CurrentCuePos separately could save it to a cue fired in between (0 when
+// the clip has no cue).
+func SetCueVolume(v float64) (applied float64, cuePos int) {
+	mgr.mu.Lock()
+	if !math.IsNaN(v) {
+		mgr.volume = dbClamp(v)
+		mgr.applyGain()
+	}
+	applied, cuePos = mgr.volume, mgr.cuePos
+	mgr.mu.Unlock()
+	mgr.bump()
+	return applied, cuePos
+}
+
+// CueMix is a cue's live mix: what the Cue Inspector re-applies after a
+// save while the cue plays.
+type CueMix struct {
+	Mute    bool
+	Volume  float64 // dB
+	Balance float64
+	Rate    float64
+}
+
+// ApplyCueMix applies mix to the playing pipeline only if it still plays
+// cuePos, checked under the lock that applies it, so a cue fired meanwhile
+// never receives another cue's settings. Reports whether it applied.
+func ApplyCueMix(cuePos int, mix CueMix) bool {
+	mgr.mu.Lock()
+	if cuePos <= 0 || mgr.cuePos != cuePos || mgr.pipeline == nil {
+		mgr.mu.Unlock()
+		return false
+	}
+	mgr.mute = mix.Mute
+	if !math.IsNaN(mix.Volume) {
+		mgr.volume = dbClamp(mix.Volume)
+	}
+	mgr.applyGain()
+	if !math.IsNaN(mix.Balance) && !math.IsInf(mix.Balance, 0) {
+		mgr.balance = math.Max(-1, math.Min(1, mix.Balance))
+		if mgr.panEl != nil {
+			mgr.panEl.Set("panorama", float32(mgr.balance))
+		}
+	}
+	rate := clampRate(mix.Rate)
+	rateChanged := mgr.rate != rate
+	mgr.rate = rate
+	p, starting := mgr.pipeline, mgr.starting
+	mgr.mu.Unlock()
+	mgr.bump()
+	if rateChanged && !starting {
+		// As SetRate; seekAtRate skips the seek if p was replaced meanwhile.
+		p.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
+		if ok, pos := p.QueryPosition(gst.FormatTime); ok {
+			seekAtRate(p, float64(pos)/1e9)
+		}
+	}
+	return true
+}
+
 // Every seek carries the segment rate, including loop and trim restarts.
 func seekAtRate(p *gst.Pipeline, seconds float64) bool {
 	mgr.mu.Lock()

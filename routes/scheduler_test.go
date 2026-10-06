@@ -1,8 +1,10 @@
 package routes
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,7 +52,9 @@ func scheduleFixture(t *testing.T, name string, dueIn time.Duration) time.Time {
 // this drives NO manual ticks — only RunScheduler's own loop.
 func TestRunSchedulerTicksOnItsOwn(t *testing.T) {
 	due := scheduleFixture(t, "schedself.wav", 1500*time.Millisecond)
-	go RunScheduler()
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go runScheduler(stop)
 	deadline := due.Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		if gsp.CurrentPlaying() == "schedself.wav" {
@@ -117,5 +121,116 @@ func TestScheduledAtDST(t *testing.T) {
 	at := scheduledAt(now, (14*3600+30*60)*1000)
 	if at.Hour() != 14 || at.Minute() != 30 {
 		t.Fatalf("scheduledAt on a DST day = %v, want 14:30 local", at)
+	}
+}
+
+// waitPlaying polls until name plays or the deadline passes.
+func waitPlaying(name string, until time.Time) bool {
+	for time.Now().Before(until) {
+		if gsp.CurrentPlaying() == name {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// A scheduler pass delayed past the normal 1s window must still fire the
+// schedule it skipped over (catch-up over the stalled span), while a normal
+// pass at the same moment correctly treats it as stale.
+func TestSchedulerStallCatchUp(t *testing.T) {
+	due := scheduleFixture(t, "schedstall.wav", 1500*time.Millisecond)
+	before := due.Add(-1500 * time.Millisecond)
+	schedulerTick(before) // the last pass before the stall: nothing due yet
+	time.Sleep(time.Until(due.Add(1300 * time.Millisecond)))
+	now := time.Now()
+	schedulerTick(now) // a plain pass: the schedule is >1s old, stale
+	if waitPlaying("schedstall.wav", time.Now().Add(400*time.Millisecond)) {
+		gsp.Panic()
+		t.Fatal("a plain pass fired a schedule older than its 1s window")
+	}
+	schedulerCatchUp(before, now) // the stalled pass covers the gap
+	ok := waitPlaying("schedstall.wav", time.Now().Add(3*time.Second))
+	gsp.Panic()
+	if !ok {
+		t.Fatal("stalled scheduler never recovered the schedule it skipped")
+	}
+}
+
+// failScheduledLoads makes the next n scheduled loads fail.
+func failScheduledLoads(t *testing.T, n int) {
+	t.Helper()
+	var mu sync.Mutex
+	t.Cleanup(func() { scheduledLoad = loadCueSource })
+	scheduledLoad = func(cue ctp.Cue, opts gsp.LoadOpts) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if n > 0 {
+			n--
+			return errors.New("injected load failure")
+		}
+		return loadCueSource(cue, opts)
+	}
+}
+
+// A scheduled fire that fails is retried within its window instead of
+// being marked fired for the rest of the day.
+func TestScheduledFireRetriesAfterFailure(t *testing.T) {
+	due := scheduleFixture(t, "schedretry.wav", 1200*time.Millisecond)
+	failScheduledLoads(t, 1)
+	// Armed just after its second: fires at once on the cold-load path
+	// (an earlier arm would prewarm and take the warm slot instead).
+	time.Sleep(time.Until(due.Add(150 * time.Millisecond)))
+	schedulerTick(time.Now())
+	time.Sleep(250 * time.Millisecond)
+	if cue, _ := ctp.GetCue("1"); cue.LastResult != ctp.CueResultError {
+		t.Fatalf("first attempt result = %v, want error", cue.LastResult)
+	}
+	ok := waitPlaying("schedretry.wav", due.Add(5*time.Second))
+	var cue ctp.Cue
+	for end := time.Now().Add(time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if cue, _ = ctp.GetCue("1"); cue.LastResult == ctp.CueResultOK {
+			break // recorded just after the load returns
+		}
+	}
+	gsp.Panic()
+	if !ok || cue.LastResult != ctp.CueResultOK {
+		t.Fatalf("failed scheduled fire was not retried (playing %v, result %v)", ok, cue.LastResult)
+	}
+}
+
+// An operator action after a failed scheduled fire cancels its retries.
+func TestScheduledRetryYieldsToOperator(t *testing.T) {
+	due := scheduleFixture(t, "schedyield.wav", 1200*time.Millisecond)
+	failScheduledLoads(t, 1)
+	// Armed just after its second: fires at once on the cold-load path
+	// (an earlier arm would prewarm and take the warm slot instead).
+	time.Sleep(time.Until(due.Add(150 * time.Millisecond)))
+	schedulerTick(time.Now())
+	time.Sleep(250 * time.Millisecond)
+	if cue, _ := ctp.GetCue("1"); cue.LastResult != ctp.CueResultError {
+		t.Fatalf("first attempt result = %v, want error", cue.LastResult)
+	}
+	gsp.Stop() // the operator takes over
+	if waitPlaying("schedyield.wav", due.Add(4*time.Second)) {
+		gsp.Panic()
+		t.Fatal("a retry fired after the operator stopped playback")
+	}
+}
+
+// Retries give up once the window has passed.
+func TestScheduledRetryWindowEnds(t *testing.T) {
+	due := scheduleFixture(t, "schedgiveup.wav", 1200*time.Millisecond)
+	defer func(w time.Duration) { scheduleRetryWindow = w }(scheduleRetryWindow)
+	scheduleRetryWindow = 3 * time.Second
+	failScheduledLoads(t, 1000)
+	time.Sleep(time.Until(due.Add(150 * time.Millisecond)))
+	schedulerTick(time.Now())
+	time.Sleep(time.Until(due.Add(scheduleRetryWindow + 1500*time.Millisecond)))
+	calls := 0
+	scheduledLoad = func(ctp.Cue, gsp.LoadOpts) error { calls++; return nil }
+	time.Sleep(2 * scheduleRetryEvery)
+	if calls != 0 {
+		t.Fatalf("still retrying %v after the scheduled time", scheduleRetryWindow)
 	}
 }

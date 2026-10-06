@@ -35,7 +35,11 @@ var (
 // Blocks forever: run it with `go RunScheduler()`. (It used to spawn its
 // loop and return, and the deferred ticker.Stop() then fired immediately —
 // the loop never received a tick, so scheduled cues never fired.)
-func RunScheduler() {
+func RunScheduler() { runScheduler(nil) }
+
+// runScheduler is RunScheduler's loop; it returns when stop is closed (tests
+// stop it so it cannot fire later tests' schedules behind their back).
+func runScheduler(stop <-chan struct{}) {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -46,8 +50,17 @@ func RunScheduler() {
 	// (which may arm a cue that fell due in the last second).
 	var nextDue time.Time   // zero: nothing scheduled
 	var passedDue time.Time // the last nextDue the clock reached
+	var prevTick time.Time  // the previous loop pass (stall detection)
 	showWas, lastVersion := false, uint64(0)
-	for now := range ticker.C {
+	for {
+		var now time.Time
+		select {
+		case <-stop:
+			return
+		case now = <-ticker.C:
+		}
+		prev := prevTick
+		prevTick = now
 		show := ctp.GetShowMode()
 		if show && !showWas {
 			lastCheck = time.Time{} // refresh nextDue now, not up to 1s later
@@ -77,7 +90,11 @@ func RunScheduler() {
 		version := ctp.CuesheetVersion()
 		near := (!nextDue.IsZero() && now.After(nextDue.Add(-scheduleLead))) ||
 			(!passedDue.IsZero() && now.Before(passedDue.Add(scheduleTrail)))
-		if near || !showWas || version != lastVersion {
+		if showWas && !prev.IsZero() && now.Sub(prev) > scheduleStall {
+			// The loop itself was held up (CPU starvation, a blocked
+			// goroutine): cover the whole gap, not just the last second.
+			schedulerCatchUp(prev, now)
+		} else if near || !showWas || version != lastVersion {
 			schedulerTick(now)
 		}
 		showWas, lastVersion = true, version
@@ -95,11 +112,37 @@ const (
 	scheduleTrail = 1500 * time.Millisecond
 )
 
+// scheduleStall is the gap between two scheduler passes (normally 200ms)
+// that counts as a stall, and scheduleCatchUpMax the most a stalled pass
+// looks back. Only a stall of the scheduler itself reaches back: enabling
+// Show mode late or editing a schedule into the past still never replays
+// past cues (§6.8b).
+const (
+	scheduleStall      = time.Second
+	scheduleCatchUpMax = time.Minute
+)
+
+// schedulerCatchUp runs the pass after a stall: every cue due since the
+// previous pass (prev, the last instant the loop saw) fires now, late.
+func schedulerCatchUp(prev, now time.Time) {
+	from := prev.Add(-time.Second) // the previous pass's own window, overlap is harmless
+	if limit := now.Add(-scheduleCatchUpMax); from.Before(limit) {
+		from = limit
+	}
+	log.Printf("CuTePi: scheduler stalled for %v; catching up", now.Sub(prev).Round(time.Millisecond))
+	schedulerTickSince(from, now)
+}
+
 // schedulerTick runs one scheduler iteration at a point in time: query due
 // cues and arm/fire them. Split out of the loop so tests can drive ticks
 // deterministically instead of racing a real timer.
 func schedulerTick(now time.Time) {
-	rows, err := ctp.GetScheduledCues(now)
+	schedulerTickSince(now.Add(-time.Second), now)
+}
+
+// schedulerTickSince arms every cue due after from, up to now.
+func schedulerTickSince(from, now time.Time) {
+	rows, err := ctp.GetScheduledCuesSince(from, now)
 	if err != nil {
 		log.Printf("CuTePi: scheduler query failed: %v", err)
 		return
@@ -176,9 +219,10 @@ func fireScheduled(armed ctp.ScheduleInfo, key string, at time.Time, opts gsp.Lo
 	// the cue's playback settings are unchanged (InstallWarm compares file
 	// and opts), otherwise the fresh cue is built cold.
 	if !(tryWarm && cue.SourceKind != "endpoint" && gsp.InstallWarm(cue.Filename, opts)) {
-		if err := loadCueSource(cue, cueOpts(cue, false)); err != nil {
+		if err := scheduledLoad(cue, cueOpts(cue, false)); err != nil {
 			ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
 			log.Printf("CuTePi: failed to fire scheduled cue %d: %v", cue.CuePos, err)
+			retryScheduled(armed, key, at, markTransport())
 			return
 		}
 	}
@@ -191,4 +235,33 @@ func fireScheduled(armed ctp.ScheduleInfo, key string, at time.Time, opts gsp.Lo
 	if late := time.Since(at); late > time.Second {
 		log.Printf("CuTePi: scheduled cue %d fired %v late", cue.CuePos, late.Round(time.Millisecond))
 	}
+}
+
+// scheduledLoad loads a scheduled cue (a variable so tests can make a fire
+// fail on demand).
+var scheduledLoad = loadCueSource
+
+// scheduleRetryEvery and scheduleRetryWindow: a scheduled fire that fails
+// (decoder or device busy, file briefly unavailable) is tried again every
+// second until this long after its scheduled time. It stays marked fired
+// for the day, so it can never fire twice.
+const scheduleRetryEvery = time.Second
+
+var scheduleRetryWindow = 10 * time.Second // a variable for tests
+
+// retryScheduled tries a failed scheduled fire again after a second, unless
+// the operator has acted on the transport since (mark: a cue fired, Stop or
+// Panic win over a late retry) or the retry window has passed. fireScheduled
+// re-checks Show mode and the schedule, and retries again on failure.
+func retryScheduled(armed ctp.ScheduleInfo, key string, at time.Time, mark transportMark) {
+	if time.Since(at)+scheduleRetryEvery > scheduleRetryWindow {
+		log.Printf("CuTePi: scheduled cue %d: giving up after %v", armed.CuePos, scheduleRetryWindow)
+		return
+	}
+	time.AfterFunc(scheduleRetryEvery, safe(func() {
+		if !mark.unchanged() {
+			return
+		}
+		fireScheduled(armed, key, at, cueOpts(armed.AsCue(), false), false)
+	}))
 }

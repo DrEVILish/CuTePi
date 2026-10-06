@@ -2,10 +2,13 @@ package routes
 
 import (
 	"archive/zip"
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -184,7 +187,15 @@ func Show(rg *gin.RouterGroup) {
 				continue
 			}
 			delete(mediaFiles, cue.Filename) // importMedia owns (and cleans up) tmp now
-			if err := importMedia(cue.Filename, tmp); err != nil {
+			_, release, err := reserveMediaName(cue.Filename, reserveReplace)
+			if err != nil {
+				os.Remove(tmp)
+				c.String(http.StatusConflict, "imported media %q: %v", cue.Filename, err)
+				return
+			}
+			err = importMedia(cue.Filename, tmp)
+			release()
+			if err != nil {
 				c.String(http.StatusUnprocessableEntity, "imported media %q failed: %v", cue.Filename, err)
 				return
 			}
@@ -366,6 +377,58 @@ func moveIntoPlace(tmp, dest string) error {
 // errShowTooLarge: the archive's media would not fit on the media volume.
 var errShowTooLarge = errors.New("not enough free space for the show's media")
 
+// maxShowEntries bounds a .CTP's entries: a show is a manifest plus one
+// entry per media file, so 10 000 is far above any real show, while an
+// archive of millions of tiny entries (cheap in bytes, costly to parse and
+// extract) is refused.
+const maxShowEntries = 10000
+
+var errShowTooManyEntries = errors.New("too many entries in the show file")
+
+// zipDeclaredEntries reads the entry count a ZIP declares in its end of
+// central directory record (following the ZIP64 locator when the count
+// overflows 16 bits), without parsing the directory. ok is false when the
+// record cannot be found; archive/zip then decides.
+func zipDeclaredEntries(path string) (n uint64, ok bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return 0, false
+	}
+	const eocdLen, maxComment = 22, 65535
+	tail := int64(eocdLen + maxComment)
+	if tail > st.Size() {
+		tail = st.Size()
+	}
+	buf := make([]byte, tail)
+	if _, err := f.ReadAt(buf, st.Size()-tail); err != nil {
+		return 0, false
+	}
+	i := bytes.LastIndex(buf, []byte{'P', 'K', 5, 6})
+	if i < 0 || len(buf)-i < eocdLen {
+		return 0, false
+	}
+	n = uint64(binary.LittleEndian.Uint16(buf[i+10:]))
+	if n != 0xFFFF || i < 20 || !bytes.Equal(buf[i-20:i-16], []byte{'P', 'K', 6, 7}) {
+		return n, true
+	}
+	// ZIP64: the locator just before the record points at the ZIP64 end
+	// record, whose total entry count is 8 bytes at offset 32.
+	off := int64(binary.LittleEndian.Uint64(buf[i-20+8:]))
+	rec := make([]byte, 40)
+	if off < 0 || off > st.Size()-40 {
+		return 0, false
+	}
+	if _, err := f.ReadAt(rec, off); err != nil || !bytes.Equal(rec[:4], []byte{'P', 'K', 6, 6}) {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint64(rec[32:]), true
+}
+
 // parseShowZip reads cutepi.json and the media/ entries from a .CTP archive
 // on disk. Entry names are validated with safeMediaName before they ever
 // reach filepath.Join on import. Media content is streamed out to temp files
@@ -377,20 +440,32 @@ var errShowTooLarge = errors.New("not enough free space for the show's media")
 // inflate an entry past its declared size, so a zip bomb cannot exceed the
 // total checked here.
 func parseShowZip(path string) (_ showManifest, _ map[string]string, err error) {
+	// Entry count first, from the archive's end record: a directory of
+	// millions of tiny entries is refused before archive/zip parses it.
+	if n, ok := zipDeclaredEntries(path); ok && n > maxShowEntries {
+		return showManifest{}, nil, fmt.Errorf("%w: %d entries (at most %d)", errShowTooManyEntries, n, maxShowEntries)
+	}
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return showManifest{}, nil, err
 	}
 	defer zr.Close()
+	if len(zr.File) > maxShowEntries {
+		return showManifest{}, nil, fmt.Errorf("%w: %d entries (at most %d)", errShowTooManyEntries, len(zr.File), maxShowEntries)
+	}
 
 	// Duplicate media/ entries are legitimate (older exports wrote one
 	// entry per cue, so cues sharing a file repeat it); only the first of
-	// each name is extracted or counted.
+	// each name is extracted or counted. The sum is overflow-checked: a
+	// crafted ZIP64 size could otherwise wrap it past the free-space check.
 	var total uint64
 	counted := map[string]bool{}
 	for _, f := range zr.File {
 		if strings.HasPrefix(f.Name, "media/") && !counted[f.Name] {
 			counted[f.Name] = true
+			if f.UncompressedSize64 > math.MaxUint64-total {
+				return showManifest{}, nil, fmt.Errorf("%w: declared sizes overflow", errShowTooLarge)
+			}
 			total += f.UncompressedSize64
 		}
 	}

@@ -2704,11 +2704,26 @@ func NextSchedule(now time.Time) (dueIn time.Duration, num, title string, ok boo
 // rounded times can never hit an exact-second sync-fire. The caller owns
 // the result.
 func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
+	return GetScheduledCuesSince(now.Add(-time.Second), now)
+}
+
+// GetScheduledCuesSince returns the cues due after from (exclusive, whole
+// seconds) up to now: GetScheduledCues' one-second window, stretched back
+// to from when the scheduler was stalled. The span never crosses midnight:
+// from is clamped to the start of now's day.
+func GetScheduledCuesSince(from, now time.Time) ([]ScheduleInfo, error) {
 	day := int(now.Weekday())
 	if day == 0 {
 		day = 7 // Sunday = bit6
 	}
 	timeMs := now.Hour()*3600*1000 + now.Minute()*60*1000 + now.Second()*1000
+	fromMs := -1 // start of day
+	if y, d := from.YearDay(), from.Year(); y == now.YearDay() && d == now.Year() {
+		fromMs = from.Hour()*3600*1000 + from.Minute()*60*1000 + from.Second()*1000
+	}
+	if fromMs > timeMs-1000 {
+		fromMs = timeMs - 1000
+	}
 	var rows []ScheduleInfo
 	err := db.Select(&rows, `
 		SELECT c.cue_id, c.cuePos, c.title, COALESCE(m.filename, '') AS filename, m.source_kind, m.endpoint_url, m.endpoint_title, c.schedule_time_ms, c.posStart, c.posEnd,
@@ -2721,10 +2736,10 @@ func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
 		WHERE c.schedule_enabled = 1
 		AND ((c.schedule_days & ?) = ?)
 		AND c.schedule_time_ms <= ? + 250
-		AND c.schedule_time_ms > ? - 1000
+		AND c.schedule_time_ms > ?
 		AND (c.last_played_at = 0 OR c.last_played_at < ?)
 		ORDER BY c.schedule_time_ms ASC, c.sheet_index ASC`,
-		1<<(day-1), 1<<(day-1), timeMs, timeMs, now.UnixMilli())
+		1<<(day-1), 1<<(day-1), timeMs, fromMs, now.UnixMilli())
 	return rows, err
 }
 

@@ -1,8 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"net"
 	"os"
 	"os/user"
@@ -10,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Config struct {
@@ -240,19 +245,42 @@ func ensureDirsLocked() error {
 }
 
 // Load configuration from the config file. Creates the working directories
-// and a default config file on first run if they don't already exist.
-func LoadConfig() {
+// and a default config file on first run (no file at all).
+//
+// A config file that exists but cannot be used is never half-applied: it is
+// decoded into a copy of the defaults, which only replaces the running
+// configuration if the whole file is valid JSON. A malformed file is
+// recovered from config.json.last-good (written after every good load and
+// save) and moved aside as config.json.broken-<time> for inspection; with no
+// usable last-good copy, LoadConfig returns an error and the service does
+// not start (the broken file stays in place, so a restart cannot mistake it
+// for a first run and write defaults over the operator's settings).
+func LoadConfig() error {
 	if err := ensureDirs(); err != nil {
 		println("Error creating CuTePi directories:", err.Error())
 	}
 
 	confMu.Lock()
-	file, err := os.Open(conf.ConfigFilePath)
-	if err == nil {
-		if derr := json.NewDecoder(file).Decode(&conf); derr != nil {
-			println("Error reading config file:", derr.Error())
+	path := conf.ConfigFilePath
+	raw, err := os.ReadFile(path)
+	firstRun := errors.Is(err, fs.ErrNotExist)
+	if err != nil && !firstRun {
+		confMu.Unlock()
+		return fmt.Errorf("reading config file %s: %w", path, err)
+	}
+	if !firstRun {
+		next, derr := decodeConfig(conf, raw)
+		if derr != nil {
+			recovered, rerr := recoverConfig(conf, path, derr)
+			if rerr != nil {
+				confMu.Unlock()
+				return rerr
+			}
+			next = recovered
+		} else {
+			writeLastGood(path, raw)
 		}
-		file.Close()
+		conf = next
 	}
 
 	// Environment overrides are intentional launch-time settings. Reapply them
@@ -274,10 +302,81 @@ func LoadConfig() {
 	confMu.Unlock()
 
 	// First run: create the config file with default values (SaveConfig takes
-	// the lock itself).
-	if err != nil {
+	// the lock itself). A recovered config is written back the same way.
+	if firstRun {
 		_ = SaveConfig() // logged inside; first run keeps going on defaults
 	}
+	return nil
+}
+
+// decodeConfig decodes raw over a copy of base (fields the file leaves out
+// keep base's values). Anything but exactly one JSON object is an error.
+func decodeConfig(base Config, raw []byte) (Config, error) {
+	next := base
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(&next); err != nil {
+		return base, err
+	}
+	if dec.More() {
+		return base, errors.New("unexpected data after the JSON object")
+	}
+	return next, nil
+}
+
+// lastGoodPath and the broken-file name sit beside the config file.
+func lastGoodPath(path string) string { return path + ".last-good" }
+
+// recoverConfig handles a malformed config file: the last good copy is
+// decoded instead, the broken file is moved aside and the recovered config
+// written back. Called with confMu held.
+func recoverConfig(base Config, path string, cause error) (Config, error) {
+	good, err := os.ReadFile(lastGoodPath(path))
+	if err != nil {
+		return base, fmt.Errorf("config file %s is malformed (%v) and there is no last good copy to recover from (%v): fix or remove it", path, cause, err)
+	}
+	next, err := decodeConfig(base, good)
+	if err != nil {
+		return base, fmt.Errorf("config file %s is malformed (%v) and its last good copy is too (%v): fix or remove it", path, cause, err)
+	}
+	broken := path + ".broken-" + time.Now().Format("20060102-150405")
+	if err := os.Rename(path, broken); err != nil {
+		return base, fmt.Errorf("config file %s is malformed (%v); moving it aside: %w", path, cause, err)
+	}
+	if err := writeFileAtomic(path, good); err != nil {
+		return base, fmt.Errorf("restoring %s from its last good copy: %w", path, err)
+	}
+	log.Printf("CuTePi: config file %s was malformed (%v): restored the last good configuration; the broken file is %s", path, cause, broken)
+	return next, nil
+}
+
+// writeLastGood keeps a copy of a config that loaded or saved fine.
+func writeLastGood(path string, raw []byte) {
+	if err := writeFileAtomic(lastGoodPath(path), raw); err != nil {
+		log.Printf("CuTePi: saving last good config: %v", err)
+	}
+}
+
+// writeFileAtomic writes data to path through a temp file and a rename.
+func writeFileAtomic(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0o600)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // Save configuration to the config file. Atomic: encode to a temp sidecar
@@ -321,6 +420,9 @@ func SaveConfig() error {
 		os.Remove(tmpPath)
 		println("Error replacing config file:", err.Error())
 		return fmt.Errorf("replacing config file: %w", err)
+	}
+	if raw, err := os.ReadFile(conf.ConfigFilePath); err == nil {
+		writeLastGood(conf.ConfigFilePath, raw)
 	}
 	return nil
 }

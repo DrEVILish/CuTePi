@@ -852,6 +852,14 @@ The scheduler ticks every 200ms and fires cues due within the last 1s (one misse
 enabling Show mode late never replays the day's past cues. Each cue fires once per day (tracked by `cue_id`, so reordering the sheet
 mid-day neither re-fires nor blocks a cue); schedules arm only in Show mode. An armed fire re-checks at its second that Show mode is still
 on and the cue's schedule is unchanged, and records the cue's result and playing position on both the warm and cold paths.
+Two recoveries, neither of which replays the day's past cues:
+- **Stalled scheduler:** if the scheduler loop itself was held up (more than 1 s between its 200 ms passes: CPU starvation, a
+  blocked goroutine), the next pass covers the whole gap, at most 60 s, and fires what fell due in it, late. Enabling Show mode
+  late or editing a schedule into the past is not a stall and still uses the 1 s window.
+- **Failed fire:** a scheduled fire whose load fails (device busy, decoder error, file briefly unavailable) records the cue's error
+  result and is tried again every second until 10 s after its scheduled time. It stays marked fired for the day, so it can never
+  fire twice. Retrying stops as soon as the operator acts on the transport (fires a cue, Stop, Panic), Show mode goes off or the
+  schedule is edited.
 Multi-node sync-fire (several Pis firing the same second) assumes NTP-synced clocks and identical shows — each node fires on its own clock
 crossing. Decision-accurate, not output-accurate: pipeline build takes ~100s of ms, so frame-exact joint output needs timed pre-roll (v2).
 
@@ -889,6 +897,9 @@ moves the generation. Keep them consistent.
   validation 400/422.
 - Optional auth: `AuthMiddleware` (config `auth_password`, editable in Settings) applies to all routes including static assets; browser basic-auth
   prompt; 401 wrong password; 200 once accepted. `GET /api/settings` reports `authEnabled` but never the password.
+  Responses never invite shared caching: media is `no-store`, images
+  `private`, and the 401 `no-store`, so a reverse proxy or CDN can't replay
+  an authenticated response to someone without the password.
 - **Operator password is stored in plain text.** `auth_password` is kept
   unhashed in `config.json` (HTTP Basic needs nothing more, and the operator
   may need to read it back off the SD card). The file is created mode `0600`,
@@ -896,6 +907,10 @@ moves the generation. Keep them consistent.
   service user or root, or physical access to the SD card — can read it.
   Basic auth also sends it on every request in cleartext over plain HTTP, so
   it guards against casual access on the show LAN, not a hostile network.
+  **Deployment invariant:** if `auth_password` is set and CuTePi is
+  reachable from outside a trusted LAN, HTTPS must terminate in front of it
+  (a TLS reverse proxy). CuTePi itself serves plain HTTP only, so it cannot
+  check this; it logs a warning at startup whenever a password is set.
   Don't reuse a valuable password here. The Wi-Fi hotspot password is
   stored the same way, and is also visible in the process list while
   `nmcli` runs.

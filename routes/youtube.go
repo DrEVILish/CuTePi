@@ -83,9 +83,14 @@ func handleYoutubeDownload(c *gin.Context) {
 	// A download never silently replaces a pool file of the same name (the
 	// upload path asks first; here there is nobody to ask): keep both, and
 	// the operator can rename it from the done dialog.
-	if mediaFileExists(filename) {
-		dlName := filename
-		filename = freeMediaName(filename)
+	dlName := filename
+	filename, release, err := reserveMediaName(filename, reserveRename)
+	if err != nil {
+		fail(logs.YDLFailed, err.Error())
+		return
+	}
+	defer release()
+	if filename != dlName {
 		logs.Printf(logs.YDLDownload, "stage=rename reason=name_taken from=%q to=%q", dlName, filename)
 	}
 

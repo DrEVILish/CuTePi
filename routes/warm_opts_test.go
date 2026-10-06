@@ -74,7 +74,9 @@ func TestSchedulerWarmFire(t *testing.T) {
 	if err := ctp.SetCueSchedule(1, true, day, due.Hour()*3600+due.Minute()*60+due.Second()); err != nil {
 		t.Fatalf("SetCueSchedule: %v", err)
 	}
-	go RunScheduler()
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go runScheduler(stop)
 	defer ctp.SetShowMode(false)
 	deadline := time.Now().Add(6 * time.Second)
 	for time.Now().Before(deadline) {

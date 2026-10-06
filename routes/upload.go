@@ -2,6 +2,7 @@ package routes
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 
@@ -76,17 +78,59 @@ func mediaFileExists(name string) bool {
 	return err == nil
 }
 
-// freeMediaName returns "name (2).ext", "name (3).ext", … — the first name
-// not yet in the media folder.
-func freeMediaName(name string) string {
-	ext := filepath.Ext(name)
-	stem := strings.TrimSuffix(name, ext)
-	for i := 2; ; i++ {
-		cand := fmt.Sprintf("%s (%d)%s", stem, i, ext)
-		if !mediaFileExists(cand) {
-			return cand
+// Media names held by imports in progress. An import claims its final name
+// (reserveMediaName) before it starts and releases it when it is done, so
+// two concurrent imports can never both decide that "clip (2).mp4" is free
+// and have the later one replace the earlier. The check against the media
+// folder and the claim happen under one lock.
+var (
+	mediaNameMu   sync.Mutex
+	mediaNameHeld = map[string]bool{}
+)
+
+// Name reservation modes.
+const (
+	reserveNew     = iota // the name must be free (not on disk, not held)
+	reserveRename         // the name, or the first free "name (n).ext"
+	reserveReplace        // the name, replacing a file on disk; refused while held
+)
+
+// errNameTaken: reserveNew found the name on disk or held by another import.
+var errNameTaken = errors.New("already in the media pool")
+
+// reserveMediaName claims a media name for one import. release must be
+// called when the import has finished (moved into place or failed).
+func reserveMediaName(name string, mode int) (string, func(), error) {
+	mediaNameMu.Lock()
+	defer mediaNameMu.Unlock()
+	taken := func(n string) bool { return mediaNameHeld[n] || mediaFileExists(n) }
+	switch mode {
+	case reserveNew:
+		if taken(name) {
+			return "", nil, errNameTaken
+		}
+	case reserveRename:
+		if taken(name) {
+			ext := filepath.Ext(name)
+			stem := strings.TrimSuffix(name, ext)
+			for i := 2; ; i++ {
+				if cand := fmt.Sprintf("%s (%d)%s", stem, i, ext); !taken(cand) {
+					name = cand
+					break
+				}
+			}
+		}
+	case reserveReplace:
+		if mediaNameHeld[name] {
+			return "", nil, fmt.Errorf("%q is being imported by another upload", name)
 		}
 	}
+	mediaNameHeld[name] = true
+	return name, func() {
+		mediaNameMu.Lock()
+		delete(mediaNameHeld, name)
+		mediaNameMu.Unlock()
+	}, nil
 }
 
 func handleUpload(c *gin.Context) {
@@ -126,22 +170,26 @@ func handleUpload(c *gin.Context) {
 	// failures are reported together instead of aborting the batch on the
 	// first error (which silently dropped every later file while keeping the
 	// earlier ones - a half-import the operator couldn't see).
+	// Each file claims its final name before it is written (see
+	// reserveMediaName): a name taken meanwhile by another upload is a
+	// conflict like one already on disk. Repeats within the batch see the
+	// earlier file on disk by then.
+	mode := map[string]int{"": reserveNew, conflictSkip: reserveNew, conflictRename: reserveRename, conflictReplace: reserveReplace}[onConflict]
 	var failures []string
 	var imported, skipped []string
-	seen := map[string]bool{}
 	for _, fh := range files {
-		name := filepath.Base(fh.Filename)
-		if seen[name] || mediaFileExists(name) {
-			switch onConflict {
-			case conflictSkip:
-				skipped = append(skipped, name)
-				continue
-			case conflictRename:
-				name = freeMediaName(name)
-			}
+		name, release, err := reserveMediaName(filepath.Base(fh.Filename), mode)
+		if errors.Is(err, errNameTaken) && onConflict == conflictSkip {
+			skipped = append(skipped, filepath.Base(fh.Filename))
+			continue
 		}
-		seen[name] = true
-		if err := saveUploadedFile(fh, name); err != nil {
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%q: %v", fh.Filename, err))
+			continue
+		}
+		err = saveUploadedFile(fh, name)
+		release()
+		if err != nil {
 			failures = append(failures, fmt.Sprintf("%q: %v", fh.Filename, err))
 			continue
 		}

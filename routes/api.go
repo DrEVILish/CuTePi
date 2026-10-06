@@ -336,10 +336,12 @@ func Api(rg *gin.RouterGroup) {
 			respondError(c, http.StatusBadRequest, "volume must be a number")
 			return
 		}
-		applied := gsp.SetVolume(v)
+		// Persist on the cue whose pipeline took the change (read with it),
+		// never on a cue that fired in between.
+		applied, pos := gsp.SetCueVolume(v)
 		// The live change already applied; failing to remember it on the
 		// cue is worth a warning, not a failed request.
-		if pos := gsp.CurrentCuePos(); pos > 0 {
+		if pos > 0 {
 			if err := ctp.UpdateCue(strconv.Itoa(pos), "volume", strconv.FormatFloat(applied, 'f', -1, 64)); err != nil {
 				logs.PrintfWarn(logs.RTEEdit, "saving volume on cue %d: %v", pos, err)
 			}
@@ -1390,12 +1392,8 @@ func Api(rg *gin.RouterGroup) {
 				logs.PrintfWarn(logs.RTEEdit, "reloading live cue %d: %v", cue.CuePos, err)
 			}
 		}
-		if gsp.CurrentCuePos() == cue.CuePos {
-			gsp.SetMute(cue.Mute)
-			gsp.SetVolume(cue.Volume)
-			gsp.SetBalance(cue.Balance)
-			gsp.SetRate(cue.Rate)
-		}
+		// Only if it is still this cue playing, checked as it applies.
+		gsp.ApplyCueMix(cue.CuePos, gsp.CueMix{Mute: cue.Mute, Volume: cue.Volume, Balance: cue.Balance, Rate: cue.Rate})
 		c.HTML(http.StatusOK, "cueinspector.html", gin.H{
 			"Cue":           cue,
 			"Selected":      true,
