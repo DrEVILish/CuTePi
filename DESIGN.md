@@ -852,14 +852,15 @@ The scheduler ticks every 200ms and fires cues due within the last 1s (one misse
 enabling Show mode late never replays the day's past cues. Each cue fires once per day (tracked by `cue_id`, so reordering the sheet
 mid-day neither re-fires nor blocks a cue); schedules arm only in Show mode. An armed fire re-checks at its second that Show mode is still
 on and the cue's schedule is unchanged, and records the cue's result and playing position on both the warm and cold paths.
-Two recoveries, neither of which replays the day's past cues:
-- **Stalled scheduler:** if the scheduler loop itself was held up (more than 1 s between its 200 ms passes: CPU starvation, a
-  blocked goroutine), the next pass covers the whole gap, at most 60 s, and fires what fell due in it, late. Enabling Show mode
-  late or editing a schedule into the past is not a stall and still uses the 1 s window.
-- **Failed fire:** a scheduled fire whose load fails (device busy, decoder error, file briefly unavailable) records the cue's error
-  result and is tried again every second until 10 s after its scheduled time. It stays marked fired for the day, so it can never
-  fire twice. Retrying stops as soon as the operator acts on the transport (fires a cue, Stop, Panic), Show mode goes off or the
-  schedule is edited.
+A scheduled cue fires within 1 s of its time or it has failed:
+- **Failed fire:** if the load fails (device busy, decoder error, file briefly unavailable) it is retried once, 250 ms later.
+  If the retry fails too, or the operator acts on the transport in between (fires a cue, Stop, Panic), the cue has failed for
+  the day.
+- **Stalled scheduler:** if the scheduler loop itself is held up (more than 1 s between its 200 ms passes), the cues that fell
+  due in the gap have failed. They are not fired late.
+Every failure is recorded: the cue's result shows the error, the log viewer gets a warning (`SCH-E600` failed attempt,
+`SCH-E610` cue failed, `SCH-E620` stall, `SCH-E630` fired over 1 s late, `SCH-E640` query failed, `SCH-E650` prewarm failed)
+and the audit trail gets a `schedule_failed` record.
 Multi-node sync-fire (several Pis firing the same second) assumes NTP-synced clocks and identical shows — each node fires on its own clock
 crossing. Decision-accurate, not output-accurate: pipeline build takes ~100s of ms, so frame-exact joint output needs timed pre-roll (v2).
 
@@ -890,6 +891,9 @@ moves the generation. Keep them consistent.
 
 ## 7. Error handling & logging
 
+- **Data ingress:** media upload (`/upload`) and show import (`/api/show/import`) are the only paths that bring data in, and the
+  only routes allowed bodies up to 2 GiB. Every other route is capped at 1 MiB (`LimitBody`), and a request declaring more is
+  refused (413) before it is read.
 - Failures at trust boundaries reject cleanly with conventional statuses:
   undecodable imports 422 at import rather than cue time; absent pool items
   404; delete-while-playing 409; firing a cue whose source is missing 409;
@@ -907,10 +911,9 @@ moves the generation. Keep them consistent.
   service user or root, or physical access to the SD card — can read it.
   Basic auth also sends it on every request in cleartext over plain HTTP, so
   it guards against casual access on the show LAN, not a hostile network.
-  **Deployment invariant:** if `auth_password` is set and CuTePi is
-  reachable from outside a trusted LAN, HTTPS must terminate in front of it
-  (a TLS reverse proxy). CuTePi itself serves plain HTTP only, so it cannot
-  check this; it logs a warning at startup whenever a password is set.
+  CuTePi only ever sits on a trusted LAN (the trust model above), so it
+  serves plain HTTP and the password is optional: it keeps casual hands
+  off the controls, it is not a defence against the network.
   Don't reuse a valuable password here. The Wi-Fi hotspot password is
   stored the same way, and is also visible in the process list while
   `nmcli` runs.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"CuTePi/config"
 	"CuTePi/ctp"
 	"CuTePi/gsp"
+	"CuTePi/logs"
 	"CuTePi/media"
 )
 
@@ -135,25 +137,48 @@ func waitPlaying(name string, until time.Time) bool {
 	return false
 }
 
-// A scheduler pass delayed past the normal 1s window must still fire the
-// schedule it skipped over (catch-up over the stalled span), while a normal
-// pass at the same moment correctly treats it as stale.
-func TestSchedulerStallCatchUp(t *testing.T) {
+// logged reports whether the log viewer holds an entry with code whose
+// message contains want.
+func logged(code, want string) bool {
+	for _, e := range logs.Recorded() {
+		if e.Code == code && strings.Contains(e.Message, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// audited reports whether the audit trail holds event for cue pos.
+func audited(event string, pos int) bool {
+	for _, a := range logs.AuditTrail() {
+		if a.Event == event && a.Pos == pos {
+			return true
+		}
+	}
+	return false
+}
+
+// A stalled scheduler has failed: a cue that fell due during the stall is
+// not fired late; it is recorded as failed (error result, log, audit).
+func TestSchedulerStallFailsMissedCue(t *testing.T) {
+	logs.Clear()
 	due := scheduleFixture(t, "schedstall.wav", 1500*time.Millisecond)
 	before := due.Add(-1500 * time.Millisecond)
 	schedulerTick(before) // the last pass before the stall: nothing due yet
 	time.Sleep(time.Until(due.Add(1300 * time.Millisecond)))
 	now := time.Now()
-	schedulerTick(now) // a plain pass: the schedule is >1s old, stale
-	if waitPlaying("schedstall.wav", time.Now().Add(400*time.Millisecond)) {
-		gsp.Panic()
-		t.Fatal("a plain pass fired a schedule older than its 1s window")
-	}
-	schedulerCatchUp(before, now) // the stalled pass covers the gap
-	ok := waitPlaying("schedstall.wav", time.Now().Add(3*time.Second))
+	schedulerStalled(before, now)
+	schedulerTick(now)
+	played := waitPlaying("schedstall.wav", time.Now().Add(time.Second))
 	gsp.Panic()
-	if !ok {
-		t.Fatal("stalled scheduler never recovered the schedule it skipped")
+	if played {
+		t.Fatal("a cue missed during a stall was fired late")
+	}
+	if cue, _ := ctp.GetCue("1"); cue.LastResult != ctp.CueResultError {
+		t.Fatalf("missed cue result = %v, want error", cue.LastResult)
+	}
+	if !logged(logs.SCHStalled, "1 scheduled cue") || !logged(logs.SCHFailed, "stalled") || !audited("schedule_failed", 1) {
+		t.Fatalf("stall not recorded: %+v", logs.Recorded())
 	}
 }
 
@@ -173,20 +198,17 @@ func failScheduledLoads(t *testing.T, n int) {
 	}
 }
 
-// A scheduled fire that fails is retried within its window instead of
-// being marked fired for the rest of the day.
-func TestScheduledFireRetriesAfterFailure(t *testing.T) {
+// A scheduled fire that fails is retried once, at once, and the failed
+// attempt is logged.
+func TestScheduledFireRetriesOnce(t *testing.T) {
+	logs.Clear()
 	due := scheduleFixture(t, "schedretry.wav", 1200*time.Millisecond)
 	failScheduledLoads(t, 1)
 	// Armed just after its second: fires at once on the cold-load path
 	// (an earlier arm would prewarm and take the warm slot instead).
-	time.Sleep(time.Until(due.Add(150 * time.Millisecond)))
+	time.Sleep(time.Until(due.Truncate(time.Second).Add(100 * time.Millisecond))) // inside its stored second
 	schedulerTick(time.Now())
-	time.Sleep(250 * time.Millisecond)
-	if cue, _ := ctp.GetCue("1"); cue.LastResult != ctp.CueResultError {
-		t.Fatalf("first attempt result = %v, want error", cue.LastResult)
-	}
-	ok := waitPlaying("schedretry.wav", due.Add(5*time.Second))
+	ok := waitPlaying("schedretry.wav", due.Add(time.Second+150*time.Millisecond))
 	var cue ctp.Cue
 	for end := time.Now().Add(time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
 		if cue, _ = ctp.GetCue("1"); cue.LastResult == ctp.CueResultOK {
@@ -195,42 +217,60 @@ func TestScheduledFireRetriesAfterFailure(t *testing.T) {
 	}
 	gsp.Panic()
 	if !ok || cue.LastResult != ctp.CueResultOK {
-		t.Fatalf("failed scheduled fire was not retried (playing %v, result %v)", ok, cue.LastResult)
+		t.Fatalf("the retry did not play within 1s (playing %v, result %v)", ok, cue.LastResult)
+	}
+	if !logged(logs.SCHFireFailed, "attempt 1") {
+		t.Fatalf("first failure not logged: %+v", logs.Recorded())
 	}
 }
 
-// An operator action after a failed scheduled fire cancels its retries.
+// An operator action after a failed scheduled fire cancels the retry, and
+// the cue is recorded as failed.
 func TestScheduledRetryYieldsToOperator(t *testing.T) {
+	logs.Clear()
+	defer func(d time.Duration) { scheduleRetryDelay = d }(scheduleRetryDelay)
+	scheduleRetryDelay = time.Second // room for the operator to act first
 	due := scheduleFixture(t, "schedyield.wav", 1200*time.Millisecond)
 	failScheduledLoads(t, 1)
-	// Armed just after its second: fires at once on the cold-load path
-	// (an earlier arm would prewarm and take the warm slot instead).
-	time.Sleep(time.Until(due.Add(150 * time.Millisecond)))
+	time.Sleep(time.Until(due.Truncate(time.Second).Add(100 * time.Millisecond))) // inside its stored second
 	schedulerTick(time.Now())
-	time.Sleep(250 * time.Millisecond)
-	if cue, _ := ctp.GetCue("1"); cue.LastResult != ctp.CueResultError {
-		t.Fatalf("first attempt result = %v, want error", cue.LastResult)
-	}
+	time.Sleep(300 * time.Millisecond)
 	gsp.Stop() // the operator takes over
-	if waitPlaying("schedyield.wav", due.Add(4*time.Second)) {
+	if waitPlaying("schedyield.wav", time.Now().Add(2*time.Second)) {
 		gsp.Panic()
-		t.Fatal("a retry fired after the operator stopped playback")
+		t.Fatal("the retry fired after the operator stopped playback")
+	}
+	if !logged(logs.SCHFailed, "operator") || !audited("schedule_failed", 1) {
+		t.Fatalf("yielded cue not recorded as failed: %+v", logs.Recorded())
 	}
 }
 
-// Retries give up once the window has passed.
-func TestScheduledRetryWindowEnds(t *testing.T) {
+// A retry that fails too is final: no third attempt, the cue has failed.
+func TestScheduledSecondFailureIsFinal(t *testing.T) {
+	logs.Clear()
 	due := scheduleFixture(t, "schedgiveup.wav", 1200*time.Millisecond)
-	defer func(w time.Duration) { scheduleRetryWindow = w }(scheduleRetryWindow)
-	scheduleRetryWindow = 3 * time.Second
-	failScheduledLoads(t, 1000)
-	time.Sleep(time.Until(due.Add(150 * time.Millisecond)))
-	schedulerTick(time.Now())
-	time.Sleep(time.Until(due.Add(scheduleRetryWindow + 1500*time.Millisecond)))
+	var mu sync.Mutex
 	calls := 0
-	scheduledLoad = func(ctp.Cue, gsp.LoadOpts) error { calls++; return nil }
-	time.Sleep(2 * scheduleRetryEvery)
-	if calls != 0 {
-		t.Fatalf("still retrying %v after the scheduled time", scheduleRetryWindow)
+	t.Cleanup(func() { scheduledLoad = loadCueSource })
+	scheduledLoad = func(ctp.Cue, gsp.LoadOpts) error {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return errors.New("injected load failure")
+	}
+	time.Sleep(time.Until(due.Truncate(time.Second).Add(100 * time.Millisecond))) // inside its stored second
+	schedulerTick(time.Now())
+	time.Sleep(2 * time.Second)
+	mu.Lock()
+	n := calls
+	mu.Unlock()
+	if n != 2 {
+		t.Fatalf("%d load attempts, want 2 (one retry)", n)
+	}
+	if cue, _ := ctp.GetCue("1"); cue.LastResult != ctp.CueResultError {
+		t.Fatalf("result = %v, want error", cue.LastResult)
+	}
+	if !logged(logs.SCHFireFailed, "attempt 2") || !logged(logs.SCHFailed, "both attempts") || !audited("schedule_failed", 1) {
+		t.Fatalf("final failure not recorded: %+v", logs.Recorded())
 	}
 }

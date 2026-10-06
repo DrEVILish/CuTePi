@@ -150,11 +150,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if config.HasAuth() {
-		// Basic auth sends the password in the clear (DESIGN §7).
-		log.Printf("CuTePi: WARNING: the operator password is sent with HTTP Basic auth over plain HTTP; " +
-			"if CuTePi is reachable outside a trusted LAN, put an HTTPS reverse proxy in front of it")
-	}
 	printNetworkInfo()
 	log.Printf("CuTePi: listening on %s", address)
 	// A bind failure (port already in use - e.g. the restart handover losing

@@ -247,6 +247,16 @@ const (
 	NETHotspotWarn = "NET-E311" // hotspot failed but the settings save went through
 )
 
+// SCH - wall-clock scheduler (routes/scheduler.go). All are warnings.
+const (
+	SCHFireFailed  = "SCH-E600" // a scheduled fire attempt failed (the first is retried once)
+	SCHFailed      = "SCH-E610" // a scheduled cue failed: it did not fire
+	SCHStalled     = "SCH-E620" // the scheduler stalled; cues due in the gap failed
+	SCHLate        = "SCH-E630" // a scheduled cue fired more than 1s late
+	SCHQueryFailed = "SCH-E640" // the due-cue query failed (nothing armed this pass)
+	SCHPrewarm     = "SCH-E650" // a scheduled cue's prewarm failed (it loads cold)
+)
+
 // AUD - structured playback audit records (also exposed to the Web UI).
 const (
 	AUDAudit = "AUD-E500" // structured playback audit event (cue start/stop etc)

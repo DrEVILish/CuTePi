@@ -1,7 +1,7 @@
 package routes
 
 import (
-	"log"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -9,6 +9,7 @@ import (
 
 	"CuTePi/ctp"
 	"CuTePi/gsp"
+	"CuTePi/logs"
 	"CuTePi/ws"
 )
 
@@ -92,8 +93,10 @@ func runScheduler(stop <-chan struct{}) {
 			(!passedDue.IsZero() && now.Before(passedDue.Add(scheduleTrail)))
 		if showWas && !prev.IsZero() && now.Sub(prev) > scheduleStall {
 			// The loop itself was held up (CPU starvation, a blocked
-			// goroutine): cover the whole gap, not just the last second.
-			schedulerCatchUp(prev, now)
+			// goroutine): what fell due in the gap has failed; the
+			// current window is still served.
+			schedulerStalled(prev, now)
+			schedulerTick(now)
 		} else if near || !showWas || version != lastVersion {
 			schedulerTick(now)
 		}
@@ -113,24 +116,46 @@ const (
 )
 
 // scheduleStall is the gap between two scheduler passes (normally 200ms)
-// that counts as a stall, and scheduleCatchUpMax the most a stalled pass
-// looks back. Only a stall of the scheduler itself reaches back: enabling
-// Show mode late or editing a schedule into the past still never replays
-// past cues (§6.8b).
-const (
-	scheduleStall      = time.Second
-	scheduleCatchUpMax = time.Minute
-)
+// that counts as a stall. A stalled scheduler has failed: the cues that fell
+// due in the gap are not fired late, they are recorded as failed (§6.8b).
+const scheduleStall = time.Second
 
-// schedulerCatchUp runs the pass after a stall: every cue due since the
-// previous pass (prev, the last instant the loop saw) fires now, late.
-func schedulerCatchUp(prev, now time.Time) {
-	from := prev.Add(-time.Second) // the previous pass's own window, overlap is harmless
-	if limit := now.Add(-scheduleCatchUpMax); from.Before(limit) {
-		from = limit
+// schedulerStalled records the cues that fell due while the scheduler was
+// stalled (between prev, its last pass, and the 1s window now covers) as
+// failed: error result, a warning in the log and an audit record. Cues due
+// inside now's own window still fire normally.
+func schedulerStalled(prev, now time.Time) {
+	gap := now.Sub(prev).Round(time.Millisecond)
+	rows, err := ctp.GetScheduledCuesSince(prev.Add(-time.Second), now.Add(-time.Second))
+	if err != nil {
+		logs.PrintfWarn(logs.SCHStalled, "scheduler stalled for %v; checking for missed cues: %v", gap, err)
+		return
 	}
-	log.Printf("CuTePi: scheduler stalled for %v; catching up", now.Sub(prev).Round(time.Millisecond))
-	schedulerTickSince(from, now)
+	logs.PrintfWarn(logs.SCHStalled, "scheduler stalled for %v; %d scheduled cue(s) fell due in the gap", gap, len(rows))
+	day := now.Format("2006-01-02")
+	for _, cue := range rows {
+		key := strconv.Itoa(cue.CueID) + "|" + day
+		scheduleMu.Lock()
+		if scheduleFiredDay != day {
+			scheduleFired = make(map[string]int64)
+			scheduleFiredDay = day
+		}
+		_, done := scheduleFired[key]
+		if !done {
+			scheduleFired[key] = now.UnixMilli() // decided: it will not fire today
+		}
+		scheduleMu.Unlock()
+		if !done {
+			scheduleFailed(cue.CuePos, cue.Title, fmt.Sprintf("missed while the scheduler was stalled for %v", gap))
+		}
+	}
+}
+
+// scheduleFailed records a scheduled cue that did not fire.
+func scheduleFailed(pos int, title, why string) {
+	ctp.SetCueResult(pos, ctp.CueResultError)
+	logs.PrintfWarn(logs.SCHFailed, "scheduled cue %d %q failed: %s", pos, title, why)
+	logs.Emit(logs.AuditEvent{Event: "schedule_failed", Pos: pos, Title: title})
 }
 
 // schedulerTick runs one scheduler iteration at a point in time: query due
@@ -144,7 +169,7 @@ func schedulerTick(now time.Time) {
 func schedulerTickSince(from, now time.Time) {
 	rows, err := ctp.GetScheduledCuesSince(from, now)
 	if err != nil {
-		log.Printf("CuTePi: scheduler query failed: %v", err)
+		logs.PrintfWarn(logs.SCHQueryFailed, "scheduler query failed: %v", err)
 		return
 	}
 	day := now.Format("2006-01-02")
@@ -194,7 +219,7 @@ func armScheduled(cue ctp.ScheduleInfo, key string, at time.Time) {
 			return
 		}
 		if warmErr := gsp.Warm(cue.Filename, opts); warmErr != nil {
-			log.Printf("CuTePi: scheduled cue %d prewarm: %v", cue.CuePos, warmErr)
+			logs.PrintfWarn(logs.SCHPrewarm, "scheduled cue %d prewarm (it will load cold): %v", cue.CuePos, warmErr)
 		}
 	})
 	time.AfterFunc(d, safe(func() { fireScheduled(cue, key, at, opts, true) }))
@@ -206,6 +231,11 @@ func armScheduled(cue ctp.ScheduleInfo, key string, at time.Time) {
 // arm. The cue is re-fetched by cue_id (latest edits; its CURRENT position
 // is what gets recorded).
 func fireScheduled(armed ctp.ScheduleInfo, key string, at time.Time, opts gsp.LoadOpts, tryWarm bool) {
+	fireScheduledAttempt(armed, key, at, opts, tryWarm, 1)
+}
+
+// fireScheduledAttempt is one attempt (1 or 2) at a scheduled fire.
+func fireScheduledAttempt(armed ctp.ScheduleInfo, key string, at time.Time, opts gsp.LoadOpts, tryWarm bool, attempt int) {
 	cue, err := ctp.GetCueByID(armed.CueID)
 	if err != nil || !ctp.GetShowMode() || !cue.ScheduleEnabled || cue.ScheduleTimeMs != armed.ScheduleMs {
 		// Disarmed. Forget the arm so an edited schedule later today can
@@ -221,8 +251,12 @@ func fireScheduled(armed ctp.ScheduleInfo, key string, at time.Time, opts gsp.Lo
 	if !(tryWarm && cue.SourceKind != "endpoint" && gsp.InstallWarm(cue.Filename, opts)) {
 		if err := scheduledLoad(cue, cueOpts(cue, false)); err != nil {
 			ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
-			log.Printf("CuTePi: failed to fire scheduled cue %d: %v", cue.CuePos, err)
-			retryScheduled(armed, key, at, markTransport())
+			logs.PrintfWarn(logs.SCHFireFailed, "scheduled cue %d %q, attempt %d: %v", cue.CuePos, cue.Title, attempt, err)
+			if attempt == 1 {
+				retryScheduled(armed, key, at, markTransport())
+			} else {
+				scheduleFailed(cue.CuePos, cue.Title, "both attempts failed")
+			}
 			return
 		}
 	}
@@ -233,7 +267,7 @@ func fireScheduled(armed ctp.ScheduleInfo, key string, at time.Time, opts gsp.Lo
 	gsp.SetCuePos(cue.CuePos)
 	gsp.Play()
 	if late := time.Since(at); late > time.Second {
-		log.Printf("CuTePi: scheduled cue %d fired %v late", cue.CuePos, late.Round(time.Millisecond))
+		logs.PrintfWarn(logs.SCHLate, "scheduled cue %d %q fired %v late (attempt %d)", cue.CuePos, cue.Title, late.Round(time.Millisecond), attempt)
 	}
 }
 
@@ -241,27 +275,21 @@ func fireScheduled(armed ctp.ScheduleInfo, key string, at time.Time, opts gsp.Lo
 // fail on demand).
 var scheduledLoad = loadCueSource
 
-// scheduleRetryEvery and scheduleRetryWindow: a scheduled fire that fails
-// (decoder or device busy, file briefly unavailable) is tried again every
-// second until this long after its scheduled time. It stays marked fired
-// for the day, so it can never fire twice.
-const scheduleRetryEvery = time.Second
+// scheduleRetryDelay: a scheduled fire that fails (device busy, decoder
+// error, file briefly unavailable) is tried once more after this pause;
+// if that fails too, the cue has failed for the day. A variable for tests.
+var scheduleRetryDelay = 250 * time.Millisecond
 
-var scheduleRetryWindow = 10 * time.Second // a variable for tests
-
-// retryScheduled tries a failed scheduled fire again after a second, unless
-// the operator has acted on the transport since (mark: a cue fired, Stop or
-// Panic win over a late retry) or the retry window has passed. fireScheduled
-// re-checks Show mode and the schedule, and retries again on failure.
+// retryScheduled makes the one retry of a failed scheduled fire, unless the
+// operator has acted on the transport meanwhile (mark: a cue fired, Stop or
+// Panic win over the retry; the cue is then recorded as failed).
+// fireScheduledAttempt re-checks Show mode and the schedule.
 func retryScheduled(armed ctp.ScheduleInfo, key string, at time.Time, mark transportMark) {
-	if time.Since(at)+scheduleRetryEvery > scheduleRetryWindow {
-		log.Printf("CuTePi: scheduled cue %d: giving up after %v", armed.CuePos, scheduleRetryWindow)
-		return
-	}
-	time.AfterFunc(scheduleRetryEvery, safe(func() {
+	time.AfterFunc(scheduleRetryDelay, safe(func() {
 		if !mark.unchanged() {
+			scheduleFailed(armed.CuePos, armed.Title, "not retried: the operator took over")
 			return
 		}
-		fireScheduled(armed, key, at, cueOpts(armed.AsCue(), false), false)
+		fireScheduledAttempt(armed, key, at, cueOpts(armed.AsCue(), false), false, 2)
 	}))
 }
