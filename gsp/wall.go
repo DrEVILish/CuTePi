@@ -30,6 +30,7 @@ type wallLayer struct {
 	visible bool                        // part of the on-screen stack (not a warm/prerolling slot)
 	parked  bool                        // invisible at the top zpos, ready to be raised (panic image)
 	still   atomic.Bool                 // shows a single-frame image: no video to share commits with
+	framed  atomic.Bool                 // the sink has received its first frame
 
 	// Alpha writes are commits that wait for the next vblank (~16 ms), so
 	// they run on the layer's own writer: callers (fade loops holding the
@@ -724,6 +725,11 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 	sink.Set("fd", w.fd)
 	sink.Set("plane-id", int(l.plane.id))
 	sink.Set("skip-vsync", true) // one vsync waiter per DRM fd: several sinks share it
+	// First-frame flag: a live page has no preroll, so its show waits on this.
+	sink.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer, func(*gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
+		l.framed.Store(true)
+		return gst.PadProbeRemove
+	})
 	x, y, bw, bh := wallRect(opts, w.Width, w.Height)
 	// kmssink fits the (cropped) frame inside this box, aspect kept.
 	sink.SetArg("render-rectangle", fmt.Sprintf("<%d,%d,%d,%d>", x, y, bw, bh))

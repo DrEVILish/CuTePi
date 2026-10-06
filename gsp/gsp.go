@@ -684,7 +684,10 @@ func LoadEndpointWithOpts(title, endpointURL string, opts LoadOpts) error {
 		return err
 	}
 	mgr.swap(p, "Live: "+title, opts)
-	watchAndPlay(p)
+	if err := watchAndPlay(p); err != nil {
+		logs.Printf(logs.GSPPipeStopped, "gsp: live page %q: %v", endpointURL, err)
+		return fmt.Errorf("loading live page %q: %w", endpointURL, err)
+	}
 	return nil
 }
 
@@ -1773,6 +1776,20 @@ func startPlayback(p *gst.Pipeline) error {
 	mgr.starting = false
 	level := mgr.fadeLevel
 	mgr.mu.Unlock()
+	if live {
+		// A live page has no preroll: its layer appears only after PLAYING
+		// brings the first frame (showLive).
+		if err := setStateIfCurrent(p, gst.StatePlaying); err != nil {
+			incomingShown(p)
+			if errors.Is(err, errPipelineReplaced) {
+				return nil
+			}
+			mgr.clearIfCurrent(p)
+			return fmt.Errorf("gsp: starting live page: %w", err)
+		}
+		go showLive(p, gen)
+		return nil
+	}
 	// Prerolled: put the layer on screen, under anything fading out, and
 	// only now let the cues above it start fading away.
 	showLayer(p, level)
@@ -1789,6 +1806,62 @@ func startPlayback(p *gst.Pipeline) error {
 		go watchTrim(p)
 	}
 	return nil
+}
+
+// liveFrameWait bounds how long a live page may take to reach the wall
+// (WebKit start-up plus page load) before the cue counts as failed and the
+// live-page recovery takes over (DESIGN §12.14).
+var liveFrameWait = 20 * time.Second
+
+// showLive puts a live page on screen once its first frame has reached its
+// layer, then runs the cue's fade-in. A live source has no preroll: PAUSED
+// returns before decodebin has exposed a pad, so the layer does not exist
+// yet at the point a file cue is shown, and showing it then left the plane
+// at alpha 0 (a black wall over a rendering page). Cues fading out over it
+// keep their picture until the page is up.
+func showLive(p *gst.Pipeline, gen uint64) {
+	defer incomingShown(p) // never leave a crossfade waiting on a failed page
+	start := time.Now()
+	for !liveFrameReady(p) {
+		mgr.mu.Lock()
+		current := mgr.pipeline == p && mgr.gen == gen
+		mgr.mu.Unlock()
+		if !current {
+			return
+		}
+		if time.Since(start) > liveFrameWait {
+			logs.Printf(logs.GSPPipeStopped, "gsp: live page drew no frame within %v", liveFrameWait)
+			mgr.endpointFailed(p)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mgr.mu.Lock()
+	current := mgr.pipeline == p && mgr.gen == gen
+	level := mgr.fadeLevel
+	title := mgr.currentFile
+	mgr.mu.Unlock()
+	if !current {
+		return
+	}
+	showLayer(p, level)
+	incomingShown(p)
+	logs.Printf(logs.GSPFireTiming, "%s: first frame on screen after %.0fms", title, time.Since(start).Seconds()*1000)
+	fadeIn(p, gen)
+}
+
+// liveFrameReady reports whether p's first frame is on its wall layer.
+func liveFrameReady(p *gst.Pipeline) bool {
+	if glOpen {
+		glMu.Lock()
+		defer glMu.Unlock()
+		return glLayers[p] != nil // glShow attaches it
+	}
+	if kmsWall() == nil {
+		return true // plain sink: no layer to raise
+	}
+	l := layerOf(p)
+	return l != nil && l.framed.Load()
 }
 
 // retirePipeline tears down a pipeline that is no longer (or about to stop

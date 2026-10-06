@@ -1220,7 +1220,7 @@ single member, without the selection ever leaving the group header.
 
 ### 12.14 Live endpoint cues (TimerPi display pages, issue #4)
 
-Add a media-pool source that renders a live HTTP(S) page into CuTePi's existing
+Add a cue source that renders a live HTTP(S) page into CuTePi's existing
 HDMI wall path. It must participate in the normal cue transport, fades, waits,
 selection and recovery behavior. Keep the renderer behind a source interface
 so the cue engine does not depend on a particular browser implementation.
@@ -1245,8 +1245,16 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   TimerPi display page's ftl-themes background drift costs WPE ~200–310%
   CPU (a static page ~0.5%). CuTePi itself ~28% of a core at 15 fps (~54%
   at 30). The display commits one frame per
-  rendered frame. WebKit's two helper processes (~210 MB RSS) stay resident
-  and are reused after Stop; they do not accumulate.
+  rendered frame. (That count was taken on the plane, not the picture: until
+  2026-10-06 the plane stayed at alpha 0 and the wall showed black. Check
+  live output with the plane's `alpha` as well as its frames.) WebKit's two helper processes stay resident
+  and are reused after Stop; they do not accumulate, and a stopped page
+  stops running (0% CPU between fires). *Soak, 2026-10-06:* 30 fire/stop
+  cycles of a TimerPi page held WebKit at 300–370 MB RSS with no upward
+  trend (CuTePi ~175 MB), first frame 261–832 ms after Fire every time. A
+  heavier site caches more: google.co.uk grew ~30 MB per fire to ~900 MB
+  over 20 fires, and the same growth occurs with `wpevideosrc` outside
+  CuTePi, so it is WebKit's cache, not a pipeline leak.
 - **Renderer spike / fallback**: if WPE cannot meet the wall's resource budget,
   evaluate a headless render-to-texture path. Do not use a normal desktop
   browser or let a renderer compete with the wall for the display. Record the
@@ -1296,6 +1304,13 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   not create or route a second audio stream. Ignore AutoContinue for endpoint
   cues so it cannot end a page without an operator action.
   Stopping or replacing it must release renderer and pipeline resources.
+  *When it appears:* a live page has no preroll, so it goes on screen at its
+  first rendered frame (typically 0.3–0.8 s after Fire on a Pi 4), not at
+  Fire. Its fade-in starts from that frame. A cue it replaces keeps its
+  picture until then and then fades out over the page (the replacement
+  cue's fade-out time, as for any cue switch). A page that draws no frame
+  within 20 s (`liveFrameWait`) is treated as a renderer failure (the same
+  handling as a pipeline error).
 - **Failure and recovery**: distinguish initial load failure from an active
   endpoint dropping. Surface a clear cue error at initial failure. During an
   active cue, transition to the configured panic holding image (existing
