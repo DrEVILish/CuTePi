@@ -236,11 +236,17 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	retire := []*gst.Pipeline{m.takeWarm()} // a warm slot from a previous decision is somebody else's memory
 	var out *outgoing
 	if m.pipeline != nil && m.pipeline != newPipeline {
-		if opts.Crossfade > 0 && layerOf(m.pipeline) != nil {
+		// A live page loads hidden (showLive), so the old cue stays up
+		// until the page is ready even on a cut (crossfade 0: it is then
+		// removed in one step).
+		if (opts.Crossfade > 0 || opts.LiveEndpoint) && layerOf(m.pipeline) != nil {
 			// Crossfade: the old cue keeps playing on its own layer and
 			// fades away over the new one (which starts underneath).
 			out = &outgoing{p: m.pipeline, volumeEl: m.volumeEl, gain: m.effectiveGain(),
-				level: m.fadeLevel, curve: opts.FadeCurve, done: make(chan struct{})}
+				level: m.fadeLevel, curve: opts.FadeCurve, done: make(chan struct{}), wait: 5 * time.Second}
+			if opts.LiveEndpoint {
+				out.wait = liveFrameWait + liveLoadWait // showLive always ends within this
+			}
 		} else {
 			retire = append(retire, m.pipeline)
 		}
@@ -1700,6 +1706,15 @@ func watchAndPlay(p *gst.Pipeline) error {
 			current := mgr.pipeline == p
 			mgr.mu.Unlock()
 			return current
+		case gst.MessageElement:
+			// wpevideosrc reports its page's load progress; 100 is loaded.
+			if st := msg.GetStructure(); st != nil && st.Name() == "wpe-stats" {
+				if v, err := st.GetValue("estimated-load-progress"); err == nil {
+					if f, ok := v.(float64); ok && f >= 100 {
+						liveLoaded.LoadOrStore(p, time.Now())
+					}
+				}
+			}
 		case gst.MessageError:
 			gerr := msg.ParseError()
 			logs.Printf(logs.GSPPipeDebug, "gsp: pipeline error debug: %s", gerr.DebugString())
@@ -1808,28 +1823,52 @@ func startPlayback(p *gst.Pipeline) error {
 	return nil
 }
 
-// liveFrameWait bounds how long a live page may take to reach the wall
-// (WebKit start-up plus page load) before the cue counts as failed and the
-// live-page recovery takes over (DESIGN §12.14).
+// liveFrameWait bounds how long a live page may take to draw its first
+// frame (WebKit start-up) before the cue counts as failed and the live-page
+// recovery takes over (DESIGN §12.14).
 var liveFrameWait = 20 * time.Second
 
-// showLive puts a live page on screen once its first frame has reached its
-// layer, then runs the cue's fade-in. A live source has no preroll: PAUSED
-// returns before decodebin has exposed a pad, so the layer does not exist
-// yet at the point a file cue is shown, and showing it then left the plane
-// at alpha 0 (a black wall over a rendering page). Cues fading out over it
-// keep their picture until the page is up.
+// liveLoadWait bounds how long a drawing page stays hidden waiting for its
+// load to complete: a page that never reports it (endless subresource
+// loads) is shown anyway rather than held off the wall.
+var liveLoadWait = 15 * time.Second
+
+// livePaintSettle is how long a loaded page keeps rendering hidden before it
+// is shown: layout and web fonts often paint a few frames after the load
+// event.
+var livePaintSettle = 400 * time.Millisecond
+
+// liveLoaded holds, per live pipeline, when its page finished loading
+// (wpevideosrc's wpe-stats message at 100%).
+var liveLoaded sync.Map // *gst.Pipeline -> time.Time
+
+// showLive puts a live page on screen once it has loaded and painted, then
+// runs the cue's fade-in. Until then the page renders on its own layer at
+// alpha 0, so the audience never sees WebKit's blank (white) page or a half
+// loaded one; a cue it replaces keeps its picture meanwhile. A live source
+// has no preroll (PAUSED returns before decodebin has exposed a pad), so
+// this cannot happen at the point a file cue is shown.
 func showLive(p *gst.Pipeline, gen uint64) {
 	defer incomingShown(p) // never leave a crossfade waiting on a failed page
 	start := time.Now()
-	for !liveFrameReady(p) {
+	reason := "loaded"
+	for {
 		mgr.mu.Lock()
 		current := mgr.pipeline == p && mgr.gen == gen
 		mgr.mu.Unlock()
 		if !current {
 			return
 		}
-		if time.Since(start) > liveFrameWait {
+		waited := time.Since(start)
+		if liveFrameReady(p) {
+			if at, ok := liveLoaded.Load(p); ok && time.Since(at.(time.Time)) >= livePaintSettle {
+				break
+			}
+			if waited > liveLoadWait {
+				reason = fmt.Sprintf("load not complete after %v, shown anyway", liveLoadWait)
+				break
+			}
+		} else if waited > liveFrameWait {
 			logs.Printf(logs.GSPPipeStopped, "gsp: live page drew no frame within %v", liveFrameWait)
 			mgr.endpointFailed(p)
 			return
@@ -1846,7 +1885,7 @@ func showLive(p *gst.Pipeline, gen uint64) {
 	}
 	showLayer(p, level)
 	incomingShown(p)
-	logs.Printf(logs.GSPFireTiming, "%s: first frame on screen after %.0fms", title, time.Since(start).Seconds()*1000)
+	logs.Printf(logs.GSPFireTiming, "%s: on screen after %.0fms (%s)", title, time.Since(start).Seconds()*1000, reason)
 	fadeIn(p, gen)
 }
 
@@ -1870,6 +1909,7 @@ func liveFrameReady(p *gst.Pipeline) bool {
 // never produces a bus message, so the watch - and everything it captures -
 // would otherwise leak on every cue swap for the lifetime of the process.
 func retirePipeline(p *gst.Pipeline) {
+	liveLoaded.Delete(p)
 	p.SetState(gst.StateNull)
 	dropLayer(p)
 	incomingShown(p)

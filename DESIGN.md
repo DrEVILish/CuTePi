@@ -1304,13 +1304,19 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   not create or route a second audio stream. Ignore AutoContinue for endpoint
   cues so it cannot end a page without an operator action.
   Stopping or replacing it must release renderer and pipeline resources.
-  *When it appears:* a live page has no preroll, so it goes on screen at its
-  first rendered frame (typically 0.3–0.8 s after Fire on a Pi 4), not at
-  Fire. Its fade-in starts from that frame. A cue it replaces keeps its
-  picture until then and then fades out over the page (the replacement
-  cue's fade-out time, as for any cue switch). A page that draws no frame
-  within 20 s (`liveFrameWait`) is treated as a renderer failure (the same
-  handling as a pipeline error).
+  *When it appears:* a live page loads hidden. It renders on its own layer
+  at alpha 0 until WebKit reports the load complete (`wpe-stats`
+  `estimated-load-progress` 100) plus a 400 ms paint settle
+  (`livePaintSettle`, for late layout and web fonts), and only then is
+  shown and fades in. The audience never sees WebKit's blank white page or
+  a half-loaded one. New live cues get a 1 s fade-in (`LiveCueFadeInMs`),
+  editable like any cue. The cue it replaces stays on screen, sound
+  included, until the page is shown, even on a cut. It then cuts (fade-out
+  0) or crossfades over the page (the live cue's fade-out time). A page that
+  draws frames but never reports its load complete is shown after 15 s
+  (`liveLoadWait`). One that draws no frame within 20 s (`liveFrameWait`)
+  is treated as a renderer failure (the same handling as a pipeline
+  error). Measured on a Pi 4, TimerPi page: shown 0.5–2.5 s after Fire.
 - **Failure and recovery**: distinguish initial load failure from an active
   endpoint dropping. Surface a clear cue error at initial failure. During an
   active cue, transition to the configured panic holding image (existing

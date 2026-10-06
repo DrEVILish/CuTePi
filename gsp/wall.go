@@ -397,6 +397,7 @@ type outgoing struct {
 	curve    string
 	done     chan struct{}
 	start    chan struct{} // closed once the incoming cue is on screen
+	wait     time.Duration // longest wait for start before fading anyway
 }
 
 var (
@@ -447,7 +448,7 @@ func fadeOutgoing(o *outgoing, durMs int) {
 		case <-o.start:
 		case <-o.done:
 			return
-		case <-time.After(5 * time.Second): // the new cue never showed; fade anyway
+		case <-time.After(o.wait): // the new cue never showed; fade anyway
 		}
 	}
 	total := time.Duration(durMs) * time.Millisecond

@@ -1283,6 +1283,9 @@ func AddEndpoint(title, rawURL string) (int, error) {
 // AddLiveCue appends a live-page cue to the end of the sheet (where pool
 // adds land too) and selects it, so the inspector opens on it. Returns the
 // new cue's position.
+// LiveCueFadeInMs is a new live cue's fade-in.
+const LiveCueFadeInMs = 1000
+
 func AddLiveCue(title, rawURL string) (int, error) {
 	id, err := AddEndpoint(title, rawURL)
 	if err != nil {
@@ -1295,6 +1298,10 @@ func AddLiveCue(title, rawURL string) (int, error) {
 	var pos int
 	if err := db.Get(&pos, `SELECT cuePos FROM cuesheet WHERE media_id = ?`, id); err != nil {
 		return 0, err
+	}
+	// Live pages fade in once loaded (DESIGN §12.14); editable per cue.
+	if _, err := db.Exec(`UPDATE cuesheet SET fadeIn = ? WHERE cuePos = ?`, LiveCueFadeInMs, pos); err != nil {
+		return pos, err
 	}
 	if err := SetCue(strconv.Itoa(pos)); err != nil {
 		return pos, err

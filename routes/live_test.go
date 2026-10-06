@@ -39,6 +39,9 @@ func TestLiveCueAddsToSheetNotPool(t *testing.T) {
 	if cue.SourceKind != "endpoint" || cue.EndpointURL != "https://timer.example/d/" || cue.Title != "Room A" {
 		t.Fatalf("live cue = kind %q url %q title %q", cue.SourceKind, cue.EndpointURL, cue.Title)
 	}
+	if cue.FadeIn != ctp.LiveCueFadeInMs {
+		t.Fatalf("live cue fade-in = %v, want %d ms", cue.FadeIn, ctp.LiveCueFadeInMs)
+	}
 	if !strings.Contains(get(t, r, "/api/cuesheet").Body.String(), "Room A") {
 		t.Fatal("cuesheet does not show the live cue")
 	}
