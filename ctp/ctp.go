@@ -1309,22 +1309,71 @@ func AddLiveCue(title, rawURL string) (int, error) {
 	return pos, nil
 }
 
-// SetCueEndpointURL points a live cue at a different page.
+// SetCueEndpointURL points a live cue at a different page. The cue gets a
+// fresh source row: the old one is left orphaned for the live-page cache
+// keeper, which drops the old site's cached assets (if no other cue uses
+// it) and then the row.
 func SetCueEndpointURL(cuePos int, rawURL string) error {
 	u, err := validateEndpointURL(rawURL)
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec(`UPDATE mediapool SET endpoint_url = ?
-		WHERE source_kind = 'endpoint' AND media_id = (SELECT media_id FROM cuesheet WHERE cuePos = ?)`, u.String(), cuePos)
+	var cur struct {
+		MediaID int    `db:"media_id"`
+		URL     string `db:"endpoint_url"`
+		Title   string `db:"endpoint_title"`
+	}
+	err = db.Get(&cur, `SELECT m.media_id, m.endpoint_url, m.endpoint_title FROM cuesheet c
+		JOIN mediapool m ON m.media_id = c.media_id
+		WHERE c.cuePos = ? AND m.source_kind = 'endpoint'`, cuePos)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("cue %d is not a live page", cuePos)
+	}
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("cue %d is not a live page", cuePos)
+	if cur.URL == u.String() {
+		return nil
+	}
+	id, err := AddEndpoint(cur.Title, u.String())
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE cuesheet SET media_id = ? WHERE cuePos = ?`, id, cuePos); err != nil {
+		return err
 	}
 	bumpCuesheetVersion()
 	return nil
+}
+
+// LiveSource is a live-page source row: its id and page URL.
+type LiveSource struct {
+	MediaID int    `db:"media_id"`
+	URL     string `db:"endpoint_url"`
+}
+
+// LiveSources lists the live-page sources that cues use.
+func LiveSources() ([]LiveSource, error) {
+	var out []LiveSource
+	err := db.Select(&out, `SELECT media_id, endpoint_url FROM mediapool WHERE source_kind = 'endpoint'
+		AND media_id IN (SELECT media_id FROM cuesheet) ORDER BY media_id`)
+	return out, err
+}
+
+// OrphanEndpoints lists the live-page sources no cue uses any more.
+func OrphanEndpoints() ([]LiveSource, error) {
+	var out []LiveSource
+	err := db.Select(&out, `SELECT media_id, endpoint_url FROM mediapool WHERE source_kind = 'endpoint'
+		AND media_id NOT IN (SELECT media_id FROM cuesheet) ORDER BY media_id`)
+	return out, err
+}
+
+// DeleteOrphanEndpoint removes one unused live-page source row (a no-op if
+// a cue has started using it again meanwhile).
+func DeleteOrphanEndpoint(mediaID int) error {
+	_, err := db.Exec(`DELETE FROM mediapool WHERE media_id = ? AND source_kind = 'endpoint'
+		AND media_id NOT IN (SELECT media_id FROM cuesheet)`, mediaID)
+	return err
 }
 
 // PruneEndpoints removes live-page sources no cue uses any more (their cue

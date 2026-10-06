@@ -1270,10 +1270,11 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   blank name = the page's host), which appends a cue to the sheet and
   selects it (`POST /api/cue/live`). Each live cue owns one hidden
   `mediapool` row (`source_kind = 'endpoint'`, URL, title); those rows are
-  excluded from the pool view, the HyperDeck clip list and the media worker,
-  and orphaned ones are pruned at startup. Editing a cue's URL (Cue
-  Inspector, Time tab) changes only that cue, and reloads the page if the
-  cue is on the wall. Authentication fields are reserved for the deferred
+  excluded from the pool view, the HyperDeck clip list and the media worker.
+  Orphaned ones are removed by the asset-cache keeper (below), at startup
+  and within ~5 s of a cue going. Editing a cue's URL (Cue Inspector, Time
+  tab) changes only that cue: it gets a fresh source row, so the old one is
+  orphaned. The page reloads if the cue is on the wall. Authentication fields are reserved for the deferred
   pairing work. Validate `http`/`https` URLs and reject local-file, script,
   credential-bearing and other schemes, including in imported shows.
   Endpoint cues use ordinary pre-wait, post-wait and fade fields, but have no
@@ -1284,6 +1285,32 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   re-link or missing-file actions for endpoint entries; endpoint reachability
   is runtime health, not the file startup scan's `missing` flag. Include a DB
   migration and update any file-source assumptions in media lookup/deletion.
+- **Asset cache**: a live page's `.js`, `.css`, images and fonts are kept in
+  WebKit's own HTTP disk cache (`~/.cache/cutepi/WebKitCache`), under the
+  server's cache headers. TimerPi sends a ~12 h `max-age`; `no-store`
+  responses are never cached. A keeper (`routes/livecache.go`, every 5 s):
+  - **Pre-load:** loads each live cue's page once per run, off screen
+    (private `wpevideosrc` → `fakesink`, 1 fps, no display plane, no
+    audio), so a fire loads from disk. It runs only while the wall is idle
+    (nothing on air, no test pattern) and stops the moment anything fires.
+    A pre-load costs about 1.5 cores for its ~1–3 s. It's retried a minute
+    after a failure.
+  - **Removal:** when a cue goes (deleted, URL changed, show cleared or
+    replaced) its source row is orphaned. The keeper removes the cached
+    assets of that site unless a remaining live cue uses the same site,
+    then deletes the row. With no live cue left it empties the cache.
+  - **Granularity is the site, not the cue:** WebKit files
+    `timer.example.com` under `example.com`, and two cues on one site share
+    its cache. Third-party asset hosts a page uses (CDNs) are only removed
+    when the last live cue goes; until then WebKit evicts them by its own
+    rules.
+  - **Runtime-only WebKit:** WebKit is reached at run time (`dlopen` of
+    `libWPEWebKit-2.0.so.1`, `gsp/webcache`), so no WebKit development
+    package is needed to build. Without WebKit, caching is off and the
+    keeper only prunes rows.
+  *Measured on a Pi 4, TimerPi page:* on screen 0.7 s after Fire with a warm
+  cache, 1.9–2.5 s cold. Removing a site took its 25 cached records to 0
+  and left other sites' records alone.
 - **Pairing credential (deferred)**: authentication and credential design are
   explicitly deferred until unauthenticated playback works end to end. Before
   authenticated endpoints ship, support a room-scoped revocable TimerPi device token.

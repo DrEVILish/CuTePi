@@ -161,3 +161,38 @@ func TestScheduledLiveCueIsQueryable(t *testing.T) {
 		t.Fatalf("scheduled rows = %+v", rows)
 	}
 }
+
+// The cache keeper (run here without WebKit) deletes the sources no cue uses
+// (deleted cue, changed URL) and keeps the ones cues still use.
+func TestLiveCacheKeeperPrunesOrphans(t *testing.T) {
+	r := setupTestServer(t)
+	a := addLive(t, r, "A", "https://timer.example/d/a")
+	b := addLive(t, r, "B", "https://other.example/d/b")
+	if err := ctp.SetCueEndpointURL(a.CuePos, "https://timer.example/d/a2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctp.SetCueEndpointURL(a.CuePos, "https://timer.example/d/a2"); err != nil { // unchanged: no new row
+		t.Fatal(err)
+	}
+	if w := del(t, r, "/api/cue/"+strconv.Itoa(b.CuePos)); w.Code != http.StatusOK {
+		t.Fatalf("delete cue = %d", w.Code)
+	}
+	orphans, err := ctp.OrphanEndpoints()
+	if err != nil || len(orphans) != 2 {
+		t.Fatalf("orphans before keeper = %+v (%v), want the old A source and B's", orphans, err)
+	}
+	if got := sourceHosts(orphans); strings.Join(got, ",") != "other.example,timer.example" {
+		t.Fatalf("orphan hosts = %v", got)
+	}
+	keepLiveCache(false)
+	if orphans, _ := ctp.OrphanEndpoints(); len(orphans) != 0 {
+		t.Fatalf("orphans after keeper = %+v", orphans)
+	}
+	live, _ := ctp.LiveSources()
+	if len(live) != 1 || live[0].URL != "https://timer.example/d/a2" {
+		t.Fatalf("live sources = %+v", live)
+	}
+	if got, _ := ctp.GetCue(strconv.Itoa(a.CuePos)); got.EndpointURL != "https://timer.example/d/a2" || got.Title != "A" {
+		t.Fatalf("cue A after keeper = url %q title %q", got.EndpointURL, got.Title)
+	}
+}
