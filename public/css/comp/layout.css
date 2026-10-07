@@ -918,3 +918,7 @@ body.show-mode #app-footer #mediapool-toggle {
 .row { --bs-gutter-x: 0; --bs-gutter-y: 0; margin-left: 0; margin-right: 0; margin-top: 0; }
 .row > * { flex-shrink: 1; width: auto; max-width: none; padding-left: 0; padding-right: 0; margin-top: 0; }
 #settingsModal .settings-about { margin-bottom: 0.75rem; display: flex; align-items: baseline; gap: 0.5rem; } #settingsModal .settings-version { font-size: 0.8125rem; } #settingsModal .settings-about .cutepi-logo { height: 28px; width: auto; }
+
+/* Layer (Video tab, §6.1.2): the cue number field only for "Under cue". */
+.insp-layer .insp-layer-under { display: none; }
+.insp-layer:has(#insp-layer option[value="under"]:checked) .insp-layer-under { display: block; }

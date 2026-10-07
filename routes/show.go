@@ -236,9 +236,19 @@ func Show(rg *gin.RouterGroup) {
 			return
 		}
 		inserted := 0
+		// Layer "under" names a cue by its number in the show; numbers can
+		// change on import (append mode), so links are made once every cue
+		// is in, through the positions the show's numbers landed on.
+		posByNum := map[string]int{}
+		type underLink struct {
+			pos int
+			num string
+		}
+		var unders []underLink
 		for _, cue := range manifest.Cues {
 			cue.Parent = idMap[cue.Parent]
-			if _, err := ctp.AddCueFull(cue); err != nil {
+			pos, err := ctp.AddCueFull(cue)
+			if err != nil {
 				// Roll back only this import's inserts. AddCueFull always
 				// appends (it ignores the exported cuePos), so in append mode
 				// the inserts sit at appendedOffset+1.., never at the top of
@@ -252,6 +262,17 @@ func Show(rg *gin.RouterGroup) {
 				return
 			}
 			inserted++
+			posByNum[cue.CueNum] = pos
+			if cue.LayerUnder != "" {
+				unders = append(unders, underLink{pos, cue.LayerUnder})
+			}
+		}
+		for _, u := range unders {
+			if target := posByNum[u.num]; target > 0 {
+				if err := ctp.SetCueLayerUnderPos(u.pos, target); err != nil {
+					logs.PrintfWarn(logs.RTEEdit, "import: layer under cue %s: %v", u.num, err)
+				}
+			}
 		}
 		ctp.SelectedCuePosFor(manifest.SelectedCuePos, len(manifest.Cues), appendedOffset)
 		logs.Emit(logs.AuditEvent{Event: "show_imported", Title: fmt.Sprintf("%s: %d cues", mode, inserted)})

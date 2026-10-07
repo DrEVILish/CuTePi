@@ -44,6 +44,9 @@ type ExportCue struct {
 	CropR         string  `json:"cropR,omitempty"`
 	CropT         string  `json:"cropT,omitempty"`
 	CropB         string  `json:"cropB,omitempty"`
+	StopOthers    *bool   `json:"stopOthers,omitempty"` // absent (older shows) = true
+	Layer         string  `json:"layer,omitempty"`      // "" = top
+	LayerUnder    string  `json:"layerUnder,omitempty"` // under: the cue number it goes beneath
 	Volume        float64 `json:"volume"`
 	FadeIn        int     `json:"fadeIn"`
 	Rate          float64 `json:"rate"`
@@ -87,6 +90,9 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 		CropR         string  `db:"crop_r"`
 		CropT         string  `db:"crop_t"`
 		CropB         string  `db:"crop_b"`
+		StopOthers    bool    `db:"stop_others"`
+		Layer         string  `db:"layer"`
+		LayerUnder    string  `db:"layer_under_num"`
 		Volume        float64 `db:"volume"`
 		FadeIn        int     `db:"fadeIn"`
 		Rate          float64 `db:"rate"`
@@ -101,7 +107,9 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			cuesheet.cueDuration, cuesheet.postWait, cuesheet.hold,
 			cuesheet.loop, cuesheet.loop_count, cuesheet.autoContinue,
 			cuesheet.color, cuesheet.parent, cuesheet.fadeOut,
-			cuesheet.fadeAction, cuesheet.fade_curve, cuesheet.fit_mode, cuesheet.rotation, cuesheet.flip, cuesheet.opacity, cuesheet.geom_x, cuesheet.geom_y, cuesheet.geom_w, cuesheet.geom_h, cuesheet.crop_l, cuesheet.crop_r, cuesheet.crop_t, cuesheet.crop_b, cuesheet.volume, cuesheet.fadeIn, cuesheet.rate, cuesheet.balance, cuesheet.mute
+			cuesheet.fadeAction, cuesheet.fade_curve, cuesheet.fit_mode, cuesheet.rotation, cuesheet.flip, cuesheet.opacity, cuesheet.geom_x, cuesheet.geom_y, cuesheet.geom_w, cuesheet.geom_h, cuesheet.crop_l, cuesheet.crop_r, cuesheet.crop_t, cuesheet.crop_b, cuesheet.volume, cuesheet.fadeIn, cuesheet.rate, cuesheet.balance, cuesheet.mute,
+			cuesheet.stop_others, cuesheet.layer,
+			COALESCE((SELECT u.cueNum FROM cuesheet u WHERE u.cue_id = cuesheet.layer_under), '') AS layer_under_num
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
 		ORDER BY cuesheet.cuePos
@@ -143,6 +151,9 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			CropR:         r.CropR,
 			CropT:         r.CropT,
 			CropB:         r.CropB,
+			StopOthers:    &r.StopOthers,
+			Layer:         r.Layer,
+			LayerUnder:    r.LayerUnder,
 			Rotation:      r.Rotation,
 			Flip:          r.Flip,
 			Volume:        r.Volume,
@@ -325,6 +336,14 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 	if c.FadeIn < 0 {
 		return 0, fmt.Errorf("invalid fadeIn")
 	}
+	stopOthers := 1
+	if c.StopOthers != nil && !*c.StopOthers {
+		stopOthers = 0
+	}
+	layer, err := parseCueColumn("layer", c.Layer)
+	if err != nil {
+		return 0, err
+	}
 	// Match AddCue's title de-duplication: imports into a sheet that already
 	// holds a title get a numeric suffix.
 	title, err := uniqueCueField("title", c.Title)
@@ -344,10 +363,10 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 	_, err = db.Exec(`
 			INSERT INTO cuesheet (cuePos, cueNum, media_id, title, posStart, posEnd,
 			preWait, cueDuration, postWait, hold, loop, loop_count, color,
-			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index)
+			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index, stop_others, layer)
 		VALUES (:cuePos, :cueNum, :mediaID, :title, :posStart, :posEnd,
 			:preWait, :cueDuration, :postWait, :hold, :loop, :loop_count, :color,
-			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0)
+			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0, :stopOthers, :layer)
 	`,
 		sql.Named("cuePos", cuePos),
 		sql.Named("mediaID", mediaID),
@@ -384,6 +403,8 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 		sql.Named("rate", rate),
 		sql.Named("balance", balance),
 		sql.Named("mute", boolInt(c.Mute)),
+		sql.Named("stopOthers", stopOthers),
+		sql.Named("layer", layer),
 	)
 	if err != nil {
 		log.Printf("Error adding imported cue: %v", err)

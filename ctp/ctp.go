@@ -81,6 +81,10 @@ type Cue struct {
 	CropR           string  `db:"crop_r"`
 	CropT           string  `db:"crop_t"`
 	CropB           string  `db:"crop_b"`
+	StopOthers      bool    `db:"stop_others"`      // firing stops the running cues (§6.1.2)
+	Layer           string  `db:"layer"`            // top|bottom|under: its place when it keeps them
+	LayerUnder      int     `db:"layer_under"`      // under: the cue_id it goes beneath
+	LayerUnderNum   string  `db:"layer_under_num"`  // that cue's number ("" if none)
 	Rotation        int     `db:"rotation"`         // 0|90|180|270 clockwise degrees (§5.5)
 	Flip            string  `db:"flip"`             // none|h|v: mirror horizontal/vertical (§5.5)
 	ScheduleEnabled bool    `db:"schedule_enabled"` // whether scheduling is enabled for this cue
@@ -102,7 +106,9 @@ type Cue struct {
 
 // cueColumns lists fields represented by Cue explicitly. Avoid cuesheet.*
 // because databases can carry newer optional columns that this binary does
-// not map (for example opacity on a newer TimerPi install).
+// not map. Every column InitDB guarantees must be listed: opacity, geometry
+// and crop were missing until 2026-10-07, so every cue loaded through
+// GetCue played full-screen, opaque and uncropped whatever its settings.
 const cueColumns = `cuesheet.cue_id, cuesheet.cuePos, cuesheet.cueNum, cuesheet.media_id,
 	cuesheet.title, cuesheet.posStart, cuesheet.posEnd, cuesheet.preWait, cuesheet.cueDuration,
 	cuesheet.postWait, cuesheet.hold, cuesheet.loop, cuesheet.loop_count, cuesheet.color,
@@ -110,7 +116,10 @@ const cueColumns = `cuesheet.cue_id, cuesheet.cuePos, cuesheet.cueNum, cuesheet.
 	cuesheet.fadeIn, cuesheet.rate, cuesheet.balance, cuesheet.mute, cuesheet.last_result,
 	cuesheet.last_played_at, cuesheet.sheet_index, cuesheet.fade_curve, cuesheet.fit_mode,
 	cuesheet.rotation, cuesheet.flip, cuesheet.schedule_enabled, cuesheet.schedule_days,
-	cuesheet.schedule_time_ms`
+	cuesheet.schedule_time_ms, cuesheet.opacity, cuesheet.geom_x, cuesheet.geom_y,
+	cuesheet.geom_w, cuesheet.geom_h, cuesheet.crop_l, cuesheet.crop_r, cuesheet.crop_t,
+	cuesheet.crop_b, cuesheet.stop_others, cuesheet.layer, cuesheet.layer_under,
+	COALESCE((SELECT u.cueNum FROM cuesheet u WHERE u.cue_id = cuesheet.layer_under), '') AS layer_under_num`
 
 type Cuesheet struct {
 	Cues   []Cue
@@ -2402,6 +2411,22 @@ func parseCueColumn(col string, val string) (string, error) {
 			return "", fmt.Errorf("invalid opacity %q (want 0 to 100 %%)", val)
 		}
 		return strconv.FormatFloat(f, 'f', -1, 64), nil
+	case "stop_others":
+		switch strings.ToLower(strings.TrimSpace(val)) {
+		case "1", "true", "on", "yes":
+			return "1", nil
+		case "", "0", "false", "off", "no":
+			return "0", nil
+		}
+		return "", fmt.Errorf("invalid stop_others %q (want on or off)", val)
+	case "layer":
+		switch v := strings.ToLower(strings.TrimSpace(val)); v {
+		case "top", "bottom", "under":
+			return v, nil
+		case "":
+			return "top", nil
+		}
+		return "", fmt.Errorf("invalid layer %q (want top, bottom or under)", val)
 	case "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b":
 		v := strings.ToLower(strings.TrimSpace(val))
 		if v != "" && !validGeom(v) {
@@ -2472,10 +2497,20 @@ func UpdateCueFields(cuePos string, fields map[string]string) (err error) {
 		"postWait", "hold", "loop", "loop_count", "color", "parent", "fadeOut",
 		"fadeAction", "autoContinue", "volume", "fadeIn", "rate", "balance", "mute",
 		"fadeCurve", "fit_mode", "rotation", "flip", "opacity", "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b",
-		"schedule_enabled", "schedule_days", "schedule_time_ms",
+		"schedule_enabled", "schedule_days", "schedule_time_ms", "stop_others", "layer", "layer_under",
 	} {
 		val, ok := fields[col]
 		if !ok {
+			continue
+		}
+		if col == "layer_under" {
+			// Given by cue number, stored by identity (survives reorder).
+			id, err := cueIDByNum(strings.TrimSpace(val), cuePosInt)
+			if err != nil {
+				return fmt.Errorf("layer_under: %w", err)
+			}
+			cols = append(cols, "layer_under = ?")
+			args = append(args, id)
 			continue
 		}
 		setVal, err := parseCueColumn(col, val)
@@ -2502,6 +2537,48 @@ func UpdateCueFields(cuePos string, fields map[string]string) (err error) {
 	}
 	bumpCuesheetVersion()
 	return nil
+}
+
+// cueIDByNum resolves a cue number to its cue_id for Layer "under" ("" = none).
+// A cue cannot go under itself.
+func cueIDByNum(num string, selfPos int) (int, error) {
+	if num == "" {
+		return 0, nil
+	}
+	var r struct {
+		ID  int `db:"cue_id"`
+		Pos int `db:"cuePos"`
+	}
+	if err := db.Get(&r, `SELECT cue_id, cuePos FROM cuesheet WHERE cueNum = ?`, num); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("there is no cue %q", num)
+		}
+		return 0, err
+	}
+	if r.Pos == selfPos {
+		return 0, fmt.Errorf("a cue cannot go under itself")
+	}
+	return r.ID, nil
+}
+
+// CuePosByID is the current position of the cue with this cue_id (0 if gone).
+func CuePosByID(id int) int {
+	if id <= 0 {
+		return 0
+	}
+	var pos int
+	if err := db.Get(&pos, `SELECT cuePos FROM cuesheet WHERE cue_id = ?`, id); err != nil {
+		return 0
+	}
+	return pos
+}
+
+// SetCueLayerUnderPos points the cue at cuePos's "under" layer at the cue at
+// underPos (show import re-links them after every cue is in).
+func SetCueLayerUnderPos(cuePos, underPos int) error {
+	_, err := db.Exec(`UPDATE cuesheet SET layer_under = COALESCE((SELECT cue_id FROM cuesheet WHERE cuePos = ?), 0)
+		WHERE cuePos = ?`, underPos, cuePos)
+	return err
 }
 
 // SetCueSchedule persists a cue's recurring schedule. The
@@ -2580,6 +2657,9 @@ type ScheduleInfo struct {
 	CropR         string  `db:"crop_r"`
 	CropT         string  `db:"crop_t"`
 	CropB         string  `db:"crop_b"`
+	StopOthers    bool    `db:"stop_others"`
+	Layer         string  `db:"layer"`
+	LayerUnder    int     `db:"layer_under"`
 	Mimetype      string  `db:"mimetype"`
 }
 
@@ -2590,32 +2670,35 @@ type ScheduleInfo struct {
 // keeps late edits honest.
 func (s ScheduleInfo) AsCue() Cue {
 	return Cue{
-		Media:     Media{Filename: s.Filename, SourceKind: s.SourceKind, EndpointURL: s.EndpointURL, EndpointTitle: s.EndpointTitle, Mimetype: s.Mimetype, LoudnessGain: s.LoudnessGain},
-		CuePos:    s.CuePos,
-		Title:     s.Title,
-		PosStart:  s.PosStart,
-		PosEnd:    s.PosEnd,
-		Hold:      s.Hold,
-		Loop:      s.Loop,
-		LoopCount: s.LoopCount,
-		Volume:    s.Volume,
-		Rate:      s.Rate,
-		Balance:   s.Balance,
-		Mute:      s.Mute,
-		FadeIn:    s.FadeIn,
-		FadeCurve: s.FadeCurve,
-		FitMode:   s.FitMode,
-		Rotation:  s.Rotation,
-		Flip:      s.Flip,
-		Opacity:   s.Opacity,
-		GeomX:     s.GeomX,
-		GeomY:     s.GeomY,
-		GeomW:     s.GeomW,
-		GeomH:     s.GeomH,
-		CropL:     s.CropL,
-		CropR:     s.CropR,
-		CropT:     s.CropT,
-		CropB:     s.CropB,
+		Media:      Media{Filename: s.Filename, SourceKind: s.SourceKind, EndpointURL: s.EndpointURL, EndpointTitle: s.EndpointTitle, Mimetype: s.Mimetype, LoudnessGain: s.LoudnessGain},
+		CuePos:     s.CuePos,
+		Title:      s.Title,
+		PosStart:   s.PosStart,
+		PosEnd:     s.PosEnd,
+		Hold:       s.Hold,
+		Loop:       s.Loop,
+		LoopCount:  s.LoopCount,
+		Volume:     s.Volume,
+		Rate:       s.Rate,
+		Balance:    s.Balance,
+		Mute:       s.Mute,
+		FadeIn:     s.FadeIn,
+		FadeCurve:  s.FadeCurve,
+		FitMode:    s.FitMode,
+		Rotation:   s.Rotation,
+		Flip:       s.Flip,
+		Opacity:    s.Opacity,
+		GeomX:      s.GeomX,
+		GeomY:      s.GeomY,
+		GeomW:      s.GeomW,
+		GeomH:      s.GeomH,
+		CropL:      s.CropL,
+		CropR:      s.CropR,
+		CropT:      s.CropT,
+		CropB:      s.CropB,
+		StopOthers: s.StopOthers,
+		Layer:      s.Layer,
+		LayerUnder: s.LayerUnder,
 	}
 }
 
@@ -2677,6 +2760,7 @@ func GetScheduledCuesSince(from, now time.Time) ([]ScheduleInfo, error) {
 			c.hold, c.loop, c.loop_count, c.volume, m.loudness_gain,
 			c.rate, c.balance, c.mute, c.fadeIn, c.fade_curve,
 			c.fit_mode, c.rotation, c.flip, c.opacity, c.geom_x, c.geom_y, c.geom_w, c.geom_h, c.crop_l, c.crop_r, c.crop_t, c.crop_b,
+			c.stop_others, c.layer, c.layer_under,
 			m.mimetype
 		FROM cuesheet c
 		JOIN mediapool m ON c.media_id = m.media_id

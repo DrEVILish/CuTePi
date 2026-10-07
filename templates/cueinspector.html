@@ -73,7 +73,11 @@
                 autocomplete="off" spellcheck="false" title="The page shown on the wall (http or https). A change reloads it if this cue is live.">
             </div>
             <div class="row is-items-center is-gap-xs">
-              <label class="insp-field-label" for="insp-live-fadeaction">Fade-stop others</label>
+<input type="hidden" name="stop_others_shown" value="1">
+              <input class="form-check-input" type="checkbox" id="insp-stopothers-live" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}
+                title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
+              <label class="small" for="insp-stopothers-live">Stop others</label>
+                            <label class="insp-field-label" for="insp-live-fadeaction">Fade-stop others</label>
               <select id="insp-live-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                 <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                 <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
@@ -204,7 +208,11 @@
                   <label class="small" for="insp-hold">Hold last frame</label>
                 </div>
                 <div class="row is-items-center is-gap-xs">
-                  <input class="form-check-input" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
+<input type="hidden" name="stop_others_shown" value="1">
+                  <input class="form-check-input" type="checkbox" id="insp-stopothers" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}
+                    title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
+                  <label class="small" for="insp-stopothers">Stop others</label>
+                                    <input class="form-check-input" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
                   <label class="small" for="insp-fadestop">Fade-stop others</label>
                   <select id="insp-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                     <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
@@ -253,7 +261,11 @@
               </div>
             </div>
             <div class="row is-items-center is-gap-xs">
-              <label class="insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
+<input type="hidden" name="stop_others_shown" value="1">
+              <input class="form-check-input" type="checkbox" id="insp-stopothers-img" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}
+                title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
+              <label class="small" for="insp-stopothers-img">Stop others</label>
+                            <label class="insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
               <select id="insp-img-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                 <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                 <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
@@ -369,6 +381,21 @@
             <input id="insp-opacity" name="opacity" class="input" style="width:5em" type="text" inputmode="decimal"
               data-validate="number" data-min="0" data-max="100" autocomplete="off"
               value="{{ .Cue.Opacity }}" title="How solid the picture is on the wall: 100 = opaque, 0 = invisible (%)">
+          </div>
+          <div class="insp-layer d-flex is-items-end is-gap-xs" title="Where this cue's picture goes among the running cues when Stop others (Time tab) is off">
+            <div class="insp-time-field">
+              <label class="insp-field-label" for="insp-layer">Layer</label>
+              <select id="insp-layer" name="layer" class="select" style="width:auto">
+                <option value="top" {{ if or (eq .Cue.Layer "top") (eq .Cue.Layer "") }}selected{{ end }} title="Above every running cue">Top</option>
+                <option value="bottom" {{ if eq .Cue.Layer "bottom" }}selected{{ end }} title="Beneath every running cue">Bottom</option>
+                <option value="under" {{ if eq .Cue.Layer "under" }}selected{{ end }} title="Directly beneath another cue (on top if that cue is not running)">Under cue…</option>
+              </select>
+            </div>
+            <div class="insp-time-field insp-layer-under">
+              <label class="insp-field-label" for="insp-layer-under">Under cue no.</label>
+              <input id="insp-layer-under" name="layer_under" class="input" style="width:5em" autocomplete="off"
+                value="{{ .Cue.LayerUnderNum }}" placeholder="e.g. 3" title="The cue number whose layer this cue goes beneath">
+            </div>
           </div>
         </div>
         <fieldset class="insp-geometry mt-xs" title="Where the picture sits on the wall. Blank = fill the display. Pixels (960) or a percentage of the display (50%).">

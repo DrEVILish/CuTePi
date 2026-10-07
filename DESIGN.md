@@ -585,10 +585,10 @@ wall pipeline (always running)                                    ▼
 - **Quality notes.** The mixer composites in 8-bit RGBA at the output size. Unscaled layers are pixel-exact. Scaled
   layers use the GPU's bilinear filter, softer than the display controller's polyphase scaler, so full-screen,
   unscaled output is the reference case. Colour conversion follows each stream's colorimetry (`glcolorconvert`).
-- **Audio** stays per cue on its own sink for now (simultaneous cues, §6.1.2, add a mixer). The wall shows a frame
+- **Audio** goes through the audio bus (§6.1.2), one mixer on the device. The wall shows a frame
   later than its time: the presenter measures it on every frame (frame time to the vblank that latched it, a moving
-  average; 107–117 ms measured, plus half a refresh to the middle of the screen: 115–126 ms in all). Each cue's audio
-  sink gets that as its `ts-offset` when it is built, so the sound plays when the picture is seen (`autoaudiosink`
+  average; 107–117 ms measured, plus half a refresh to the middle of the screen: 115–126 ms in all). The bus's
+  device sink gets that as its `ts-offset` when it is built and whenever an input joins, so the sound plays when the picture is seen (`autoaudiosink`
   passes it to the sink inside). Not the pipeline latency: a non-live cue pipeline does not pass a configured latency
   on to its sinks (set to 120 ms, the audio sink received 0). `GET /api/debug/glwall` shows `displayDelayMs` and the
   current cue's `cueAudioOffsetMs`. Not measured acoustically (no ALSA loopback on the test machine); the monitor's
@@ -802,6 +802,10 @@ Any number of cues can run at once, each on its own display layer, stacked; the 
   the configured sink), so running cues are heard together at their own volumes. The HDMI device takes one stream
   only (TEST_REPORT "Performance round, 2026-10-07": ALSA `dmix` cannot produce its format), so this is also what
   lets a crossfade between two cues with sound play both.
+- **Stored** per cue as `stop_others` (1), `layer` (`top`) and `layer_under` (a `cue_id`, 0 = none). The inspector
+  takes cue N by its number and refuses an unknown cue or the cue itself. A `.CTP` show carries them as `stopOthers`
+  (absent in older shows = on), `layer` and `layerUnder` (the cue number); on import the link is made after every
+  cue is in, to the cue that number landed on (append mode renumbers).
 - **Limits:** the plane wall has one display plane per layer (16 on the Pi 4, one kept for the panic image); the
   hardware decoders' totals apply (two 1080p60 H.264 layers cannot both run at full rate, HEVC can: §6.1.1).
 

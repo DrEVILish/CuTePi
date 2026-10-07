@@ -593,6 +593,11 @@ func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 		CropR:     cue.CropR,
 		CropT:     cue.CropT,
 		CropB:     cue.CropB,
+		// Stop others off (§6.1.2): the running cues carry on and this one
+		// joins the stack at its layer.
+		KeepOthers:  !cue.StopOthers,
+		Layer:       cue.Layer,
+		UnderCuePos: ctp.CuePosByID(cue.LayerUnder),
 	}
 }
 

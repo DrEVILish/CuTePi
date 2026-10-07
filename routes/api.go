@@ -1250,10 +1250,15 @@ func Api(rg *gin.RouterGroup) {
 			"autoContinue": strconv.FormatBool(autoCont),
 			"color":        strings.TrimSpace(c.PostForm("color")),
 		}
-		for _, col := range []string{"volume", "rate", "balance", "fadeIn", "preWait", "postWait", "fadeCurve", "cueDuration", "fit_mode", "rotation", "flip", "opacity", "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b"} {
+		for _, col := range []string{"volume", "rate", "balance", "fadeIn", "preWait", "postWait", "fadeCurve", "cueDuration", "fit_mode", "rotation", "flip", "opacity", "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b", "layer", "layer_under"} {
 			if val, present := c.GetPostForm(col); present {
 				fields[col] = strings.TrimSpace(val)
 			}
+		}
+		// Stop others (§6.1.2) is a checkbox: absent means off, but only when
+		// the form carried it (its marker), not on a partial save.
+		if _, shown := c.GetPostForm("stop_others_shown"); shown {
+			fields["stop_others"] = strconv.FormatBool(c.PostForm("stop_others") != "")
 		}
 		// Images have no audio fields; keep their settings when saving colour.
 		if _, present := c.GetPostForm("volume"); present {

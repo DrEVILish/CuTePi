@@ -349,6 +349,9 @@ var cuesheetAddedCols = []struct{ name, ddl string }{
 	{"crop_r", "TEXT NOT NULL DEFAULT ''"},
 	{"crop_t", "TEXT NOT NULL DEFAULT ''"},
 	{"crop_b", "TEXT NOT NULL DEFAULT ''"},
+	{"stop_others", "INTEGER NOT NULL DEFAULT 1"}, // fire stops the running cues (§6.1.2)
+	{"layer", "TEXT NOT NULL DEFAULT 'top'"},      // top|bottom|under when it keeps them
+	{"layer_under", "INTEGER NOT NULL DEFAULT 0"}, // under: the cue_id to go beneath
 }
 
 // addCuesheetColumns adds every cuesheetAddedCols column that table lacks.

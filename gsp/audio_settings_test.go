@@ -42,7 +42,6 @@ func TestAudioSettingsPlayback(t *testing.T) {
 			q := gst.NewSegmentQuery(gst.FormatTime)
 			ok := vol.Query(q)
 			rate, _, _, _ = q.ParseSegment()
-			q.Unref()
 			if ok && rate == want {
 				return
 			}
