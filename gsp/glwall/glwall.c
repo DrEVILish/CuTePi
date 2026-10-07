@@ -38,6 +38,8 @@
 #include <gst/video/video.h>
 #include <math.h>
 #include <poll.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -203,13 +205,35 @@ static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC p_bindimg;
  * locking the system up. Per thread (Linux), and only once per thread. */
 #define WALL_NICE (-10)
 
-static void wall_thread_priority(void) {
+/* Real-time scheduling, opt-in for measurement (CUTEPI_WALL_RT): "presenter"
+ * puts only the presenter thread (fence wait, SetPlane) on SCHED_FIFO,
+ * "all" every wall thread. Priority 10 stays below the kernel's interrupt
+ * threads (FIFO 50); the kernel's RT throttling (sched_rt_runtime_us) keeps
+ * a runaway thread from locking the system. Needs RLIMIT_RTPRIO (the unit's
+ * LimitRTPRIO), as the nice level needs RLIMIT_NICE (LimitNICE) when the
+ * service runs unprivileged. */
+#define WALL_RT_PRIO 10
+
+static void wall_thread_priority_rt(int presenter) {
   static __thread int done;
   if (done) return;
   done = 1;
+  const char *rt = g_getenv("CUTEPI_WALL_RT");
+  if (rt && (g_str_equal(rt, "all") || (presenter && g_str_equal(rt, "presenter")))) {
+    struct sched_param sp = { .sched_priority = WALL_RT_PRIO };
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0) {
+      GST_INFO("glwall: thread on SCHED_FIFO %d", WALL_RT_PRIO);
+      return;
+    }
+    g_printerr("glwall: SCHED_FIFO: %s (falling back to nice %d)\n", g_strerror(errno), WALL_NICE);
+  }
+  /* Printed, not a GStreamer debug line: losing the priority silently (an
+   * unprivileged service without LimitNICE) costs the wall refreshes. */
   if (setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), WALL_NICE) != 0)
-    GST_WARNING("glwall: thread priority: %s", g_strerror(errno));
+    g_printerr("glwall: thread nice %d: %s (cutepi.service needs LimitNICE=%d)\n", WALL_NICE, g_strerror(errno), WALL_NICE);
 }
+
+static void wall_thread_priority(void) { wall_thread_priority_rt(0); }
 
 /* ---- ring: dumb buffers on the display card ------------------------------ */
 
@@ -531,7 +555,7 @@ static gpointer wall_thread(gpointer d) {
  * sample (so its buffer stays out of the pool) until the next one has
  * replaced it; its slot is marked on screen so no alloc can hand it out. */
 static gpointer present_thread(gpointer d) {
-  wall_thread_priority();
+  wall_thread_priority_rt(1);
   frame_item *shown = NULL;
   for (;;) {
     frame_item *f = g_async_queue_timeout_pop(W.ready, 100000);
