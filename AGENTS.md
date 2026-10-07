@@ -30,3 +30,7 @@ Environment notes for agents working on this repo.
 
 - Installing npm and browsers (for example Playwright or Chromium) is allowed here, and only here. Use it for UI work such as screenshots and browser-driven checks.
 - Do not install these on the test server. Run browser-based checks against the dev server instead.
+- CuTePi is a git clone of its branch in `/opt/cutepi` (theme submodule included), built there with `go build -o cutepi .` (amd64, Go from `/usr/local/go1.27`). It runs as the `cutepi` service and user like the test server (`deploy/install-service-user.sh`), on port 3001 via the drop-in `/etc/systemd/system/cutepi.service.d/dev.conf`. No display and no WebKit: the live-page cache keeper logs that it is off. Data in `/var/lib/cutepi`.
+- Update it with `cd /opt/cutepi && git pull && go build -o cutepi . && systemctl restart cutepi`.
+- Playwright is in `/root/uicheck` (`node <script>.js`; its Chromium is installed with `npx playwright install chromium-headless-shell`).
+- `/opt/midas-pro1` and `/opt/stored-image` belong to other work on this machine: leave them alone.
