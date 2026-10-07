@@ -58,16 +58,19 @@ type clip struct {
 	opacity     float64 // cue opacity 0..1 on the KMS wall
 	fadeSerial  uint64  // cancels an earlier ramp on the same pipeline
 	starting    bool
-	brightEl    *gst.Element // per-video-branch "videobalance" element (last wins)
-	brightBusy  bool         // a brightWorker goroutine is applying fadeLevel to brightEl
-	still       bool         // the loaded file is a still image: one frame, so brightness needs a re-render to show
-	stillDirty  bool         // a brightness change is waiting for the re-render goroutine
-	stillBusy   bool         // the re-render goroutine is running (its EOS echoes are not cue ends)
-	stillEnded  bool         // the still's genuine end-of-stream has been handled
-	cuePos      int          // cue position associated with the active clip (0 = not a cue)
-	paused      bool         // operator pause intent: Pause sets it, Play/swap clear it.
-	heldEnd     bool         // parked on the last frame by hold (paused is set too)
-	testShowing bool         // a test pattern (not a file) is on the wall
+	brightEl    *gst.Element  // per-video-branch "videobalance" element (last wins)
+	brightBusy  bool          // a brightWorker goroutine is applying fadeLevel to brightEl
+	still       bool          // the loaded file is a still image: one frame, so brightness needs a re-render to show
+	stillDirty  bool          // a brightness change is waiting for the re-render goroutine
+	stillBusy   bool          // the re-render goroutine is running (its EOS echoes are not cue ends)
+	stillEnded  bool          // the still's genuine end-of-stream has been handled
+	cuePos      int           // cue position associated with the active clip (0 = not a cue)
+	paused      bool          // operator pause intent: Pause sets it, Play/swap clear it.
+	heldEnd     bool          // parked on the last frame by hold (paused is set too)
+	testShowing bool          // a test pattern (not a file) is on the wall
+	fired       uint64        // fire order (the newest running cue becomes the focus)
+	layerAt     string        // where its layer goes when shown: LayerTop|LayerBottom|LayerUnder
+	layerRef    *gst.Pipeline // LayerUnder: the cue's layer to go beneath
 }
 
 type manager struct {
@@ -83,6 +86,8 @@ type manager struct {
 	warmFile          string        // only, since a prerolled video pipeline paints its
 	warmOpts          LoadOpts      // first frame onto the live wall (realtime-first rule)
 	warmBuildGen      uint64        // generation the arm was made under (stale-arm check)
+	voices            []*voice      // running cues other than the focus (§6.1.2)
+	fireSeq           uint64        // fire order counter (clip.fired)
 }
 
 var (
@@ -241,24 +246,57 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	}
 	m.mu.Lock()
 	retire := []*gst.Pipeline{m.takeWarm()} // a warm slot from a previous decision is somebody else's memory
-	var out *outgoing
-	if m.pipeline != nil && m.pipeline != newPipeline {
-		// A live page loads hidden (showLive), so the old cue stays up
-		// until the page is ready even on a cut (crossfade 0: it is then
-		// removed in one step).
-		if (opts.Crossfade > 0 || opts.LiveEndpoint) && layerOf(m.pipeline) != nil {
-			// Crossfade: the old cue keeps playing on its own layer and
-			// fades away over the new one (which starts underneath).
-			out = &outgoing{p: m.pipeline, volumeEl: m.volumeEl, gain: m.effectiveGain(),
-				level: m.fadeLevel, curve: opts.FadeCurve, done: make(chan struct{}), wait: 5 * time.Second}
-			if opts.LiveEndpoint {
-				out.wait = liveFrameWait + liveLoadWait // showLive always ends within this
+	var outs []*outgoing
+	// Keep the running cues (§6.1.2): only on a layered wall, where each
+	// has its own layer.
+	keep := opts.KeepOthers && stackable()
+	layerAt, layerRef := LayerBottom, (*gst.Pipeline)(nil)
+	if keep {
+		layerAt = opts.Layer
+		if layerAt != LayerBottom && layerAt != LayerUnder {
+			layerAt = LayerTop
+		}
+		if layerAt == LayerUnder {
+			for _, c := range append([]*clip{&m.clip}, voiceClips(m.voices)...) {
+				if c.pipeline != nil && c.pipeline != newPipeline && opts.UnderCuePos > 0 && c.cuePos == opts.UnderCuePos {
+					layerRef = c.pipeline
+				}
 			}
-		} else {
-			retire = append(retire, m.pipeline)
+			if layerRef == nil {
+				logs.Printf(logs.GSPPipeDebug, "gsp: cue %d: cue %d is not running, layered on top instead", opts.CuePos, opts.UnderCuePos)
+				layerAt = LayerTop
+			}
+		}
+		if m.pipeline != nil && m.pipeline != newPipeline {
+			m.demoteLocked()
+		}
+	} else {
+		// Every running cue stops: the focus and every voice. A cue with a
+		// layer fades away over the new one (which starts underneath) when
+		// the new cue crossfades; a live page loads hidden (showLive), so
+		// the old cues stay up until the page is ready even on a cut
+		// (crossfade 0: they are then removed in one step).
+		stopping := voiceClips(m.takeVoicesLocked())
+		if m.pipeline != nil && m.pipeline != newPipeline {
+			stopping = append(stopping, &m.clip)
+		}
+		for _, c := range stopping {
+			if (opts.Crossfade > 0 || opts.LiveEndpoint) && layerOf(c.pipeline) != nil {
+				o := &outgoing{p: c.pipeline, volumeEl: c.volumeEl, gain: c.effectiveGain(),
+					level: c.fadeLevel, curve: opts.FadeCurve, done: make(chan struct{}), wait: 5 * time.Second}
+				if opts.LiveEndpoint {
+					o.wait = liveFrameWait + liveLoadWait // showLive always ends within this
+				}
+				outs = append(outs, o)
+			} else {
+				retire = append(retire, c.pipeline)
+			}
 		}
 	}
 	m.clearPlayback()
+	m.fireSeq++
+	m.fired = m.fireSeq
+	m.layerAt, m.layerRef = layerAt, layerRef
 	m.pipeline = newPipeline
 	m.currentFile = currentFile
 	m.liveEndpoint = opts.LiveEndpoint
@@ -290,12 +328,21 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	m.gen++
 	m.loads++
 	m.mu.Unlock()
-	if out != nil {
-		awaitIncoming(newPipeline, out)
-		go fadeOutgoing(out, opts.Crossfade)
+	for _, o := range outs {
+		awaitIncoming(newPipeline, o)
+		go fadeOutgoing(o, opts.Crossfade)
 	}
 	retireAll(retire...)
 	broadcastSoon()
+}
+
+// voiceClips is the voices' clips.
+func voiceClips(vs []*voice) []*clip {
+	out := make([]*clip, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, &v.clip)
+	}
+	return out
 }
 
 // clearPlayback resets every mutable playback field except the pipeline
@@ -332,17 +379,28 @@ func (m *manager) clearIfCurrent(p *gst.Pipeline) {
 		m.pipeline = nil
 		m.clearPlayback()
 		m.gen++
+		// The newest remaining cue takes over the focus (§6.1.2).
+		promoted := m.promoteLocked()
 		m.mu.Unlock()
 		retirePipeline(p) // outside mu: teardown blocks
-		blankWall(eosBlankDelay)
+		if !promoted {
+			blankWall(eosBlankDelay)
+		}
 		broadcastSoon()
 		return
 	}
 	m.mu.Unlock()
+	m.voiceFailed(p) // a voice: out of the stack
 }
 
 func (m *manager) endpointFailed(p *gst.Pipeline) {
 	m.mu.Lock()
+	if m.voiceIndexLocked(p) >= 0 {
+		// A live page on a lower layer: out of the stack, no recovery.
+		m.mu.Unlock()
+		m.voiceFailed(p)
+		return
+	}
 	if m.pipeline != p || !m.liveEndpoint {
 		m.mu.Unlock()
 		return
@@ -392,6 +450,13 @@ type LoadOpts struct {
 	// Crossfade: when > 0 (ms), whatever is on screen fades out OVER this
 	// cue instead of being cut: the new cue starts at once on a lower layer.
 	Crossfade int
+	// KeepOthers: the running cues carry on and this cue joins the stack at
+	// Layer (LayerTop, LayerBottom, or LayerUnder the running cue at
+	// UnderCuePos; Top if that cue is not running). Without it every running
+	// cue is stopped (cut, or faded over Crossfade). DESIGN §6.1.2.
+	KeepOthers  bool
+	Layer       string
+	UnderCuePos int
 }
 
 func Play() {
@@ -437,7 +502,69 @@ func Play() {
 	}
 
 	setStateIfCurrent(p, gst.StatePlaying)
+	resumeVoices()
 	mgr.bump()
+}
+
+// resumeVoices resumes the running cues other than the focus that a Pause
+// paused (Pause and Play act on every running cue, §6.1.2); a cue parked on
+// its last frame by hold stays parked.
+func resumeVoices() {
+	mgr.mu.Lock()
+	var ps []*gst.Pipeline
+	for _, v := range mgr.voices {
+		if v.paused && !v.heldEnd {
+			v.paused = false
+			ps = append(ps, v.pipeline)
+		}
+	}
+	mgr.mu.Unlock()
+	for _, vp := range ps {
+		vp.SetState(gst.StatePlaying)
+	}
+}
+
+// pauseVoices pauses every running cue other than the focus.
+func pauseVoices() {
+	mgr.mu.Lock()
+	var ps []*gst.Pipeline
+	for _, v := range mgr.voices {
+		if !v.paused {
+			v.paused = true
+			ps = append(ps, v.pipeline)
+		}
+	}
+	mgr.mu.Unlock()
+	for _, vp := range ps {
+		vp.SetState(gst.StatePaused)
+	}
+}
+
+// stopVoices takes every running cue other than the focus out of the stack:
+// at once, or fading out over fadeMs (picture and sound).
+func stopVoices(fadeMs int) {
+	mgr.mu.Lock()
+	vs := mgr.takeVoicesLocked()
+	if len(vs) > 0 {
+		mgr.version++
+	}
+	type fade struct {
+		c           clip
+		gain, level float64
+	}
+	var fades []fade
+	for _, v := range vs {
+		fades = append(fades, fade{v.clip, v.effectiveGain(), v.fadeLevel})
+	}
+	mgr.mu.Unlock()
+	for _, f := range fades {
+		if fadeMs > 0 && Layered() {
+			go fadeOutgoing(&outgoing{p: f.c.pipeline, volumeEl: f.c.volumeEl, gain: f.gain, level: f.level,
+				curve: f.c.fadeCurve, done: make(chan struct{})}, fadeMs)
+		} else {
+			retirePipeline(f.c.pipeline)
+		}
+	}
 }
 
 // setStateIfCurrent changes p's state and then re-checks that p is still
@@ -449,7 +576,7 @@ func Play() {
 func setStateIfCurrent(p *gst.Pipeline, state gst.State) error {
 	err := p.SetState(state)
 	mgr.mu.Lock()
-	current := mgr.pipeline == p
+	current := mgr.runningLocked(p) // the focus or a voice (§6.1.2)
 	mgr.mu.Unlock()
 	if !current {
 		_ = p.SetState(gst.StateNull)
@@ -476,6 +603,7 @@ func Pause() {
 	if err := setStateIfCurrent(p, gst.StatePaused); err != nil {
 		logs.Printf(logs.GSPPauseErr, "gsp: error pausing: %v", err)
 	}
+	pauseVoices()
 	mgr.mu.Lock()
 	mgr.heldEnd = false
 	mgr.paused = true
@@ -511,6 +639,11 @@ func TogglePause() {
 		mgr.mu.Lock()
 		mgr.paused = pausing
 		mgr.mu.Unlock()
+		if pausing {
+			pauseVoices()
+		} else {
+			resumeVoices()
+		}
 	}
 	mgr.bump()
 }
@@ -518,6 +651,7 @@ func TogglePause() {
 func Panic() {
 	stopBackground()
 	retireOutgoing()
+	stopVoices(0)
 	mgr.mu.Lock()
 	mgr.halts++
 	retire := []*gst.Pipeline{mgr.pipeline}
@@ -548,6 +682,7 @@ func Panic() {
 func Stop() {
 	stopBackground()
 	retireOutgoing()
+	stopVoices(0)
 	mgr.mu.Lock()
 	mgr.halts++
 	p := mgr.pipeline
@@ -1265,6 +1400,7 @@ func FadeAndStop(durMs int) {
 		Stop()
 		return
 	}
+	stopVoices(durMs) // every running cue fades out together (§6.1.2)
 	// Level from elapsed time: the fade takes exactly durMs however long
 	// each apply takes.
 	total := time.Duration(durMs) * time.Millisecond
@@ -1303,7 +1439,7 @@ type levelRamp struct {
 }
 
 // Caller holds mu; live changes and both fades share the same effective gain.
-func (m *manager) effectiveGain() float64 {
+func (m *clip) effectiveGain() float64 {
 	if m.mute || m.volume <= -60 {
 		return 0
 	}
@@ -1313,6 +1449,16 @@ func (m *manager) effectiveGain() float64 {
 // applyBrightness drives the video fade level. A still is a single buffer
 // the sink has already shown, so a new brightness would never reach the
 // screen: re-render it. Caller holds mu.
+// applyLayerLevel applies a voice's fade level to its layer (voices only run
+// on layered walls). Caller holds mgr.mu.
+func (c *clip) applyLayerLevel() {
+	if r := c.fadeRamp; r != nil {
+		setLayerRamp(c.pipeline, r.from, r.to, r.start, r.dur, r.curve)
+	} else {
+		setLayerLevel(c.pipeline, c.fadeLevel)
+	}
+}
+
 func (m *manager) applyBrightness() {
 	if kmsWall() != nil {
 		// Plane alpha over the black primary: a true fade (colours scale,
@@ -1424,7 +1570,7 @@ func IsAnimated(filename string) bool { return animationOf(filename).Animated }
 // tearing it down on its first frame.
 func IsStill(filename string) bool { return isStillFile(filename) }
 
-func (m *manager) applyGain() {
+func (m *clip) applyGain() {
 	if m.volumeEl != nil {
 		m.volumeEl.Set("volume", m.effectiveGain())
 	}
@@ -1455,7 +1601,12 @@ func fadeShape(curve string, t float64) float64 {
 
 func fadeIn(p *gst.Pipeline, gen uint64) {
 	mgr.mu.Lock()
-	serial, duration := mgr.fadeSerial, time.Duration(mgr.fadeIn)*time.Millisecond
+	c0 := mgr.clipOfLocked(p)
+	if c0 == nil {
+		mgr.mu.Unlock()
+		return
+	}
+	serial, duration := c0.fadeSerial, time.Duration(c0.fadeIn)*time.Millisecond
 	mgr.mu.Unlock()
 	if duration <= 0 {
 		return
@@ -1470,27 +1621,35 @@ func fadeIn(p *gst.Pipeline, gen uint64) {
 		last = now
 		onWall := !glOpen || glOnWall(p)
 		mgr.mu.Lock()
-		if mgr.pipeline != p || mgr.gen != gen || mgr.fadeSerial != serial {
+		// The focus, or the voice it became when a cue that keeps the
+		// others running was fired (§6.1.2): the fade carries on there. A
+		// newer fade (a restart, ESC) bumps the serial.
+		c := mgr.clipOfLocked(p)
+		if c == nil || c.fadeSerial != serial {
 			mgr.mu.Unlock()
 			return
 		}
 		// A still ends (and holds, paused) the moment its one frame is
 		// out, so its fade clock cannot wait for PLAYING.
 		// On the GPU wall the clock also waits for the layer to be shown.
-		advancing := (state == gst.StatePlaying || mgr.still) && onWall
+		advancing := (state == gst.StatePlaying || c.still) && onWall
 		if advancing {
 			elapsed += delta
 		}
-		mgr.fadeLevel = fadeShape(mgr.fadeCurve, math.Min(1, float64(elapsed)/float64(duration)))
+		c.fadeLevel = fadeShape(c.fadeCurve, math.Min(1, float64(elapsed)/float64(duration)))
 		if advancing {
 			// Started `elapsed` ago: the wall steps the rest per frame. A
 			// held fade (paused, not on the wall yet) is a plain level.
-			mgr.fadeRamp = &levelRamp{from: 0, to: 1, start: now.Add(-elapsed), dur: duration, curve: mgr.fadeCurve}
+			c.fadeRamp = &levelRamp{from: 0, to: 1, start: now.Add(-elapsed), dur: duration, curve: c.fadeCurve}
 		}
-		mgr.applyGain()
-		mgr.applyBrightness()
-		mgr.fadeRamp = nil
-		done := mgr.fadeLevel == 1
+		c.applyGain()
+		if c == &mgr.clip {
+			mgr.applyBrightness()
+		} else {
+			c.applyLayerLevel()
+		}
+		c.fadeRamp = nil
+		done := c.fadeLevel == 1
 		mgr.mu.Unlock()
 		if done {
 			return
@@ -1642,7 +1801,11 @@ func ApplyCueMix(cuePos int, mix CueMix) bool {
 // Every seek carries the segment rate, including loop and trim restarts.
 func seekAtRate(p *gst.Pipeline, seconds float64) bool {
 	mgr.mu.Lock()
-	current, rate := mgr.pipeline == p, mgr.rate
+	c := mgr.clipOfLocked(p) // the focus or a voice (§6.1.2)
+	current, rate := c != nil, 1.0
+	if c != nil {
+		rate = c.rate
+	}
 	mgr.mu.Unlock()
 	if !current || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		return false
@@ -1772,10 +1935,23 @@ func watchAndPlay(p *gst.Pipeline) error {
 		// other ways the watch unregisters). retirePipeline posts a wake-up
 		// message so this check actually runs after a retirement.
 		mgr.mu.Lock()
-		current := mgr.pipeline == p
+		current := mgr.runningLocked(p)
+		focus := mgr.pipeline == p
 		mgr.mu.Unlock()
 		if !current {
 			return false
+		}
+		if !focus {
+			// A voice (§6.1.2): its own end, or out of the stack on error.
+			switch msg.Type() {
+			case gst.MessageEOS:
+				return mgr.voiceEnd(p)
+			case gst.MessageError:
+				logs.Printf(logs.GSPPipeStopped, "gsp: layered cue stopped: %s", msg.ParseError().Error())
+				mgr.voiceFailed(p)
+				return false
+			}
+			return true
 		}
 		switch msg.Type() {
 		case gst.MessageEOS:
@@ -1851,9 +2027,15 @@ func startPlayback(p *gst.Pipeline) error {
 	// rate is applied, and slow decoders need no guessed sleep duration.
 	p.SetState(gst.StatePaused)
 	result, _ := p.GetState(gst.StateNull, gst.ClockTime(prerollTimeout))
+	// From here p may be a voice: a cue that keeps the others running was
+	// fired while this one prerolled (§6.1.2). It carries on from its own
+	// clip.
 	mgr.mu.Lock()
-	current := mgr.pipeline == p && mgr.gen == gen
-	inPoint, rate, outPoint := mgr.inPoint, mgr.rate, mgr.outPoint
+	current := mgr.startCurrentLocked(p, gen)
+	var inPoint, rate, outPoint float64
+	if c := mgr.clipOfLocked(p); c != nil {
+		inPoint, rate, outPoint = c.inPoint, c.rate, c.outPoint
+	}
 	mgr.mu.Unlock()
 	if !current {
 		return nil
@@ -1871,12 +2053,13 @@ func startPlayback(p *gst.Pipeline) error {
 		seekAtRate(p, inPoint)
 	}
 	mgr.mu.Lock()
-	if mgr.pipeline != p || mgr.gen != gen {
+	c := mgr.clipOfLocked(p)
+	if c == nil || !mgr.startCurrentLocked(p, gen) {
 		mgr.mu.Unlock()
 		return nil
 	}
-	mgr.starting = false
-	level := mgr.fadeLevel
+	c.starting = false
+	level, layerAt, layerRef := c.fadeLevel, c.layerAt, c.layerRef
 	mgr.mu.Unlock()
 	if live {
 		// A live page has no preroll: its layer appears only after PLAYING
@@ -1892,9 +2075,10 @@ func startPlayback(p *gst.Pipeline) error {
 		go showLive(p, gen)
 		return nil
 	}
-	// Prerolled: put the layer on screen, under anything fading out, and
-	// only now let the cues above it start fading away.
-	showLayer(p, level)
+	// Prerolled: put the layer on screen at its place in the stack (under
+	// anything fading out when it stops the others), and only now let the
+	// cues above it start fading away.
+	showLayer(p, level, layerAt, layerRef)
 	incomingShown(p)
 	if err := setStateIfCurrent(p, gst.StatePlaying); err != nil {
 		if errors.Is(err, errPipelineReplaced) {
@@ -1941,7 +2125,7 @@ func showLive(p *gst.Pipeline, gen uint64) {
 	reason := "loaded"
 	for {
 		mgr.mu.Lock()
-		current := mgr.pipeline == p && mgr.gen == gen
+		current := mgr.startCurrentLocked(p, gen)
 		mgr.mu.Unlock()
 		if !current {
 			return
@@ -1963,14 +2147,14 @@ func showLive(p *gst.Pipeline, gen uint64) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	mgr.mu.Lock()
-	current := mgr.pipeline == p && mgr.gen == gen
-	level := mgr.fadeLevel
-	title := mgr.currentFile
-	mgr.mu.Unlock()
-	if !current {
+	c := mgr.clipOfLocked(p)
+	if c == nil || !mgr.startCurrentLocked(p, gen) {
+		mgr.mu.Unlock()
 		return
 	}
-	showLayer(p, level)
+	level, title, layerAt, layerRef := c.fadeLevel, c.currentFile, c.layerAt, c.layerRef
+	mgr.mu.Unlock()
+	showLayer(p, level, layerAt, layerRef)
 	incomingShown(p)
 	logs.Printf(logs.GSPFireTiming, "%s: on screen after %.0fms (%s)", title, time.Since(start).Seconds()*1000, reason)
 	fadeIn(p, gen)
@@ -2009,18 +2193,23 @@ func retirePipeline(p *gst.Pipeline) {
 func watchTrim(p *gst.Pipeline) {
 	for {
 		mgr.mu.Lock()
-		if mgr.pipeline != p {
+		c := mgr.clipOfLocked(p) // the focus, or a voice it was demoted to
+		if c == nil {
 			mgr.mu.Unlock()
 			return
 		}
-		outPoint := mgr.outPoint
+		outPoint, focus := c.outPoint, c == &mgr.clip
 		mgr.mu.Unlock()
 		if outPoint <= 0 {
 			return
 		}
 		ok, pos := p.QueryPosition(gst.FormatTime)
 		if ok && float64(pos) >= outPoint*1_000_000_000 {
-			if !mgr.handleEnd(p) {
+			end := mgr.handleEnd
+			if !focus {
+				end = mgr.voiceEnd
+			}
+			if !end(p) {
 				return
 			}
 		}

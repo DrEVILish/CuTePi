@@ -231,11 +231,13 @@ func opacityOf(opts LoadOpts) float64 {
 	return opts.Opacity
 }
 
-// showLayer puts p's layer on screen at the bottom of the visible stack
-// (under every layer still fading out) at alpha opacity*level.
-func showLayer(p *gst.Pipeline, level float64) {
+// showLayer puts p's layer on screen at alpha opacity*level, at its place in
+// the visible stack (§6.1.2): LayerBottom under everything (a cue that stops
+// the others starts under the cues fading out), LayerTop above everything,
+// LayerUnder directly beneath ref's layer (on top if ref has none).
+func showLayer(p *gst.Pipeline, level float64, at string, ref *gst.Pipeline) {
 	if glOpen {
-		glShow(p, level)
+		glShow(p, level, at, ref)
 		return
 	}
 	w := kmsWall()
@@ -246,11 +248,61 @@ func showLayer(p *gst.Pipeline, level float64) {
 	layersMu.Lock()
 	if !l.visible {
 		l.visible = true
-		stack = append([]*wallLayer{l}, stack...)
+		stack = insertLayer(stack, l, stackIndex(stack, layers[ref], at))
 	}
 	restackLocked(w)
 	layersMu.Unlock()
 	setLayerLevel(p, level)
+}
+
+// stackIndex is where a layer placed at `at` goes in a bottom-to-top stack;
+// refLayer is LayerUnder's reference (nil or absent: on top).
+func stackIndex[T comparable](st []T, refLayer T, at string) int {
+	switch at {
+	case LayerBottom:
+		return 0
+	case LayerUnder:
+		var zero T
+		if refLayer != zero {
+			for i, x := range st {
+				if x == refLayer {
+					return i
+				}
+			}
+		}
+	}
+	return len(st)
+}
+
+// insertLayer inserts l at index i of st.
+func insertLayer[T any](st []T, l T, i int) []T {
+	st = append(st, l)
+	copy(st[i+1:], st[i:])
+	st[i] = l
+	return st
+}
+
+// stackPosition is p's layer's place in the visible stack, 1 = bottom; 0
+// when it has no visible layer.
+func stackPosition(p *gst.Pipeline) int {
+	if glOpen {
+		glMu.Lock()
+		defer glMu.Unlock()
+		for i, l := range glStack {
+			if glLayers[p] == l {
+				return i + 1
+			}
+		}
+		return 0
+	}
+	layersMu.Lock()
+	defer layersMu.Unlock()
+	for i, l := range stack {
+		if layers[p] == l {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // zposTop is the highest plane zpos (the vc4 range is 1..17). Visible

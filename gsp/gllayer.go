@@ -460,7 +460,7 @@ func glRestackLocked() {
 	}
 }
 
-func glShow(p *gst.Pipeline, level float64) {
+func glShow(p *gst.Pipeline, level float64, at string, ref *gst.Pipeline) {
 	l := glAwait(p)
 	glMu.Lock()
 	defer glMu.Unlock()
@@ -469,7 +469,7 @@ func glShow(p *gst.Pipeline, level float64) {
 	}
 	if !l.visible {
 		l.visible = true
-		glStack = append([]*glLayer{l}, glStack...)
+		glStack = insertLayer(glStack, l, stackIndex(glStack, glLayers[ref], at))
 	}
 	glRestackLocked()
 	l.level = level
