@@ -1217,6 +1217,23 @@ MB; 50.6 °C max, no throttling.
 card's `dmix` device cannot produce its format ("requested or auto-format is not available"). Concurrent sound needs
 a mixer in CuTePi.
 
+## Simultaneous cues on the wall, 2026-10-07
+
+Live service on the test Pi (plane wall), driven through the HTTP API; planes read from
+`/sys/kernel/debug/dri/1/state` (no `/dev/dri` access), sound from `/proc/asound/card0/pcm0p/sub0`.
+
+| Check | Result |
+|---|---|
+| Layer order: cue 1.5 (SMPTE still) fired, cue 10 (blue still, Stop others off, Bottom), cue 15 (video, Stop others off, Under 1.5) | Three overlay planes: blue zpos 1, video zpos 2, SMPTE zpos 3 (fbcon 0). Active Cues: 1.5 L3, 15 L2 (transport), 10 L1. **Pass.** |
+| Two cues with sound (bbb clip, then a tone with Stop others off) | Both listed as Playing; HDMI substream RUNNING once, owned by a service thread; no "busy"/open errors. Audible mix not measured (no ALSA loopback on this Pi; `TestVoicesShareTheAudioDevice` covers both inputs feeding the bus). |
+| Active Cues Fade out on cue 4 | "stop cue 4 alone (fade 1000 ms)"; its plane gone after the fade; the tone kept running. **Pass.** |
+| Stop with two sound cues | Both end; the bus releases the HDMI device within 3 s (substream `closed`). **Pass.** |
+| Found and fixed | The audio bus mixer's `force-live` (construct-only) was set after construction and refused (GLib warning in the log); now set at construction. |
+| Found and fixed (dev server browser check) | An image cue with a blank display duration could not be saved from the inspector (400, `cueDuration` ""); the Stop others checkbox was squashed by the flex row; both fixed. |
+| Found and fixed | Inspector-saved cues had opacity 0 in the DB (the column was not loaded, so 0 was shown and written back); a one-time repair sets them to 100. The test sheet had three. |
+
+The sheet was restored afterwards (cues 10 and 15 back to Stop others on / Top; the tone cue and file removed).
+
 ## Open findings (not fixed; need a decision)
 
 ### O1 — Frame rate: 1080p60 plays at 60 fps; fades, two layers and HEVC do not (major)
