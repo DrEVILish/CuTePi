@@ -891,9 +891,12 @@ No polling anywhere — every widget (nowplaying, cuesheet, clocks) renders
 from socket pushes. The topbar shows the socket state as a status dot.
 - A sync is a signal only: each widget asks its status endpoint (`/api/cuesheet/status?version=`,
   `/api/nowplaying/status?version=`) and fetches the partial only when its version moved.
-- Every cuesheet render carries its version (`data-version` on `#cuesheet`, read before the sheet). A sheet that arrived
+- Every cuesheet render carries its version (`data-version` on `#cuesheet`, read before the sheet, so the stamp is never
+  newer than the content: a change landing during a render costs at most one extra fetch, never a stale sheet). A sheet that arrived
   as an action's response (row click, GO, edit, delete) therefore counts as seen: the sync for that same change does not
-  fetch it again.
+  fetch it again. While an htmx request targeting `#cuesheet` is in flight, the refresher waits for it, since the sync
+  for a change usually arrives before the response of the request that made it. The inspector follows each new
+  `#cuesheet` node once.
 - One read of the sheet per render: the GO bar and Now Playing derive the selection walk from the sheet the handler
   already loaded (`ctp.SheetUnits`, `ctp.UnitIndex`).
 

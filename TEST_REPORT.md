@@ -1266,14 +1266,16 @@ Causes and fixes:
 3. **Three sheet reads per render** (handler, GO bar, selection index): now one.
 4. **The sheet fetched twice after a click.** Renders carry `data-version`; the refresher counts a sheet received as an
    action's response as seen.
-5. **Inspector re-probing a missing file** with ffprobe on every render (~250 ms each; the probe fails, so nothing was
-   stored and it repeated). Skipped when the file is missing.
+5. **Inspector re-probing a missing file** with ffprobe on every render (~250 ms each, separate from the inspector's
+   39 ms above; the probe fails, so nothing was stored and it repeated). Skipped when the file is missing.
 6. **CSS/JS served `no-store`** (~700 KB per page load). Stamped URLs are now `immutable`; the stamp covers the binary and
    every static file.
 
 **Browser check (dev server, Playwright):** a row click now makes one POST (the sheet), one inspector and one Now Playing
 fetch; before, the sheet was fetched twice (the sync raced the POST's response) and the inspector three times. A clip's
-peaks are fetched once and reused when it is selected again. A reload transfers ~5 KB of CSS/JS instead of ~700 KB. No
+peaks are fetched once and reused when it is selected again. On a second page load the stamped CSS/JS come from the browser cache: the server log shows each requested once across
+two loads (Chromium's resource timing still lists ~375 B per file); `dropzone.js` was linked without the stamp and was
+fetched every time, now stamped. No
 console errors. **Test Pi, live, 7-cue sheet:** `GET /` 42 → 21 ms, `/api/cuesheet` 17 → 7 ms, `/api/nowplaying`
 13.5 → 3.6 ms. The waveform migration moved the one stored waveform (343 KB) intact; a backup of the database from before
 it is `/root/ctp.db.pre-waveform-move-2026-10-07`.
