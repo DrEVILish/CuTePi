@@ -278,11 +278,25 @@ One row, left to right:
 - Built and behaved like the Media Pool pane: shared resizer/collapse chrome
   (collapse = fully hidden, one form spanning all tabs so any change saves instantly (htmx `change delay:200ms`).
 - Tabs (static strip in `index.html`; audio panes are omitted for image cues:
-  - **Time** — waveform trim timeline (canvas of JSON peaks from `GET /api/media/:filename/peaks?v=<stored time>`, cached
-    by the browser for good and kept parsed across inspector re-renders; the inspector HTML carries only the link; draggable In/Out markers; **only dragging a handle changes trim**; clicks elsewhere are inert),
-    Trim In/Out fields, Pre-Wait, Post-Wait, Loop + loop-count, Hold-last-frame, Auto-continue, fade-stop scope/time, playback-rate slider with 1× reset.
-    Renders even where duration is unknown (timeline duration-gated). The timeline shades the shared audio+video
-    fade-in/out envelope over the trim window (same curve the engine ramps).
+  - **Time** — the **trim timeline** (`public/src/trimline.js`; the ftl-themes `.waveform` with regions and markers):
+    - **Bars** from the clip's stored peaks (`GET /api/media/:filename/peaks?v=<stored time>`, cached by the browser
+      for good and kept parsed; the inspector HTML carries only the link), one per ~3 px; a shimmer while the
+      waveform is being analysed. A clip without audio has no bars; the timeline still works.
+    - **Trim window** = a region whose two edges are Trim In and Trim Out: drag a handle, or focus it and use the
+      arrow keys (one step: about a thousandth of the visible span, at least 1 ms), Page Up/Down (a tenth of the
+      clip) or Home/End. In and Out stay at least 50 ms apart. A change saves like the Trim In/Out fields (they are
+      updated from it). The region body does not move the window.
+    - **Clicks on the waveform do nothing.** The waveform's seek layer is only the **playhead**: while the selected
+      cue is running, the bars colour in up to its position, as the server reports it (the Active Cues data,
+      refreshed on each sync); no position is predicted in the browser. A hover chip shows the time at the pointer.
+    - **Fades** are drawn into the bars: each bar is the peak times the engine's fade gain at that moment (same curve
+      as the engine, §12.7; inside the trim window only), so the waveform shows what will be heard.
+    - **Markers**: In and Out times (hh:mm:ss.mmm), the fade-in end and fade-out start ("Fade in 2 s", on a second
+      row), and the trim length (a chip in the middle of the window).
+    - A drag is never cut short by an inspector refresh: the refresh waits for the release.
+    - Also on the tab: Trim In/Out fields, Pre-Wait, Post-Wait, Loop + loop-count, Hold-last-frame, Auto-continue,
+      fade-stop scope/time, playback-rate slider with 1× reset. The tab renders even where the duration is unknown
+      (the timeline needs one).
   - **Video** — video Fade In / Fade Out (times), then how the picture sits on the wall:
     - **Frame fit** (inside the picture's box — the display unless Position & size is set):
       **Fit** (whole picture, aspect kept, letterboxed), **Fill width** (as wide as the box; top/bottom overflow
@@ -307,7 +321,11 @@ One row, left to right:
   colour and structural settings are read when a cue fires — editing a playing cue never disturbs it.
   Exception: volume, mute, balance and rate are pushed live to the running pipeline when you edit the
   cue that is currently playing (and persisted for next time).
-- **Trim timeline extras**: Zoom mode (arm, then drag a box over the waveform), +/- zoom steps, Zoom reset; mouse-wheel pans a zoomed window left/right.
+- **Trim timeline zoom** (the app's own; requested upstream in `docs/upstream/ftl-themes-waveform-zoom.md`): Zoom mode
+  (arm, then drag a box over the waveform), +/- zoom steps, Zoom reset; mouse-wheel pans a zoomed window left/right.
+  Zoomed past the stored peaks' detail (windows under 60 s), a finer envelope for the window is fetched
+  (`/api/media/:filename/wave`). The window resets when another clip is selected. A trim point outside the window:
+  its edge is disabled and hidden (never read back clamped by the browser), its marker hidden.
   Deep zoom fetches a pixel-matched envelope (`/api/media/:name/wave`) so bars stay ~1 per CSS pixel at every depth.
   The zoom window survives inspector re-renders (saves don't reset view).
 - Top of the panel: cue badge, title, `Source: <file>`. When the source is missing, a warning banner replaces the timeline area with a **Re-link** dropdown (media pool) and **Delete cue**.

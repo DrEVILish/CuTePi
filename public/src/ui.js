@@ -1032,7 +1032,11 @@ filterMedia();
   }
   showCount(document.getElementById("activecues"));
   // Its own Stop/Fade buttons swap the list through htmx.
-  document.addEventListener("htmx:after:swap", () => showCount(document.getElementById("activecues")));
+  document.addEventListener("htmx:after:swap", (e) => {
+    if (e.detail?.ctx?.target?.id !== "activecues") return;
+    showCount(document.getElementById("activecues"));
+    document.dispatchEvent(new Event("cutepi-activecues"));
+  });
 
   // A press on Stop / Fade out must not straddle a re-render (the browser
   // drops a click whose press and release land on different elements).
@@ -1064,9 +1068,12 @@ filterMedia();
       const next = wrapper.querySelector("#activecues");
       if (!next) return;
       showCount(next);
-      if (next.outerHTML === el.outerHTML.replace(/ data-htmx-powered="[^"]*"/g, "")) return;
-      el.replaceWith(next);
-      if (window.htmx) htmx.process(next);
+      if (next.outerHTML !== el.outerHTML.replace(/ data-htmx-powered="[^"]*"/g, "")) {
+        el.replaceWith(next);
+        if (window.htmx) htmx.process(next);
+      }
+      // New positions from the server (the trim timeline's playhead).
+      document.dispatchEvent(new Event("cutepi-activecues"));
     } catch (e) {
       // Transient; the next sync retries.
     } finally {
@@ -1988,8 +1995,13 @@ initNowPlaying();
     }
     return "/api/cue/inspector?_=" + Date.now();
   }
+  // A trim-timeline drag would die with the panel it is in: wait for the
+  // release (trimline.js signals it), then follow.
+  document.addEventListener("ctp-trim-released", () => {
+    if (refreshDirty && !saveInFlight) { refreshDirty = false; refresh(); }
+  });
   function refresh() {
-    if (saveInFlight) { refreshDirty = true; return; }
+    if (saveInFlight || window.ctpTrim?.pressing()) { refreshDirty = true; return; }
     clearTimeout(timer);
     timer = setTimeout(() => {
       // Cache-bust: without no-store headers the browser may reuse a cached

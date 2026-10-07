@@ -740,11 +740,6 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover {
 body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
   color: #fff;
 }
-/* Trim timeline: the panel default (320px) fits header + identity + timeline
-   + two field rows exactly; no scrollbars. */
-.inspector-collapse .trim-timeline {
-  height: 6.75rem;
-}
 /* Media info: one aligned label:value column; `.media-cols-2` (toggled by JS
    when the list would overflow the inspector) doubles it into two aligned
    columns so the info uses horizontal space instead of forcing a scroll. */

@@ -157,22 +157,33 @@
             <div class="insp-time-right">
              <span class="small text-muted">For Cue Fades see the Video or Audio tab.</span>
              {{ if gt $dur 0.0 }}
-             <div class="trim-timeline" id="trim-timeline"
+             <!-- Trim timeline (§5.5, public/src/trimline.js): the ftl-themes
+               waveform. The seek input is the playhead only (inert: clicks
+               do nothing); the region's edges are Trim In/Out (no name: the
+               script writes the Trim In/Out fields). Bars and markers are
+               filled in by the script. -->
+             <div class="trim-timeline" id="trim-timeline" role="group" aria-label="Trim timeline"
+              data-cue-pos="{{ .Cue.CuePos }}"
               data-filename="{{ .Cue.Filename }}"
               data-pos-start="{{ .Cue.PosStart }}"
               data-pos-end="{{ .Cue.PosEnd }}"
               data-duration="{{ $dur }}"
-              {{ if .Cue.WaveformVersion }}data-wave-url="/api/media/{{ urlPath .Cue.Filename }}/peaks?v={{ .Cue.WaveformVersion }}"{{ end }}
-              title="Drag the In/Out markers to adjust the trim window">
-              <canvas class="trim-waveform" id="trim-waveform" width="800" height="120"></canvas>
-              <div class="trim-shade" id="trim-shade-before" aria-hidden="true" style="left:0;width:0%"></div>
-              <div class="trim-shade" id="trim-shade-after" aria-hidden="true" style="right:0;width:0%"></div>
-              <div class="trim-zoomsel" id="trim-zoomsel" aria-hidden="true"></div>
-              <div class="trim-marker" id="trim-marker-in" title="Trim In"></div>
-              <div class="trim-marker trim-marker-out" id="trim-marker-out" title="Trim Out"></div>
-              <span class="trim-time" id="trim-time-in"></span>
-              <span class="trim-time" id="trim-time-out"></span>
-              <span class="trim-length" id="trim-length"></span>
+              {{ if .Cue.WaveformPending }}data-wave-pending="1"{{ end }}
+              {{ if .Cue.WaveformVersion }}data-wave-url="/api/media/{{ urlPath .Cue.Filename }}/peaks?v={{ .Cue.WaveformVersion }}"{{ end }}>
+              <div class="waveform">
+                <input type="range" class="trim-playhead" min="0" max="{{ $dur }}" step="any" value="0" inert tabindex="-1" aria-hidden="true">
+                <span class="waveform-bars" aria-hidden="true"></span>
+                <div class="waveform-region is-static" role="group" aria-label="Trim window" data-min-length="0.05">
+                  <input type="range" id="trim-edge-in" min="0" max="{{ $dur }}" step="0.001" value="0" aria-label="Trim In">
+                  <input type="range" id="trim-edge-out" min="0" max="{{ $dur }}" step="0.001" value="{{ $dur }}" aria-label="Trim Out">
+                </div>
+                <span class="waveform-marker" id="trim-mk-in" hidden></span>
+                <span class="waveform-marker" id="trim-mk-out" hidden></span>
+                <span class="waveform-marker trim-mk-fade" id="trim-mk-fadein" data-color="2" hidden></span>
+                <span class="waveform-marker trim-mk-fade" id="trim-mk-fadeout" data-color="2" hidden></span>
+                <span class="trim-length" id="trim-length" aria-live="polite"></span>
+                <div class="trim-zoomsel" id="trim-zoomsel" aria-hidden="true"></div>
+              </div>
             </div>
             {{ else }}
             <p class="small text-muted mb-0 insp-no-timeline">Duration unknown &mdash; the trim timeline needs a probed duration (re-run Analyse from the media pool). Trim In/Out can still be typed.</p>
@@ -482,243 +493,12 @@
        event listeners survive any later re-render of the timeline markup. -->
   <script>
   (function () {
-    // Idempotent wiring: the drag/click handlers are document-level delegates,
-    // re-running the script must not add a second set.
-    if (document.__trimTimelineWired) {
-      paintCurvePreviews();
-      drawTarget(document.getElementById("trim-timeline"));
-      if (window.__fitMediaGrid) window.__fitMediaGrid();
-      return;
-    }
-    document.__trimTimelineWired = true;
-
-    function fmtSec(s) {
-      s = Math.max(0, s);
-      var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-      var mm = m < 10 ? "0" + m : "" + m;
-      var ss = sec < 10 ? "0" + sec.toFixed(2) : sec.toFixed(2);
-      return (h > 0 ? h + ":" : "") + mm + ":" + ss;
-    }
-    // hh:mm:ss.mmm, the same format the server renders and ParseTime reads;
-    // anything coarser would truncate trim points on the next autosave.
-    function fmtClock(ms) {
-      ms = Math.max(0, Math.round(ms));
-      var p2 = function (n) { return (n < 10 ? "0" : "") + n; };
-      var p3 = function (n) { return (n < 100 ? (n < 10 ? "00" : "0") : "") + n; };
-      return p2(Math.floor(ms / 3600000)) + ":" + p2(Math.floor((ms % 3600000) / 60000)) + ":" +
-        p2(Math.floor((ms % 60000) / 1000)) + "." + p3(ms % 1000);
-    }
-
-    // Resolution-aware waveform painting. The stored envelope is coarse
-    // enough for the full file, but a deep zoom would only show a handful of
-    // stored bars (thick horizontal slabs). When that happens we fetch a
-    // pixel-matched envelope for the visible window (/api/media/:name/wave)
-    // and draw it instead, so zooming in reveals real detail while bar
-    // density stays roughly 1 bar per CSS pixel at every zoom depth.
-    var waveCache = null;   // {from,to,peaks}: fetched window, padded around the view
-    var wavePending = false;
-    // Mirror /api/media/:name/wave's server-side cap (media.MaxWaveformBins).
-    var mediaMaxBins = 16000;
-    function requestWave(timeline, from, to, wantBins) {
-      if (wavePending) return;
-      // Mid-animation the window is moving anyway; fetch after it settles.
-      if (zoomAnim) return;
-      var dur = parseFloat(timeline.dataset.duration);
-      var span = to - from, pad = span * 0.25;
-      var cFrom = Math.max(0, from - pad), cTo = Math.min(dur, to + pad);
-      if (!(cTo > cFrom)) return;
-      var bins = Math.max(64, Math.min(mediaMaxBins, Math.round(wantBins * (cTo - cFrom) / span)));
-      wavePending = true;
-      var url = "/api/media/" + encodeURIComponent(timeline.dataset.filename) +
-        "/wave?from=" + cFrom + "&to=" + cTo + "&bins=" + bins;
-      fetch(url).then(function (r) {
-        wavePending = false;
-        if (!r.ok) throw new Error(String(r.status));
-        return r.json();
-      }).then(function (peaks) {
-        if (Array.isArray(peaks) && peaks.length > 0) {
-          waveCache = { from: cFrom, to: cTo, peaks: peaks };
-        }
-        drawTarget(timeline);
-      }).catch(function () {
-        wavePending = false; // retried on the next repaint
-      });
-    }
-    // The stored envelope (/api/media/:name/peaks, hundreds of KB for a long
-    // clip) is fetched once per clip and version and kept parsed across
-    // inspector re-renders (this script re-runs with each one), so neither a
-    // re-render nor a redraw while dragging re-reads it. A few clips kept.
-    // (Looked up on each call: a re-run of this script returns early, before
-    // any statement below its guard runs.)
-    function storedPeaks(timeline) {
-      var url = timeline.dataset.waveUrl;
-      if (!url) return [];
-      var peaksStore = window.__ctpPeaks || (window.__ctpPeaks = { order: [], byUrl: {} });
-      var hit = peaksStore.byUrl[url];
-      if (Array.isArray(hit)) return hit;
-      if (hit !== "pending") {
-        peaksStore.byUrl[url] = "pending";
-        fetch(url).then(function (r) {
-          if (!r.ok) throw new Error(String(r.status));
-          return r.json();
-        }).then(function (peaks) {
-          peaksStore.byUrl[url] = Array.isArray(peaks) ? peaks : [];
-          peaksStore.order.push(url);
-          while (peaksStore.order.length > 6) delete peaksStore.byUrl[peaksStore.order.shift()];
-          var current = document.getElementById("trim-timeline");
-          if (current && current.dataset.waveUrl === url) drawTarget(current);
-        }).catch(function () {
-          delete peaksStore.byUrl[url]; // retried on the next repaint
-        });
-      }
-      return [];
-    }
-    // Max-hold resample to exactly `bins` values: dense arrays compress to
-    // ~1 bar per pixel, sparse arrays (upscale) never stretch into slabs.
-    function resampleMax(arr, bins) {
-      var out = new Array(bins);
-      if (bins >= arr.length) {
-        for (var i = 0; i < bins; i++) out[i] = arr[Math.min(arr.length - 1, Math.floor(i * arr.length / bins))];
-        return out;
-      }
-      for (var i = 0; i < bins; i++) {
-        var a = Math.floor(i * arr.length / bins);
-        var b = Math.max(a + 1, Math.floor((i + 1) * arr.length / bins));
-        var m = 0;
-        for (var j = a; j < b; j++) if (arr[j] > m) m = arr[j];
-        out[i] = m;
-      }
-      return out;
-    }
-    function drawWave(timeline) {
-      var canvas = timeline.querySelector("#trim-waveform");
-      if (!canvas) return;
-      var ctx = canvas.getContext && canvas.getContext("2d");
-      if (!ctx) return;
-      // Size the backing store to the element so the drawing is crisp at the
-      // panel's current size instead of stretching a fixed 800x120 buffer.
-      var dpr = window.devicePixelRatio || 1;
-      var cw = canvas.clientWidth || timeline.clientWidth || 800;
-      var ch = canvas.clientHeight || timeline.clientHeight || 120;
-      if (!(cw > 0) || !(ch > 0)) return;
-      var bw = Math.round(cw * dpr), bh = Math.round(ch * dpr);
-      if (canvas.width !== bw || canvas.height !== bh) {
-        canvas.width = bw;
-        canvas.height = bh;
-      }
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      var peaks = storedPeaks(timeline);
-      if (peaks.length === 0) return;
-      var style = getComputedStyle(document.documentElement);
-      var waveColour = (style.getPropertyValue("--ctp-accent-2") || "#2fd6ff").trim() || "#2fd6ff";
-      ctx.fillStyle = waveColour;
-      var dur = parseFloat(timeline.dataset.duration);
-      if (!(dur > 0)) return;
-      var vFrom = view ? Math.max(0, view.from) : 0;
-      var vTo = view ? Math.min(dur, view.to) : dur;
-      var span = vTo - vFrom;
-      if (!(span > 0)) return;
-      // Source selection: the pixel-matched cached window whenever the view
-      // sits inside it, otherwise the stored envelope (fine for the full
-      // file and a fine-enough stencil while a fetch is in flight).
-      var src = peaks, sFrom = 0, sTo = dur;
-      if (view && waveCache && vFrom >= waveCache.from && vTo <= waveCache.to) {
-        src = waveCache.peaks; sFrom = waveCache.from; sTo = waveCache.to;
-      }
-      var want = Math.max(2, Math.round(cw));
-      // Request a finer envelope only when the current source can't fill the
-      // canvas with ~1 bar per pixel (deep zoom) and the window is small
-      // enough to decode cheaply (< 60s); wider views rely on the stored
-      // envelope. Only fires once per covered window (wavePending + cache).
-      if (view && span >= 0.05 && span <= 60 &&
-          (sTo - sFrom) > span &&
-          src.length * span / (sTo - sFrom) < want &&
-          !(waveCache && vFrom >= waveCache.from && vTo <= waveCache.to)) {
-        requestWave(timeline, vFrom, vTo, want);
-      }
-      var i0 = Math.floor((vFrom - sFrom) / (sTo - sFrom) * src.length);
-      var i1 = Math.ceil((vTo - sFrom) / (sTo - sFrom) * src.length);
-      i0 = Math.max(0, i0); i1 = Math.min(src.length, i1);
-      if (i1 <= i0) return;
-      var bars = resampleMax(src.slice(i0, i1), want);
-      var W = canvas.width, H = canvas.height, mid = H / 2;
-      var gridColour = (style.getPropertyValue("--ctp-border") || "#176095").trim() || "#176095";
-      var dimColour = (style.getPropertyValue("--ctp-muted") || "#7ca6c3").trim() || "#7ca6c3";
-      // Backdrop wash so silence reads as a track, not a void.
-      ctx.fillStyle = "rgba(127,127,127,0.08)";
-      ctx.fillRect(0, 0, W, H);
-      // Second gridlines, stepping out until labels would breathe (~70px).
-      var pxPerSec = W / span;
-      var step = 1;
-      var steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
-      for (var si = 0; si < steps.length; si++) {
-        if (pxPerSec * steps[si] >= 70) { step = steps[si]; break; }
-        step = steps[si];
-      }
-      ctx.fillStyle = gridColour;
-      for (var t = Math.ceil(vFrom / step) * step; t <= vTo + 1e-6; t += step) {
-        ctx.fillRect(Math.round((t - vFrom) * pxPerSec), 0, 1, H);
-      }
-      // Centre line: silence draws as a line on it, not nothing.
-      ctx.fillStyle = dimColour;
-      ctx.fillRect(0, Math.round(mid) - 1, W, 2);
-      var w = W / bars.length;
-      for (var i = 0; i < bars.length; i++) {
-        var v = Math.max(0, Math.min(1, bars[i])) * (mid - 2);
-        var h = Math.max(2, v * 2);
-        ctx.fillStyle = waveColour;
-        ctx.fillRect(i * w + 0.5, mid - h / 2, Math.max(1, w - 1), h);
-      }
-    }
-    function drawTarget(timeline) {
-      if (!timeline) return;
-      var dur = parseFloat(timeline.dataset.duration);
-      if (!(dur > 0)) return;
-      // Keep a stale zoom window (from before a save changed the duration)
-      // inside the file; a window that covers everything is a no-zoom.
-      if (view) {
-        view.from = Math.max(0, view.from);
-        view.to = Math.min(dur, view.to);
-        if (view.to - view.from >= dur - 0.05) view = null;
-      }
-      drawWave(timeline);
-      drawFades(timeline);
-      update(timeline, expand(stateOf(timeline)));
-      window.__trimView = view; // survive the next save's re-render
-    }
-
-    // Fade envelope overlay: the ONE shared audio+video ramp (§12.7) drawn
-    // over the waveform — fade-in rising from the trim start, fade-out
-    // falling into the trim end. Values come from the audio/video tab
-    // mirrors ([data-fade-in]/[data-fade-out], formatTime strings); the
-    // curve select picks the same shape the engine ramps, mirrored here
-    // from gsp fadeShape so what you see is what the show does.
-    function parseFadeSecs(str) {
-      if (!str) return 0;
-      var parts = String(str).trim().split(":");
-      if (parts.length === 0 || parts.length > 3) return 0;
-      var sec = parseFloat(parts[parts.length - 1]);
-      if (isNaN(sec)) return 0;
-      var mult = 1;
-      for (var i = parts.length - 2; i >= 0; i--) {
-        mult *= 60;
-        var n = parseFloat(parts[i]);
-        if (isNaN(n) || n < 0) return 0;
-        sec += n * mult;
-      }
-      return sec < 0 ? 0 : sec;
-    }
-    function fadeShapeJS(curve, t) {
-      if (t <= 0) return 0;
-      if (t >= 1) return 1;
-      if (curve === "smooth") return t * t * (3 - 2 * t);
-      if (curve === "log") return Math.log10(1 + 9 * t);
-      if (curve === "exp") { var k = 3; return (Math.exp(k * t) - 1) / (Math.exp(k) - 1); }
-      return t;
-    }
-    // Small fade-in glyph beside each curve picker (§12.7): the same
-    // fadeShapeJS the overlay and engine use, so the preview is the ramp.
+    // Inspector extras: the fade-curve glyph beside each curve picker and
+    // the Media tab's column fit. This script re-runs with every inspector
+    // render, so it publishes its functions on window and wires listeners
+    // once. The trim timeline is public/src/trimline.js.
     function paintCurvePreviews() {
+      var shape = window.ctpTrim ? window.ctpTrim.fadeShape : function (c, t) { return t; };
       document.querySelectorAll("svg.fade-curve-preview").forEach(function (svg) {
         var sel = document.getElementById(svg.dataset.curveFor);
         var path = svg.querySelector("path");
@@ -726,305 +506,16 @@
         var d = "";
         for (var i = 0; i <= 24; i++) {
           var t = i / 24;
-          d += (i ? " L" : "M") + (1 + t * 38).toFixed(1) + " " + (15 - fadeShapeJS(sel.value, t) * 14).toFixed(1);
+          d += (i ? " L" : "M") + (1 + t * 38).toFixed(1) + " " + (15 - shape(sel.value, t) * 14).toFixed(1);
         }
         path.setAttribute("d", d);
         svg.setAttribute("title", sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : "");
       });
     }
-    function drawFades(timeline) {
-      var canvas = timeline.querySelector("#trim-waveform");
-      if (!canvas) return;
-      var ctx = canvas.getContext && canvas.getContext("2d");
-      if (!ctx) return;
-      var W = canvas.width, H = canvas.height;
-      if (!(W > 0) || !(H > 0)) return;
-      var dur = parseFloat(timeline.dataset.duration);
-      if (!(dur > 0)) return;
-      var finEl = document.querySelector("[data-fade-in]");
-      var foutEl = document.querySelector("[data-fade-out]");
-      var curveEl = document.getElementById("insp-fadecurve") || document.getElementById("insp-img-fadecurve");
-      var fin = finEl ? parseFadeSecs(finEl.value) : 0;
-      var fout = foutEl ? parseFadeSecs(foutEl.value) : 0;
-      if (!(fin > 0) && !(fout > 0)) return;
-      var curve = curveEl ? curveEl.value : "linear";
-      var st = expand(stateOf(timeline));
-      var end = st.posEnd > 0 ? st.posEnd : st.duration;
-      var vFrom = view ? view.from : 0;
-      var vTo = view ? view.to : dur;
-      var span = vTo - vFrom;
-      if (!(span > 0)) return;
-      var style = getComputedStyle(document.documentElement);
-      var col = (style.getPropertyValue("--ctp-accent") || "#2fd6ff").trim() || "#2fd6ff";
-      var dpr = W / (canvas.clientWidth || W) || 1;
-      var mid = H / 2;
-      var ramps = [];
-      if (fin > 0) ramps.push({ from: st.posStart, to: Math.min(end, st.posStart + fin), dir: 1, tag: "in" });
-      if (fout > 0) ramps.push({ from: Math.max(st.posStart, end - fout), to: end, dir: -1, tag: "out" });
-      ctx.save();
-      ramps.forEach(function (r) {
-        var x0 = Math.round((r.from - vFrom) / span * W);
-        var x1 = Math.round((r.to - vFrom) / span * W);
-        if (x1 <= 0 || x0 >= W || x1 - x0 < 2 * dpr) return;
-        x0 = Math.max(0, x0); x1 = Math.min(W, x1);
-        var step = Math.max(dpr, Math.floor((x1 - x0) / 400));
-        var gainAt = function (x) {
-          var t = (x - x0) / Math.max(1, x1 - x0);
-          return r.dir > 0 ? fadeShapeJS(curve, t) : fadeShapeJS(curve, 1 - t);
-        };
-        ctx.fillStyle = col;
-        ctx.globalAlpha = 0.22;
-        for (var x = x0; x < x1; x += step) {
-          var h = gainAt(x) * (mid - 2 * dpr);
-          ctx.fillRect(x, mid - h, step, h * 2);
-        }
-        ctx.globalAlpha = 0.95;
-        ctx.strokeStyle = col;
-        ctx.lineWidth = Math.max(1, Math.round(dpr));
-        ctx.beginPath();
-        for (var lx = x0; lx <= x1; lx += step) {
-          var y = mid - gainAt(lx) * (mid - 2 * dpr);
-          if (lx === x0) ctx.moveTo(lx, y); else ctx.lineTo(lx, y);
-        }
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = col;
-        ctx.font = Math.round(10 * dpr) + "px sans-serif";
-        var label = r.tag === "in" ? "fade in (A+V)" : "fade out (A+V)";
-        var lw = ctx.measureText(label).width;
-        if (x1 - x0 > lw + 8 * dpr) {
-          var tx = r.tag === "in" ? x0 + 4 * dpr : x1 - 4 * dpr - lw;
-          ctx.fillText(label, Math.max(2, Math.min(W - lw - 2, tx)), 11 * dpr);
-        }
-      });
-      ctx.restore();
-    }
-
-    // Per-drag/zoom state, re-read from the live DOM (never cached per render).
-    var drag = null;
-    // Zoom window {from,to} in seconds; null = full file. Backed by a window
-    // property: the script re-runs after every inspector save, and a fresh
-    // closure would otherwise reset a zoomed view to the full file (visible
-    // as the waveform jumping scale on each save).
-    var view = window.__trimView || null;
-    var zoomMode = false;
-    var box = null;     // in-progress box select {timeline, f0, lo, hi}
-    function stateOf(timeline) {
-      var posStart = parseFloat(timeline.dataset.posStart) / 1000; // seconds
-      var posEnd = parseFloat(timeline.dataset.posEnd) / 1000;
-      var duration = parseFloat(timeline.dataset.duration);
-      return { posStart: posStart, posEnd: posEnd, duration: duration };
-    }
-    function pct(st, sec) {
-      // Position a time within the current zoom window; values outside the
-      // window clamp to its edges so markers/shades stay visible while zoomed.
-      var from = view ? view.from : 0;
-      var to = view ? view.to : st.duration;
-      return (Math.max(from, Math.min(to, sec)) - from) / (to - from) * 100;
-    }
-    function update(timeline, st) {
-      var inEl = timeline.querySelector("#trim-marker-in");
-      var outEl = timeline.querySelector("#trim-marker-out");
-      var timeIn = timeline.querySelector("#trim-time-in");
-      var timeOut = timeline.querySelector("#trim-time-out");
-      if (!inEl || !outEl) return;
-      inEl.style.left = pct(st, st.posStart) + "%";
-      outEl.style.left = pct(st, st.posEnd) + "%";
-      timeIn.style.left = pct(st, st.posStart) + "%";
-      timeOut.style.left = pct(st, st.posEnd) + "%";
-      timeIn.textContent = fmtSec(st.posStart);
-      timeOut.textContent = fmtSec(st.posEnd);
-      var shades = {};
-      var sb = timeline.querySelector("#trim-shade-before");
-      var sa = timeline.querySelector("#trim-shade-after");
-      if (sb) sb.style.width = pct(st, st.posStart) + "%";
-      if (sa) sa.style.width = (100 - pct(st, st.posEnd)) + "%";
-      var inpIn = document.getElementById("insp-in");
-      var inpOut = document.getElementById("insp-out");
-      if (inpIn) inpIn.value = fmtClock(st.posStart * 1000);
-      if (inpOut) inpOut.value = fmtClock(st.posEnd * 1000);
-      var lenEl = timeline.querySelector("#trim-length");
-      if (lenEl) lenEl.textContent = fmtClock((st.posEnd - st.posStart) * 1000);
-    }
-    // Instant save: PUT the current field values (the form re-renders the
-    // inspector from server state, so this is also the "commit" of a drag).
-    function save() {
-      var form = document.getElementById("inspector-form");
-      if (form && window.htmx) htmx.trigger(form, "ctp-save");
-    }
-
-    // A stored posEnd of 0 means "no trim out" (play to end of file), so the
-    // out marker shows at the full duration; 0 would sit at 0% undraggable.
-    function expand(st) {
-      if (!(st.posEnd > 0)) st.posEnd = st.duration;
-      return st;
-    }
-
-    // Delegated pointerdown: begin a marker drag, or (when Zoom mode is
-    // armed) a box select on the empty timeline.
-    document.addEventListener("pointerdown", function (e) {
-      var targ = e.target instanceof Element ? e.target : null;
-      if (!targ) return;
-      var marker = targ.closest(".trim-marker");
-      var timeline = (marker || targ).closest(".trim-timeline");
-      if (!timeline) return;
-      if (marker) {
-        var st = expand(stateOf(timeline));
-        drag = { timeline: timeline, st: st, which: marker.id === "trim-marker-out" ? "out" : "in" };
-        e.preventDefault();
-        timeline.setPointerCapture(e.pointerId);
-        return;
-      }
-      if (zoomMode) {
-        var rect = timeline.getBoundingClientRect();
-        box = { timeline: timeline, f0: rect.width ? (e.clientX - rect.left) / rect.width : 0, lo: 0, hi: 0 };
-        e.preventDefault();
-        timeline.setPointerCapture(e.pointerId);
-      }
-    });
-    // Retargeted moves while capture is held land on the timeline itself.
-    document.addEventListener("pointermove", function (e) {
-      if (box) {
-        var rect = box.timeline.getBoundingClientRect();
-        if (!rect.width) return;
-        var f1 = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        box.lo = Math.min(box.f0, f1);
-        box.hi = Math.max(box.f0, f1);
-        var sel = document.getElementById("trim-zoomsel");
-        if (sel) {
-          sel.style.left = (box.lo * 100) + "%";
-          sel.style.width = ((box.hi - box.lo) * 100) + "%";
-          sel.classList.add("trim-zoomsel-active");
-        }
-        e.preventDefault();
-        return;
-      }
-      if (!drag) return;
-      var rect = drag.timeline.getBoundingClientRect();
-      if (!rect.width) return;
-      var frac = (e.clientX - rect.left) / rect.width;
-      var from = view ? view.from : 0, to = view ? view.to : drag.st.duration;
-      var sec = from + frac * (to - from);
-      if (drag.which === "in") {
-        drag.st.posStart = Math.max(0, Math.min(sec, drag.st.posEnd - 0.05));
-      } else {
-        drag.st.posEnd = Math.min(drag.st.duration, Math.max(sec, drag.st.posStart + 0.05));
-      }
-      update(drag.timeline, drag.st);
-      e.preventDefault();
-    });
-    document.addEventListener("pointerup", function () {
-      if (drag) {
-        update(drag.timeline, drag.st);
-        save();
-        drag = null;
-        return;
-      }
-      if (box) {
-        var timeline = box.timeline;
-        var sel = document.getElementById("trim-zoomsel");
-        if (sel) { sel.classList.remove("trim-zoomsel-active"); sel.style.width = ""; sel.style.left = ""; }
-        if (box.hi - box.lo > 0.02) {
-          zoomInto(timeline, box.lo, box.hi);
-        }
-        box = null;
-        disarmZoom();
-      }
-    });
-    document.addEventListener("pointercancel", function () {
-      drag = null;
-      if (box) {
-        var sel = document.getElementById("trim-zoomsel");
-        if (sel) { sel.classList.remove("trim-zoomsel-active"); sel.style.width = ""; sel.style.left = ""; }
-        box = null;
-      }
-    });
-
-    // --- Zoom window helpers ------------------------------------------------
-    // Zoom changes animate a short ease-out graduation on the window edges
-    // (the box-select's release eases into the target instead of jumping).
-    // Interpolating `view` directly gives the repaint a cheap animated frame.
-    var zoomAnim = null;
-    function setView(nfrom, nto, dur) {
-      if (nto - nfrom < 0.05) return;
-      if (zoomAnim) { cancelAnimationFrame(zoomAnim); zoomAnim = null; }
-      var target = (nfrom <= 0 && nto >= dur) ? null
-        : { from: Math.max(0, nfrom), to: Math.min(dur, nto) };
-      var start = view ? { from: view.from, to: view.to } : { from: 0, to: dur };
-      var t0 = performance.now();
-      function frame(now) {
-        var k = Math.min(1, (now - t0) / 200);
-        var e = 1 - Math.pow(1 - k, 3);
-        if (target === null) {
-          if (e >= 1) view = null;
-          else view = { from: start.from + (0 - start.from) * e, to: start.to + (dur - start.to) * e };
-        } else {
-          view = { from: start.from + (target.from - start.from) * e,
-                   to: start.to + (target.to - start.to) * e };
-        }
-        // Clear the animation flag BEFORE repainting so the final frame's
-        // drawWave sees a settled zoom and can kick off a windowed fetch.
-        if (e >= 1) zoomAnim = null;
-        var timeline = document.querySelector(".trim-timeline");
-        if (timeline) drawTarget(timeline);
-        if (e < 1) zoomAnim = requestAnimationFrame(frame);
-        else zoomAnim = null;
-      }
-      zoomAnim = requestAnimationFrame(frame);
-    }
-    function zoomInto(timeline, f0, f1) {
-      var st = expand(stateOf(timeline));
-      var from = view ? view.from : 0, to = view ? view.to : st.duration;
-      setView(from + (to - from) * f0, from + (to - from) * f1, st.duration);
-    }
-    function zoomStep(dir) {
-      var timeline = document.querySelector(".trim-timeline");
-      if (!timeline) return;
-      var st = expand(stateOf(timeline));
-      var from = view ? view.from : 0, to = view ? view.to : st.duration;
-      var span = to - from;
-      if (dir < 0) { from += span * 0.25; to -= span * 0.25; }
-      else { from -= span * 0.5; to += span * 0.5; }
-      setView(from, to, st.duration);
-    }
-    function disarmZoom() {
-      zoomMode = false;
-      var t = document.querySelector(".trim-timeline");
-      if (t) t.classList.remove("trim-zoom-active");
-      var b = document.getElementById("trim-zoom");
-      if (b) b.setAttribute("aria-pressed", "false");
-    }
-
-    // Zoomed in: rolling the wheel over the waveform pans the view window
-    // left/right across the file (there is no page scroll underneath the
-    // fixed inspector, so the event is captured instead of bubbling).
-    document.addEventListener("wheel", function (e) {
-      var targ = e.target instanceof Element ? e.target : null;
-      if (!targ) return;
-      var timeline = targ.closest(".trim-timeline");
-      if (!timeline || !view) return;
-      var dur = parseFloat(timeline.dataset.duration);
-      var span = view.to - view.from;
-      if (!(dur > 0) || !(span > 0) || span >= dur - 0.05) return;
-      e.preventDefault();
-      if (zoomAnim) { cancelAnimationFrame(zoomAnim); zoomAnim = null; }
-      var delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-      if (e.deltaMode === 1) delta *= 16;
-      else if (e.deltaMode === 2) delta *= 100;
-      var shift = delta * span / 600;
-      var nfrom = view.from + shift, nto = view.to + shift;
-      if (nfrom < 0) { nto -= nfrom; nfrom = 0; }
-      if (nto > dur) { nfrom -= nto - dur; nto = dur; }
-      if (nfrom < 0) nfrom = 0;
-      view = { from: nfrom, to: nto };
-      drawTarget(timeline);
-    }, { passive: false });
-
     // Media-info grid: the tab body must never scroll internally, so when the
     // info list would overflow the inspector's visible area it doubles from
-    // one aligned label:value column into two (`.media-cols-2`). The pane
-    // itself grows with its content, so fit is measured against the visible
-    // viewport (the #cueinspector-collapse scroll area), not the pane.
+    // one aligned label:value column into two (`.media-cols-2`). Fit is
+    // measured against the visible viewport (#cueinspector-collapse).
     function fitMediaGrid() {
       var grid = document.querySelector(".media-info-grid");
       if (!grid) return;
@@ -1032,82 +523,30 @@
       if (!pane || pane.getBoundingClientRect().height <= 0) return;
       var scroll = grid.closest("#cueinspector-collapse");
       var avail = 0;
-      if (scroll) {
-        avail = Math.round(scroll.getBoundingClientRect().bottom - pane.getBoundingClientRect().top - 10);
-      }
+      if (scroll) avail = Math.round(scroll.getBoundingClientRect().bottom - pane.getBoundingClientRect().top - 10);
       if (avail <= 0) return;
       // Measure the single-column height first: the live class would make
       // grid.scrollHeight under-report.
       grid.classList.remove("media-cols-2");
-      var one = grid.scrollHeight;
-      grid.classList.toggle("media-cols-2", one > avail + 1);
+      grid.classList.toggle("media-cols-2", grid.scrollHeight > avail + 1);
     }
     window.__fitMediaGrid = fitMediaGrid;
-    // The inspector is resizable + the panel swaps content; re-fit whenever
-    // either changes (cheap layout measurement, no animation).
-    window.addEventListener("resize", function () { fitMediaGrid(); });
-
-    // A click on the waveform is otherwise inert: only the explicit controls
-    // below change trim points or the zoom window.
-
-    // Clear-trim + zoom buttons.
-    document.addEventListener("click", function (e) {
-      if (!e.target || !(e.target instanceof Element)) return;
-      var btn = e.target.closest("#trim-clear, #trim-zoom, #trim-zoom-in, #trim-zoom-out, #trim-zoom-reset");
-      if (!btn) return;
-      var timeline = document.querySelector(".trim-timeline");
-      if (!timeline) return;
-      if (btn.id === "trim-clear") {
-        var st = expand(stateOf(timeline));
-        st.posStart = 0; st.posEnd = st.duration;
-        update(timeline, st);
-        save();
-      } else if (btn.id === "trim-zoom") {
-        zoomMode = !zoomMode;
-        timeline.classList.toggle("trim-zoom-active", zoomMode);
-        btn.setAttribute("aria-pressed", zoomMode ? "true" : "false");
-        if (!zoomMode) disarmZoom();
-      } else if (btn.id === "trim-zoom-in") {
-        zoomStep(-1);
-      } else if (btn.id === "trim-zoom-out") {
-        zoomStep(1);
-      } else if (btn.id === "trim-zoom-reset") {
-        var st2 = expand(stateOf(timeline));
-        setView(0, st2.duration, st2.duration);
-        disarmZoom();
-      }
-    });
-
-    // Initial paint (only) for a timeline present at script run time. Must
-    // carry REAL state from the dataset: posEnd 0 means "no trim out" (shown
-    // at full duration); an empty state would paint NaN positions/markers.
-    drawTarget(document.getElementById("trim-timeline"));
-    fitMediaGrid();
-    // Live fade overlay: repaint the envelope while a fade field is edited
-    // (the save re-render repaints anyway). Direct listeners on this
-    // render's nodes — they die with the re-render, so nothing accumulates.
-    // The ui.js mirror-sync keeps every [data-fade-*] copy identical.
-    document.querySelectorAll("[data-fade-in],[data-fade-out],#insp-fadecurve,#insp-img-fadecurve").forEach(function (el) {
-      el.addEventListener("input", function () {
-        paintCurvePreviews();
-        var tl = document.querySelector(".trim-timeline");
-        if (tl) drawTarget(tl);
+    window.__paintCurvePreviews = paintCurvePreviews;
+    if (!document.__inspectorExtrasWired) {
+      document.__inspectorExtrasWired = true;
+      window.addEventListener("resize", function () { window.__fitMediaGrid(); });
+      document.addEventListener("input", function (e) {
+        if (e.target instanceof Element && e.target.matches("#insp-fadecurve,#insp-img-fadecurve")) window.__paintCurvePreviews();
       });
-    });
+      // Inspector swaps may replace the panel after this script ran.
+      document.body.addEventListener("htmx:after:swap", function (e) {
+        var t = e.detail && e.detail.ctx && e.detail.ctx.target;
+        if (!t || (t.id !== "cueinspector-body" && t.id !== "cueinspector-collapse")) return;
+        Promise.resolve().then(function () { window.__paintCurvePreviews(); window.__fitMediaGrid(); });
+      });
+    }
     paintCurvePreviews();
-
-    // Inspector swaps may replace the timeline AFTER the inline script ran
-    // (htm4 evaluates fragments' scripts around the swap), so repaint from
-    // the freshly swapped markup whenever the panel settles. Delegated, once.
-    document.body.addEventListener("htmx:after:swap", function (e) {
-      const t = e.detail && e.detail.ctx && e.detail.ctx.target;
-      if (!t || (t.id !== "cueinspector-body" && t.id !== "cueinspector-collapse")) return;
-      Promise.resolve().then(function () {
-        paintCurvePreviews();
-        drawTarget(document.getElementById("trim-timeline"));
-        fitMediaGrid();
-      });
-    });
+    fitMediaGrid();
   })();
 </script>
 </div>

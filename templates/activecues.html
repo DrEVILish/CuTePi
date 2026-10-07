@@ -11,7 +11,7 @@
   <ol class="active-cues-list" aria-label="Running cues, top layer first">
     {{ range .Cues }}
     <li class="active-cue{{ if .Focus }} is-focus{{ end }}"{{ if .Color }} style="border-left-color: {{ .Color }}"{{ end }}
-      data-cue-pos="{{ .CuePos }}">
+      data-cue-pos="{{ .CuePos }}"{{ if not .Live }} data-position="{{ .Position }}" data-duration="{{ .Duration }}"{{ end }}>
       <div class="active-cue-head row is-items-center is-gap-xs">
         {{ if .Num }}<span class="go-num">{{ .Num }}</span>{{ end }}
         <span class="active-cue-title" title="{{ .Name }}">{{ .Name }}</span>
