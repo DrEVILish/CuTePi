@@ -1257,6 +1257,14 @@ func Api(rg *gin.RouterGroup) {
 				fields[col] = strings.TrimSpace(val)
 			}
 		}
+		// A blank time is zero: for an image's display duration that is
+		// "indefinitely", as the field says (it used to be refused, so no
+		// change on such a cue could be saved).
+		for _, col := range []string{"fadeIn", "preWait", "postWait", "cueDuration"} {
+			if v, ok := fields[col]; ok && v == "" {
+				fields[col] = "0"
+			}
+		}
 		// Stop others (§6.1.2) is a checkbox: absent means off, but only when
 		// the form carried it (its marker), not on a partial save.
 		if _, shown := c.GetPostForm("stop_others_shown"); shown {

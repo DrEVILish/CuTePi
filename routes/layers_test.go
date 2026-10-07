@@ -63,6 +63,11 @@ func TestCueLayerSettings(t *testing.T) {
 	if cue, _ = ctp.GetCue("2"); cue.StopOthers {
 		t.Fatal("a save without the Stop others marker turned it back on")
 	}
+	// An image's blank display duration ("indefinitely") does not block a
+	// save of the rest of the form.
+	if w := putForm(t, r, "/api/cue/inspector/2", "cueDuration", "", "stop_others_shown", "1"); w.Code != 200 {
+		t.Fatalf("save with a blank duration = %d: %s", w.Code, w.Body.String())
+	}
 	// Ticked: on again.
 	putForm(t, r, "/api/cue/inspector/2", "stop_others_shown", "1", "stop_others", "on")
 	if cue, _ = ctp.GetCue("2"); !cue.StopOthers {
