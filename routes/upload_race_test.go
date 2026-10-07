@@ -2,13 +2,18 @@ package routes
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
 	"CuTePi/config"
+	"CuTePi/ctp"
+	"CuTePi/media"
 )
 
 // Concurrent renames of one taken name each get their own free name.
@@ -97,5 +102,33 @@ func TestConcurrentRenameUploadsKeepBoth(t *testing.T) {
 	want := []string{"dup (2).wav", "dup (3).wav", "dup.wav"}
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("media folder = %v, want %v", got, want)
+	}
+}
+
+// Renaming a pool file onto a name an import is writing right now is a
+// conflict, even though nothing is on disk under that name yet.
+func TestRenameRefusesNameHeldByImport(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("held-old.mp4", 1, media.Metadata{Mimetype: "video/mp4"}, "held-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config.MediaLocation(), "held-old.mp4"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, release, err := reserveMediaName("incoming.mp4", reserveNew) // an upload in flight
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	form := url.Values{"old": {"held-old.mp4"}, "name": {"incoming.mp4"}}
+	req := httptest.NewRequest(http.MethodPost, "/youtube/rename", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("rename onto a held name = %d, want 409", w.Code)
+	}
+	if _, err := os.Stat(filepath.Join(config.MediaLocation(), "held-old.mp4")); err != nil {
+		t.Fatal("refused rename moved the file anyway")
 	}
 }

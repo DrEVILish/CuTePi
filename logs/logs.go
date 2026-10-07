@@ -194,6 +194,7 @@ const (
 	GSPPadAdded    = "GSP-E150" // stream pad-added detection detail
 	GSPWarm        = "GSP-E160" // prewarmed pipeline activated (deck-style cue load)
 	GSPFireTiming  = "GSP-E161" // cue fire latency measurement (build/preroll ms)
+	GSPBackground  = "GSP-E170" // background playlist track failed / playlist ended
 )
 
 // YDL - YouTube/yt-dlp import stages.

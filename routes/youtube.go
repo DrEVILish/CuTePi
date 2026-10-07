@@ -355,10 +355,21 @@ func handleYoutubeRename(c *gin.Context) {
 		respondError(c, http.StatusNotFound, "source file not found on disk")
 		return
 	}
-	if _, err := os.Stat(newPath); err == nil {
+	// Claim both names for the rename (reserveMediaName): the new one must
+	// be free on disk and not being written by an import, and no import may
+	// replace the old one meanwhile.
+	_, releaseNew, err := reserveMediaName(base, reserveNew)
+	if err != nil {
 		respondError(c, http.StatusConflict, fmt.Sprintf("a file named %q already exists", base))
 		return
 	}
+	defer releaseNew()
+	_, releaseOld, err := reserveMediaName(filepath.Base(old), reserveReplace)
+	if err != nil {
+		respondError(c, http.StatusConflict, err.Error())
+		return
+	}
+	defer releaseOld()
 	if err := os.Rename(oldFile, newPath); err != nil {
 		logs.PrintfWarn(logs.YDLRename, "old=%q new=%q error=%v", old, base, err)
 		respondError(c, http.StatusInternalServerError, "could not rename file on disk: "+err.Error())

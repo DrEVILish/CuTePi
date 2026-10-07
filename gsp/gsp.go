@@ -1048,11 +1048,14 @@ func warmWireAudio(p *gst.Pipeline) (wired, ok bool) {
 func linkExtraStream(pipeline *gst.Pipeline, srcPad *gst.Pad, kind, streamID string) {
 	name := "extra-" + kind + "-" + streamID
 	if el, err := pipeline.GetElementByName(name); err == nil && el != nil {
-		srcPad.Link(el.GetStaticPad("sink"))
+		if ret := srcPad.Link(el.GetStaticPad("sink")); ret != gst.PadLinkOK {
+			logs.PrintfWarn(logs.GSPPipeDebug, "gsp: relinking extra %s stream drain: %v", kind, ret)
+		}
 		return
 	}
 	sink, err := gst.NewElement("fakesink")
 	if err != nil {
+		logs.PrintfWarn(logs.GSPPipeDebug, "gsp: extra %s stream drain: %v", kind, err)
 		return
 	}
 	sink.Set("name", name)
@@ -1062,9 +1065,24 @@ func linkExtraStream(pipeline *gst.Pipeline, srcPad *gst.Pad, kind, streamID str
 	// clock, a lying scrubber and early trim-out.
 	sink.Set("sync", true)
 	sink.Set("async", false)
-	pipeline.AddMany(sink)
+	if err := pipeline.AddMany(sink); err != nil {
+		logs.PrintfWarn(logs.GSPPipeDebug, "gsp: extra %s stream drain: %v", kind, err)
+		return
+	}
 	sink.SyncStateWithParent()
-	srcPad.Link(sink.GetStaticPad("sink"))
+	if ret := srcPad.Link(sink.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		// An undrained stream stalls the whole pipeline (not-linked): say why.
+		logs.PrintfWarn(logs.GSPPipeDebug, "gsp: linking extra %s stream drain: %v", kind, ret)
+	}
+}
+
+// failLink fails pipeline when a link in its decoded-stream tail did not
+// take: unchecked, such a cue played on with no picture or no sound and no
+// error anywhere. The error goes to the bus, where the watch logs it and
+// tears the pipeline down like any other pipeline error.
+func failLink(pipeline *gst.Pipeline, from *gst.Element, err error) {
+	logs.PrintfWarn(logs.GSPPipeStopped, "gsp: %v", err)
+	pipeline.GetPipelineBus().Post(gst.NewErrorMessage(from, gst.NewGError(4, err), err.Error(), nil))
 }
 
 func CurrentPlaying() string {
@@ -2158,8 +2176,13 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		return nil, err
 	}
 
-	pipeline.AddMany(append(append([]*gst.Element{src}, srcChain...), decodebin)...)
-	gst.ElementLinkMany(append(append([]*gst.Element{src}, srcChain...), decodebin)...)
+	head := append(append([]*gst.Element{src}, srcChain...), decodebin)
+	if err := pipeline.AddMany(head...); err != nil {
+		return nil, fmt.Errorf("building the source chain: %w", err)
+	}
+	if err := gst.ElementLinkMany(head...); err != nil {
+		return nil, fmt.Errorf("linking the source chain: %w", err)
+	}
 
 	// Connect to decodebin's pad-added signal, emitted whenever it finds a
 	// stream from the input and a way to decode it to raw format. decodebin
@@ -2276,7 +2299,9 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		// decodebin recreates its pads after Stop -> Play. Reuse the tail;
 		// an abandoned, unlinked sink would otherwise prevent preroll forever.
 		if queue, err := pipeline.GetElementByName(queueName); err == nil && queue != nil {
-			srcPad.Link(queue.GetStaticPad("sink"))
+			if ret := srcPad.Link(queue.GetStaticPad("sink")); ret != gst.PadLinkOK {
+				failLink(pipeline, self, fmt.Errorf("relinking the %s stream: %v", kind, ret))
+			}
 			return
 		}
 
@@ -2342,8 +2367,14 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 				elements[i].Set("sync", false)
 			}
 		}
-		pipeline.AddMany(elements...)
-		gst.ElementLinkMany(elements...)
+		if err := pipeline.AddMany(elements...); err != nil {
+			failLink(pipeline, self, fmt.Errorf("adding the %s output: %w", kind, err))
+			return
+		}
+		if err := gst.ElementLinkMany(elements...); err != nil {
+			failLink(pipeline, self, fmt.Errorf("linking the %s output (%s): %w", kind, strings.Join(elementNames, " ! "), err))
+			return
+		}
 
 		// Elements must be synced to the pipeline's state, otherwise they
 		// stay in Null state and can't process data.
@@ -2403,7 +2434,10 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 
 		queue := elements[0]
 		sinkPad := queue.GetStaticPad("sink")
-		srcPad.Link(sinkPad)
+		if ret := srcPad.Link(sinkPad); ret != gst.PadLinkOK {
+			failLink(pipeline, self, fmt.Errorf("linking the decoded %s stream to its output: %v", kind, ret))
+			return
+		}
 		if isVideo && glOpen && !spec.warmSink {
 			glRegister(pipeline, byFactory, elementNames, spec.opts)
 		}
