@@ -25,57 +25,64 @@ import (
 // by mu so that concurrent HTTP requests (Play/Load/ShowTest/Stop/Panic)
 // can't race on the pipeline handle - the historical cause of "multiple
 // pipelines" / "losing reference, can't stop playback" bugs.
-type manager struct {
-	mu                sync.Mutex
-	pipeline          *gst.Pipeline
-	currentFile       string // filename currently loaded, "" if none/test pattern
-	liveEndpoint      bool
-	onEndpointFailure func(pos int, title string, generation uint64)
-	version           uint64 // bumped on every client-visible state change/position tick
-	lastPos           float64
-	inPoint           float64      // seconds; playback starts here (0 = start of file)
-	outPoint          float64      // seconds; playback auto-stops here (0 = end of file)
-	hold              bool         // freeze the last frame at end-of-stream / trim-out
-	loop              bool         // restart from the in-point when the clip reaches its end
-	loopRemain        int          // passes left in a finite loop (loopCount); 0 = infinite
-	volumeEl          *gst.Element // per-audio-branch "volume" element (last wins)
-	volume            float64      // requested cue volume in dB
-	loudnessGain      float64
-	rate              float64
-	balance           float64
-	mute              bool
-	panEl             *gst.Element
-	fadeIn            int
+// clip is the playback state of one running cue's pipeline. The manager embeds
+// the focus cue's clip (its fields read as mgr.pipeline, mgr.cuePos, ...);
+// other running cues keep theirs in voices (§6.1.2).
+type clip struct {
+	pipeline     *gst.Pipeline
+	currentFile  string // filename currently loaded, "" if none/test pattern
+	liveEndpoint bool
+	lastPos      float64
+	inPoint      float64      // seconds; playback starts here (0 = start of file)
+	outPoint     float64      // seconds; playback auto-stops here (0 = end of file)
+	hold         bool         // freeze the last frame at end-of-stream / trim-out
+	loop         bool         // restart from the in-point when the clip reaches its end
+	loopRemain   int          // passes left in a finite loop (loopCount); 0 = infinite
+	volumeEl     *gst.Element // per-audio-branch "volume" element (last wins)
+	volume       float64      // requested cue volume in dB
+	loudnessGain float64
+	rate         float64
+	balance      float64
+	mute         bool
+	panEl        *gst.Element
+	fadeIn       int
 	// fadeRamp is the picture fade in progress (fadeIn, FadeAndStop), so
 	// applyBrightness can hand the whole fade to the GPU wall; nil when the
 	// level is simply set.
-	fadeRamp     *levelRamp
-	fadeCurve    string
-	fitMode      string  // fit|stretch frame fitting ("", fit = letterbox)
-	rotation     int     // 0|90|180|270 clockwise degrees
-	flip         string  // none|h|v mirror ("", none = off)
-	fadeLevel    float64 // shared audio/video envelope, 0..1
-	opacity      float64 // cue opacity 0..1 on the KMS wall
-	fadeSerial   uint64  // cancels an earlier ramp on the same pipeline
-	starting     bool
-	brightEl     *gst.Element  // per-video-branch "videobalance" element (last wins)
-	brightBusy   bool          // a brightWorker goroutine is applying fadeLevel to brightEl
-	still        bool          // the loaded file is a still image: one frame, so brightness needs a re-render to show
-	stillDirty   bool          // a brightness change is waiting for the re-render goroutine
-	stillBusy    bool          // the re-render goroutine is running (its EOS echoes are not cue ends)
-	stillEnded   bool          // the still's genuine end-of-stream has been handled
-	cuePos       int           // cue position associated with the active clip (0 = not a cue)
-	onCueEnd     func(pos int) // invoked (in a goroutine) when an active cue reaches its end
-	gen          uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
-	halts        uint64        // bumped by every operator Stop/Panic call, whether or not a pipeline was running
-	loads        uint64        // bumped whenever a new pipeline is installed (swap)
-	paused       bool          // operator pause intent: Pause sets it, Play/swap clear it.
-	heldEnd      bool          // parked on the last frame by hold (paused is set too)
-	testShowing  bool          // a test pattern (not a file) is on the wall
-	warm         *gst.Pipeline // prebuilt+prerolled next cue; see Warm. Audio-only callers
-	warmFile     string        // only, since a prerolled video pipeline paints its
-	warmOpts     LoadOpts      // first frame onto the live wall (realtime-first rule)
-	warmBuildGen uint64        // generation the arm was made under (stale-arm check)
+	fadeRamp    *levelRamp
+	fadeCurve   string
+	fitMode     string  // fit|stretch frame fitting ("", fit = letterbox)
+	rotation    int     // 0|90|180|270 clockwise degrees
+	flip        string  // none|h|v mirror ("", none = off)
+	fadeLevel   float64 // shared audio/video envelope, 0..1
+	opacity     float64 // cue opacity 0..1 on the KMS wall
+	fadeSerial  uint64  // cancels an earlier ramp on the same pipeline
+	starting    bool
+	brightEl    *gst.Element // per-video-branch "videobalance" element (last wins)
+	brightBusy  bool         // a brightWorker goroutine is applying fadeLevel to brightEl
+	still       bool         // the loaded file is a still image: one frame, so brightness needs a re-render to show
+	stillDirty  bool         // a brightness change is waiting for the re-render goroutine
+	stillBusy   bool         // the re-render goroutine is running (its EOS echoes are not cue ends)
+	stillEnded  bool         // the still's genuine end-of-stream has been handled
+	cuePos      int          // cue position associated with the active clip (0 = not a cue)
+	paused      bool         // operator pause intent: Pause sets it, Play/swap clear it.
+	heldEnd     bool         // parked on the last frame by hold (paused is set too)
+	testShowing bool         // a test pattern (not a file) is on the wall
+}
+
+type manager struct {
+	clip              // the focus cue
+	mu                sync.Mutex
+	onEndpointFailure func(pos int, title string, generation uint64)
+	version           uint64        // bumped on every client-visible state change/position tick
+	onCueEnd          func(pos int) // invoked (in a goroutine) when an active cue reaches its end
+	gen               uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
+	halts             uint64        // bumped by every operator Stop/Panic call, whether or not a pipeline was running
+	loads             uint64        // bumped whenever a new pipeline is installed (swap)
+	warm              *gst.Pipeline // prebuilt+prerolled next cue; see Warm. Audio-only callers
+	warmFile          string        // only, since a prerolled video pipeline paints its
+	warmOpts          LoadOpts      // first frame onto the live wall (realtime-first rule)
+	warmBuildGen      uint64        // generation the arm was made under (stale-arm check)
 }
 
 var (

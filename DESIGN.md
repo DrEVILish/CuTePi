@@ -778,10 +778,32 @@ A 25 fps animated GIF plays every frame, through the fades as well, now as a tim
 display: the plane's pixel format must carry alpha and its blend mode must be straight (Coverage), and an animated
 image must present every one of its frames at its own rate through the fades.
 
-### 6.1.2 Simultaneous cues (planned, after §6.1.1)
+### 6.1.2 Simultaneous cues and the layer stack (decided 2026-10-07)
 
-Several cues playing at once, each on its own layer, with one audio mixer (`audiomixer`) feeding the HDMI device;
-the interface and remote protocols show every running cue. What "stop others" means per cue is still to be decided.
+Any number of cues can run at once, each on its own display layer, stacked; the **Active Cues** pane lists them.
+
+- **Stop others** (per cue, Time tab toggle, on by default): when on, firing the cue fades out and stops every
+  running cue over the cue's fade-stop time (0 = cut), as before (§6.5): the outgoing cues stay above the new one
+  while they fade, so they reveal it. When off, the running cues carry on and the new cue joins the stack.
+- **Layer** (per cue, Video tab), used when Stop others is off:
+  - **Top** (default): above every running cue.
+  - **Bottom**: beneath every running cue.
+  - **Under cue N**: directly beneath cue N's layer. If cue N is not running when the cue fires, the cue goes to
+    **Top** and the log says so. N is stored by the cue's identity (`cue_id`), so reordering the sheet keeps it.
+- **Focus.** The most recently fired running cue is the focus: the transport's position, seek, rate and live
+  volume, Now Playing's details and the remote protocols' "current clip" refer to it. When it ends or is stopped,
+  the most recently fired remaining cue becomes the focus.
+- **Each running cue keeps its own behaviour:** trim, hold, loop and its end (auto-continue, post-wait) as if it
+  played alone. A live page on a lower layer keeps running; its recovery applies while it is the focus.
+- **Stop, ESC, Panic** end every running cue. **Pause/Play** pause and resume every running cue.
+- **Active Cues pane** (right side, a pop-out like the media pool on the left): every running cue in stack order,
+  top first, with its title, position and a **Stop** (cut) and **Fade out** (the ESC fade time) for that cue alone.
+- **Sound.** Every cue's sound goes into one mixer (`interaudiosink` per cue → `interaudiosrc` → `audiomixer` →
+  the configured sink), so running cues are heard together at their own volumes. The HDMI device takes one stream
+  only (TEST_REPORT "Performance round, 2026-10-07": ALSA `dmix` cannot produce its format), so this is also what
+  lets a crossfade between two cues with sound play both.
+- **Limits:** the plane wall has one display plane per layer (16 on the Pi 4, one kept for the panic image); the
+  hardware decoders' totals apply (two 1080p60 H.264 layers cannot both run at full rate, HEVC can: §6.1.1).
 
 ### 6.2 Trim, Hold, Loop, Volume, Seek
 
