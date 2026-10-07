@@ -997,6 +997,8 @@ body.show-mode #app-footer #mediapool-toggle {
    `.row` only as the library's flex row, so the grid parts are switched off. */
 .row { --bs-gutter-x: 0; --bs-gutter-y: 0; margin-left: 0; margin-right: 0; margin-top: 0; }
 .row > * { flex-shrink: 1; width: auto; max-width: none; padding-left: 0; padding-right: 0; margin-top: 0; }
+/* ...except a switch, whose track sits in its own left padding. */
+.row > .form-switch { padding-left: 2.5em; }
 #settingsModal .settings-about { margin-bottom: 0.75rem; display: flex; align-items: baseline; gap: 0.5rem; } #settingsModal .settings-version { font-size: 0.8125rem; } #settingsModal .settings-about .cutepi-logo { height: 28px; width: auto; }
 
 /* Layer (Video tab, §6.1.2): the cue number field only for "Under cue". */
