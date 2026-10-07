@@ -203,6 +203,9 @@ func InitDB() error {
 	if err != nil {
 		return fmt.Errorf("ctp: creating state table: %w", err)
 	}
+	if err := repairZeroOpacity(db); err != nil {
+		return err
+	}
 
 	// Cue groups: visual folders holding cues (cuesheet.parent = group_id).
 	// Slideshow settings live on the group so image groups can play shuffled /
@@ -363,6 +366,24 @@ func addCuesheetColumns(d sqlx.Execer, table string) error {
 		}
 	}
 	return nil
+}
+
+// repairZeroOpacity runs once per database. Until 2026-10-07 cues were
+// loaded without their opacity, so the inspector showed 0 and wrote 0 back
+// on every save; playback reads 0 as opaque, so nothing looked wrong. Now the
+// inspector shows the stored value, so those cues are set to 100 (the
+// picture does not change).
+func repairZeroOpacity(d *sqlx.DB) error {
+	const key = "repair_zero_opacity"
+	var done int
+	if err := d.Get(&done, `SELECT COUNT(*) FROM state WHERE key = ?`, key); err != nil || done > 0 {
+		return err
+	}
+	if _, err := d.Exec(`UPDATE cuesheet SET opacity = 100 WHERE opacity = 0`); err != nil {
+		return fmt.Errorf("ctp: repairing cue opacity: %w", err)
+	}
+	_, err := d.Exec(`INSERT INTO state (key, value) VALUES (?, '1')`, key)
+	return err
 }
 
 // migrateLegacyCuesheetDefault rebuilds a legacy cuesheet table whose volume

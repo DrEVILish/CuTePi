@@ -152,3 +152,30 @@ func TestMigrateLegacyCuesheetKeepsNewerFields(t *testing.T) {
 		t.Errorf("foreign_keys = %d after the rebuild, want 1", fk)
 	}
 }
+
+// Cues whose opacity the old inspector wrote back as 0 become 100, once:
+// a later 0 is the operator's.
+func TestRepairZeroOpacityOnce(t *testing.T) {
+	d := sqlx.MustConnect("sqlite3", ":memory:")
+	mustExec(t, d, `CREATE TABLE state (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)`)
+	mustExec(t, d, `CREATE TABLE cuesheet (cuePos INTEGER, opacity REAL NOT NULL DEFAULT 100)`)
+	mustExec(t, d, `INSERT INTO cuesheet (cuePos, opacity) VALUES (1, 0), (2, 40)`)
+	if err := repairZeroOpacity(d); err != nil {
+		t.Fatal(err)
+	}
+	var ops []float64
+	if err := d.Select(&ops, `SELECT opacity FROM cuesheet ORDER BY cuePos`); err != nil {
+		t.Fatal(err)
+	}
+	if ops[0] != 100 || ops[1] != 40 {
+		t.Fatalf("after repair: %v, want [100 40]", ops)
+	}
+	mustExec(t, d, `UPDATE cuesheet SET opacity = 0 WHERE cuePos = 1`)
+	if err := repairZeroOpacity(d); err != nil {
+		t.Fatal(err)
+	}
+	var again float64
+	if err := d.Get(&again, `SELECT opacity FROM cuesheet WHERE cuePos = 1`); err != nil || again != 0 {
+		t.Fatalf("the repair ran twice: opacity %v (%v)", again, err)
+	}
+}
