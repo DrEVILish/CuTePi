@@ -790,11 +790,11 @@ func TestCuesheetRendersColumnResizeMarkers(t *testing.T) {
 	}
 	// Inline-edit cells must resolve their own swap target (the cell), not
 	// inherit the row's #cuesheet target - otherwise the editor form would
-	// replace the whole sheet. The row's select trigger is delayed and
-	// cancellable (justEdited) so a single-click selection still works but
-	// can't re-render the sheet out from under the editor opened by the
-	// double-click that just happened.
-	for _, want := range []string{`class="cue-inline-edit" hx-target="this" hx-trigger="dblclick"`, `click[!justEdited()] delay:250ms`} {
+	// replace the whole sheet. The row's select trigger fires at once (no
+	// delay: a click selects as fast as an arrow key) and is cancellable
+	// (justEdited); ui.js holds back its sheet swap while an editor is open,
+	// so it can't re-render the sheet out from under the editor.
+	for _, want := range []string{`class="cue-inline-edit" hx-target="this" hx-trigger="dblclick"`, `hx-trigger="click[!justEdited()]"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected inline-edit markup %q to render, got:\n%s", want, body)
 		}

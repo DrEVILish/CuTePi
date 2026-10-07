@@ -1283,6 +1283,26 @@ it is `/root/ctp.db.pre-waveform-move-2026-10-07`.
 Not changed: SQLite `synchronous` (a selection write costs ~0.3 ms on the SD card); the remaining sheet render cost is
 mostly template execution (~15 ms for 80 rows).
 
+## Row click vs arrow keys, 2026-10-07
+
+Dev server, Playwright, 20-cue sheet, median of 12, from the input to the row highlighted:
+
+| | Request sent | Row highlighted |
+|---|---|---|
+| Click, before (`hx-trigger="click[!justEdited()] delay:250ms"`) | 253 ms | 270 ms |
+| Click, after (no delay) | 2 ms | 34 ms |
+| Arrow key | 1 ms | 13–17 ms |
+
+The server answers both in 2–4 ms. The remaining ~20 ms between click and arrow is in the browser: the click's response
+completes later and the sheet swap under the pointer takes ~12 ms.
+
+The delay existed so a double-click's first click could not re-render the sheet over the editor the double-click opens.
+Now the select goes at once, and ui.js skips a row-select response's sheet swap (and sheet refreshes) while an inline
+editor is open or was just asked for. Double-click checks (PreWait cell, open the editor, type, Enter): 0 ms, 120 ms and
+250 ms between the clicks on an unselected row, and on the selected row: the editor opened, the value saved, the row ended
+selected, in every case; a single click still selects; no console errors. **Control:** with the swap guard disabled, the
+0 ms double-click lost its editor, so the test does exercise the race.
+
 ## Open findings (not fixed; need a decision)
 
 ### O1 — Frame rate: 1080p60 plays at 60 fps; fades, two layers and HEVC do not (major)

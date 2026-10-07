@@ -2369,7 +2369,14 @@ document.addEventListener("click", (e) => {
     if (inFlight === 0 && deferred) { deferred = false; setTimeout(refresh, 0); }
   });
   async function refresh() {
-    if (inFlight > 0) { deferred = true; return; }
+    // Nor over an open inline editor: its save (or Escape) re-renders the
+    // sheet, and that request's end runs the deferred check.
+    if (inFlight > 0 || window.inlineEditing?.()) {
+      deferred = true;
+      // A double-click that opened no editor ends nothing: look again.
+      if (inFlight === 0 && !document.querySelector("#cuesheet #updateValue")) setTimeout(refresh, 400);
+      return;
+    }
     try {
       if (domVersion() > lastSeen) lastSeen = domVersion();
       const status = await fetch("/api/cuesheet/status?version=" + lastSeen, {headers: {"Accept": "application/json"}});
@@ -2664,20 +2671,20 @@ document.addEventListener("click", (e) => {
 })();
 
 // In-cell editor helper: a double-click on a cue/group field opens an inline
-// editor, but those rows also re-render the whole sheet on a single click
-// (select). The row's "click[!justEdited()] delay:250ms" trigger and a
-// before:request veto consult this timestamp so the delayed select - which would land AFTER the editor
-// swapped in and wipe it - is suppressed when a double-click just happened.
+// editor, and those rows also select on a single click, which re-renders the
+// whole sheet. The select is sent at once (no delay: a click selects as fast
+// as an arrow key). Its response can land after a double-click has opened the
+// editor (or while its request is out), and swapping the sheet then would
+// wipe the editor: that swap is skipped. The selection is saved all the same,
+// and the editor's own save (or Escape) brings the new sheet.
 let inlineEditAt = 0;
 document.addEventListener("dblclick", (e) => {
   const t = e.target;
   if (t instanceof Element && t.closest(".cue-inline-edit")) inlineEditAt = Date.now();
 });
-// The second click of a double-click (detail === 2) lands well before the
-// first click's 250ms delayed select fires: stamp the guard now so that
-// pending select can't wipe the editor the dblclick just opened. (The
-// dblclick listener above fires too late for this — the editor doesn't exist
-// yet on the second click, and the first click's timer is already armed.)
+// The second click of a double-click (detail === 2) comes before the
+// dblclick event: stamp the guard now, so a select response landing between
+// the two is held back too.
 document.addEventListener("click", (e) => {
   if (!(e.target instanceof Element)) return;
   if (e.detail >= 2 && e.target.closest("#cuesheet .cue-inline-edit")) {
@@ -2704,11 +2711,11 @@ document.addEventListener("click", (e) => {
   }
 }, true);
 window.justEdited = () => Date.now() - inlineEditAt < 350;
-// htmx evaluates the trigger filter when the click arrives, not when the
-// 250ms delay expires, so also veto the delayed select at request time.
-document.body.addEventListener("htmx:before:request", (e) => {
+// An inline editor is open in the sheet (or a double-click just asked for one).
+window.inlineEditing = () => window.justEdited() || !!document.querySelector("#cuesheet #updateValue");
+document.body.addEventListener("htmx:before:swap", (e) => {
   const src = e.detail?.ctx?.sourceElement;
-  if (src instanceof Element && src.matches("tr.cue, tr.cuegroup") && window.justEdited()) e.preventDefault();
+  if (src instanceof Element && src.matches("tr.cue, tr.cuegroup") && window.inlineEditing()) e.preventDefault();
 });
 
 // QA harness: ?settings=1 opens the Settings modal directly (headless

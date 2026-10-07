@@ -228,6 +228,10 @@ One row, left to right:
 - Live Progress bar shown as background behind numerals of PreWait, Duration, PostWait if one of those items is in progress.
 - Sticky header, scrollable body. Columns: **icon** (media type / missing warning), **Number**, **Name**, **PreWait**, **Duration**, **PostWait**.
   per-cue actions live in the Inspector and the row context menu.
+- **A click selects a row at once** (no delay; as fast as the arrow keys: about 34 ms to the highlight against 270 ms with
+  the old 250 ms double-click delay). The first click of a double-click therefore selects too; if that response lands
+  once the inline editor is open (or the double-click has just asked for one), its sheet swap is skipped, and so are
+  sheet refreshes while an editor is open: the selection is saved, and the editor's save or Escape shows it.
 - All cells editable by double-click; save on blur/enter. **Escape cancels** the edit: the editor closes, the old value
   stays and nothing is saved (the Escape does not reach the transport, so it never fades out the show).
   Time parser: `hh:mm:ss.ms` or a bare number = seconds. Times (PreWait, Duration, PostWait) have **no upper limit**.
