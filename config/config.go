@@ -489,9 +489,17 @@ func HasAuth() bool {
 // persisting it. Applies to new requests immediately.
 //
 // The password is kept in plain text in config.json (see Config.AuthPassword).
+// ErrPasswordSpaces: a password with leading or trailing whitespace is
+// refused rather than silently trimmed (trimming made the password the
+// operator typed fail at the login prompt).
+var ErrPasswordSpaces = errors.New("the password can't start or end with a space")
+
 func SetAuthPassword(pw string) error {
+	if pw != strings.TrimSpace(pw) {
+		return ErrPasswordSpaces
+	}
 	confMu.Lock()
-	conf.AuthPassword = strings.TrimSpace(pw)
+	conf.AuthPassword = pw
 	confMu.Unlock()
 	return SaveConfig()
 }

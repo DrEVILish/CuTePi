@@ -57,3 +57,30 @@ func TestAuthenticatedResponsesAreNeverSharedCacheable(t *testing.T) {
 		}
 	}
 }
+
+// A password with surrounding whitespace is refused (400) with nothing
+// saved, not silently trimmed; inner spaces are kept exactly.
+func TestSettingsPasswordWhitespace(t *testing.T) {
+	r := setupTestServer(t)
+	t.Cleanup(func() { config.SetAuthPassword("") })
+	port := config.Port()
+	w := postJSON(t, r, "/api/settings", `{"password":" secret ","port":4321}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "space") {
+		t.Fatalf("padded password = %d %q, want 400", w.Code, w.Body.String())
+	}
+	if config.HasAuth() || config.Port() != port {
+		t.Fatal("a refused password still changed the settings")
+	}
+	if w := postJSON(t, r, "/api/settings", `{"password":"show time"}`); w.Code >= 400 {
+		t.Fatalf("inner-space password = %d %q", w.Code, w.Body.String())
+	}
+	if config.AuthPassword() != "show time" {
+		t.Fatalf("stored password = %q, want it exactly", config.AuthPassword())
+	}
+	if w := getWithBasic(t, r, "/api/cuesheet", "op", "show time"); w.Code != http.StatusOK {
+		t.Fatalf("login with the exact password = %d", w.Code)
+	}
+	if err := config.SetAuthPassword("trailing "); err != config.ErrPasswordSpaces {
+		t.Fatalf("SetAuthPassword(trailing space) = %v", err)
+	}
+}

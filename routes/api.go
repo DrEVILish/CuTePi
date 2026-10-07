@@ -1084,6 +1084,12 @@ func Api(rg *gin.RouterGroup) {
 			respondError(c, http.StatusInternalServerError, "saving settings: "+err.Error())
 			return true
 		}
+		// Checked before anything is saved: a bad password must not leave
+		// the other settings half-applied.
+		if !body.ClearPassword && strings.TrimSpace(body.Password) != "" && body.Password != strings.TrimSpace(body.Password) {
+			respondError(c, http.StatusBadRequest, config.ErrPasswordSpaces.Error())
+			return
+		}
 		portChanged := body.Port > 0 && body.Port != config.Port()
 		displayBefore := config.Display()
 		displayChanged := hasDisplay && (body.DisplayResolution != displayBefore.Resolution || body.DisplayRefresh != displayBefore.RefreshHz || body.DisplayUseEDID != displayBefore.UseEDID)
@@ -1105,8 +1111,8 @@ func Api(rg *gin.RouterGroup) {
 			if fail(config.SetAuthPassword("")) {
 				return
 			}
-		} else if pw := strings.TrimSpace(body.Password); pw != "" {
-			if fail(config.SetAuthPassword(pw)) {
+		} else if strings.TrimSpace(body.Password) != "" { // blank: unchanged
+			if fail(config.SetAuthPassword(body.Password)) {
 				return
 			}
 		}
