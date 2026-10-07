@@ -557,81 +557,6 @@ func TestParseTimeRoundTrip(t *testing.T) {
 	}
 }
 
-// Move cue tests
-func TestMoveSheetCueUpDown(t *testing.T) {
-	if err := ClearCueSheet(); err != nil {
-		t.Fatalf("ClearCueSheet: %v", err)
-	}
-	mustRegisterMedia(t, "move-a.mp4")
-	mustRegisterMedia(t, "move-b.mp4")
-	mustRegisterMedia(t, "move-c.mp4")
-
-	// Add three cues at positions 1, 2, 3
-	if err := AddCue("move-a.mp4", ""); err != nil {
-		t.Fatalf("AddCue a: %v", err)
-	}
-	if err := AddCue("move-b.mp4", ""); err != nil {
-		t.Fatalf("AddCue b: %v", err)
-	}
-	if err := AddCue("move-c.mp4", ""); err != nil {
-		t.Fatalf("AddCue c: %v", err)
-	}
-
-	// Initial order: a, b, c at positions 1, 2, 3
-	sheet, _ := GetCuesheet()
-	if sheet.Cues[0].CuePos != 1 || sheet.Cues[1].CuePos != 2 || sheet.Cues[2].CuePos != 3 {
-		t.Fatalf("initial order wrong: %+v", sheet.Cues)
-	}
-
-	// Move c (pos 3) up -> visual order a, c, b (cuePos is identity now).
-	if err := MoveSheetCue(3, -1); err != nil {
-		t.Fatalf("MoveSheetCue up: %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[1].Media.Filename != "move-c.mp4" || sheet.Cues[2].Media.Filename != "move-b.mp4" {
-		t.Fatalf("expected visual order a,c,b: %+v", sheet.Cues)
-	}
-
-	// Move a (pos 1) up -> should stay at 1 (already at top)
-	if err := MoveSheetCue(1, -1); err != nil {
-		t.Fatalf("MoveSheetCue up(1): %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[0].CuePos != 1 {
-		t.Fatalf("MoveSheetCue up(1) should not move: %+v", sheet.Cues)
-	}
-
-	// Move b (pos 3) down -> should stay at 3 (already at bottom)
-	if err := MoveSheetCue(3, 1); err != nil {
-		t.Fatalf("MoveSheetCue down(3): %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[2].CuePos != 3 {
-		t.Fatalf("MoveSheetCue down(3) should not move: %+v", sheet.Cues)
-	}
-
-	// Move b (pos 2) down -> should go to pos 3, c to 2
-	if err := MoveSheetCue(2, 1); err != nil {
-		t.Fatalf("MoveSheetCue down(2): %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[1].Media.Filename != "move-c.mp4" || sheet.Cues[2].Media.Filename != "move-b.mp4" {
-		t.Fatalf("expected visual order a,c,b: %+v", sheet.Cues)
-	}
-
-	// Move c (pos 3) up twice -> should go to pos 1
-	if err := MoveSheetCue(3, -1); err != nil {
-		t.Fatalf("MoveSheetCue up(3) again: %v", err)
-	}
-	if err := MoveSheetCue(2, -1); err != nil {
-		t.Fatalf("MoveSheetCue up(2) again: %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[0].Media.Filename != "move-c.mp4" {
-		t.Fatalf("expected c at pos 1 after two moves up: %+v", sheet.Cues)
-	}
-}
-
 func TestAddCueAtPositionBumpsExisting(t *testing.T) {
 	if err := ClearCueSheet(); err != nil {
 		t.Fatalf("ClearCueSheet: %v", err)
@@ -825,12 +750,6 @@ func TestCueOrderAndSelectionStayConsistentAfterChanges(t *testing.T) {
 	if err := SetCue("3"); err != nil {
 		t.Fatalf("SetCue: %v", err)
 	}
-	if err := MoveSheetCue(3, -1); err != nil {
-		t.Fatalf("MoveSheetCue up: %v", err)
-	}
-	if selected, _ := SelectedCuePos(); selected != 2 {
-		t.Fatalf("selected cue after move up = %d, want 2", selected)
-	}
 	if err := RemoveCue("1"); err != nil {
 		t.Fatalf("RemoveCue: %v", err)
 	}
@@ -841,9 +760,8 @@ func TestCueOrderAndSelectionStayConsistentAfterChanges(t *testing.T) {
 	if len(sheet.Cues) != 2 || sheet.Cues[0].CuePos != 1 || sheet.Cues[1].CuePos != 2 {
 		t.Fatalf("cue positions after delete = %+v, want contiguous 1..2", sheet.Cues)
 	}
-	// Selection follows its cue: it was cue b (cuePos 2, row-sticky after
-	// the move), which reindexes 2->2 — not 1. (The old code subtracted 1
-	// on top of the reindex map and landed on cue c.)
+	// Selection follows its cue: cue c (cuePos 3) reindexes 3->2 — not 1.
+	// (The old code subtracted 1 on top of the reindex map.)
 	if selected, _ := SelectedCuePos(); selected != 2 {
 		t.Fatalf("selected cue after deleting earlier cue = %d, want 2", selected)
 	}

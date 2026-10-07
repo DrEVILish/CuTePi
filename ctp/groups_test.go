@@ -218,14 +218,6 @@ func TestGroupMembershipStaysContiguous(t *testing.T) {
 	}
 	// Sheet: A(gid), B(gid), C, D top-level.
 
-	// Move the top-level cue up into the group's span: it joins.
-	if err := MoveSheetCue(posByTitle()[titles[2]], -1); err != nil {
-		t.Fatalf("MoveSheetCue: %v", err)
-	}
-	if p := parentByTitle()[titles[2]]; p != gid {
-		t.Errorf("cue moved between members: parent = %d, want %d", p, gid)
-	}
-
 	// Insert at the sheet head (before the group's run): stays top-level.
 	if err := AddCue("contig.mp4", "1"); err != nil {
 		t.Fatalf("AddCue at sheet head: %v", err)

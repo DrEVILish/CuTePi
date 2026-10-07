@@ -631,60 +631,6 @@ func SheetDrop(cues []int, groupID int, beforeKind string, beforeID int, join bo
 	return nil
 }
 
-// MoveSheetCue swaps a cue with the neighbouring cue in visual order
-// (move up/down). Each swapped cue takes the owner of its new slot, so
-// crossing a group header changes membership and staying inside keeps it.
-func MoveSheetCue(cuePos int, dir int) error {
-	seq, err := loadSheetSequence()
-	if err != nil {
-		return err
-	}
-	// Cue rows only, in visual order.
-	var cueIdxs []int
-	for i, item := range seq {
-		if item.Kind == "cue" {
-			cueIdxs = append(cueIdxs, i)
-		}
-	}
-	for i, idx := range cueIdxs {
-		if seq[idx].CuePos != cuePos {
-			continue
-		}
-		j := i + dir
-		if j < 0 || j >= len(cueIdxs) {
-			return nil // clamped at the ends
-		}
-		a, b := cueIdxs[i], cueIdxs[j]
-		otherCuePos := seq[b].CuePos
-		seq[a], seq[b] = seq[b], seq[a]
-
-		parents, err := storedParents()
-		if err != nil {
-			return err
-		}
-		for _, mv := range []struct {
-			pos int
-			at  int
-		}{{cuePos, b}, {otherCuePos, a}} {
-			owner, err := gapOwner(seq, mv.at)
-			if err != nil {
-				return err
-			}
-			parents[mv.pos] = owner
-		}
-		if err := applyOrder(seq, parents); err != nil {
-			return err
-		}
-		// If the moved cue was selected, move selection to the other cue
-		// so the selection stays on the same visual row.
-		if sel, _ := SelectedCuePos(); sel == cuePos {
-			_ = setSelectedCuePos(otherCuePos)
-		}
-		return nil
-	}
-	return nil
-}
-
 // NextSheetCue / PrevSheetCue walk cues in VISUAL order (the auto-continue
 // chain and arrow navigation follow what the operator sees).
 func nextSheetCue(cuePos int, dir int) (int, error) {
