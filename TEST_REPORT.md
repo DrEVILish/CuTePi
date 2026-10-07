@@ -1271,6 +1271,13 @@ Causes and fixes:
 6. **CSS/JS served `no-store`** (~700 KB per page load). Stamped URLs are now `immutable`; the stamp covers the binary and
    every static file.
 
+**Browser check (dev server, Playwright):** a row click now makes one POST (the sheet), one inspector and one Now Playing
+fetch; before, the sheet was fetched twice (the sync raced the POST's response) and the inspector three times. A clip's
+peaks are fetched once and reused when it is selected again. A reload transfers ~5 KB of CSS/JS instead of ~700 KB. No
+console errors. **Test Pi, live, 7-cue sheet:** `GET /` 42 → 21 ms, `/api/cuesheet` 17 → 7 ms, `/api/nowplaying`
+13.5 → 3.6 ms. The waveform migration moved the one stored waveform (343 KB) intact; a backup of the database from before
+it is `/root/ctp.db.pre-waveform-move-2026-10-07`.
+
 Not changed: SQLite `synchronous` (a selection write costs ~0.3 ms on the SD card); the remaining sheet render cost is
 mostly template execution (~15 ms for 80 rows).
 
