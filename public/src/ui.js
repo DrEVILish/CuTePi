@@ -2000,9 +2000,18 @@ initNowPlaying();
     }, 0);
   }
 
+  // Both entry points below see the same render: follow each new #cuesheet
+  // node once (two fetches per click before).
+  let followed = null;
+  function sheetRendered() {
+    const sheet = document.getElementById("cuesheet");
+    if (!sheet || sheet === followed) return;
+    followed = sheet;
+    refresh();
+  }
   document.body.addEventListener("htmx:after:swap", (e) => {
     const t = e.detail.ctx?.target;
-    if (t && t.id === "cuesheet") refresh();
+    if (t && t.id === "cuesheet") sheetRendered();
   });
 
   // Only colour and auto-continue are visible on the cuesheet; rate, trim,
@@ -2041,7 +2050,7 @@ initNowPlaying();
     for (const m of muts) {
       for (const n of m.addedNodes) {
         if (n.nodeType === Node.ELEMENT_NODE && (n.id === "cuesheet" || n.querySelector("#cuesheet"))) {
-          refresh();
+          sheetRendered();
           return;
         }
       }
@@ -2348,7 +2357,19 @@ document.addEventListener("click", (e) => {
     const v = el ? parseInt(el.dataset.version, 10) : NaN;
     return isNaN(v) ? 0 : v;
   }
+  // The server signals a change as soon as it is made, often before the
+  // response of the request that made it (which carries the new sheet) has
+  // landed. While such a request is in flight, wait for it, then check.
+  let inFlight = 0, deferred = false;
+  const sheetRequest = (e) => e.detail?.ctx?.target?.id === "cuesheet";
+  document.body.addEventListener("htmx:before:request", (e) => { if (sheetRequest(e)) inFlight++; });
+  document.body.addEventListener("htmx:finally:request", (e) => {
+    if (!sheetRequest(e)) return;
+    inFlight = Math.max(0, inFlight - 1);
+    if (inFlight === 0 && deferred) { deferred = false; setTimeout(refresh, 0); }
+  });
   async function refresh() {
+    if (inFlight > 0) { deferred = true; return; }
     try {
       if (domVersion() > lastSeen) lastSeen = domVersion();
       const status = await fetch("/api/cuesheet/status?version=" + lastSeen, {headers: {"Accept": "application/json"}});

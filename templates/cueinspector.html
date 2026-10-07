@@ -548,10 +548,12 @@
     // clip) is fetched once per clip and version and kept parsed across
     // inspector re-renders (this script re-runs with each one), so neither a
     // re-render nor a redraw while dragging re-reads it. A few clips kept.
-    var peaksStore = window.__ctpPeaks || (window.__ctpPeaks = { order: [], byUrl: {} });
+    // (Looked up on each call: a re-run of this script returns early, before
+    // any statement below its guard runs.)
     function storedPeaks(timeline) {
       var url = timeline.dataset.waveUrl;
       if (!url) return [];
+      var peaksStore = window.__ctpPeaks || (window.__ctpPeaks = { order: [], byUrl: {} });
       var hit = peaksStore.byUrl[url];
       if (Array.isArray(hit)) return hit;
       if (hit !== "pending") {
