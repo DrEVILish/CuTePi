@@ -68,6 +68,9 @@ func main() {
 	// Load configuration before anything that depends on it (DB path, media
 	// path, etc). ctp.InitDB must run after this, not via package init(),
 	// so a config-file-specified DB path is actually honored.
+	routes.Version = version
+	log.Printf("CuTePi %s starting", version)
+
 	// A malformed config.json is recovered from its last good copy, or
 	// stops the start: never run on a half-read configuration.
 	if err := config.LoadConfig(); err != nil {
@@ -160,7 +163,7 @@ func main() {
 	}()
 
 	printNetworkInfo()
-	log.Printf("CuTePi: listening on %s", address)
+	log.Printf("CuTePi %s: listening on %s", version, address)
 	// A bind failure (port already in use - e.g. the restart handover losing
 	// the race, or a second instance) must NOT look like a clean exit: the
 	// old `r.Run(address)` ignoring the error exited 0 and systemd restarted

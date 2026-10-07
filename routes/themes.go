@@ -165,6 +165,7 @@ func ThemeMap() template.JS {
 // break template parsing in only one of them).
 func TemplateFuncs() map[string]any {
 	return map[string]any{
+		"appVersion":  func() string { return Version },
 		"contains":    strings.Contains,
 		"hasPrefix":   strings.HasPrefix,
 		"hasSuffix":   strings.HasSuffix,

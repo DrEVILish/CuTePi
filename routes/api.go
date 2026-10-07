@@ -38,6 +38,9 @@ var (
 	startTime      = time.Now()
 )
 
+// Version is the app version (main sets it from VERSION; "dev" in tests).
+var Version = "dev"
+
 func intOrZero(p *int) int {
 	if p == nil {
 		return 0
@@ -948,6 +951,7 @@ func Api(rg *gin.RouterGroup) {
 			"panicHold":    ctp.GetPanicHoldImage(),
 			"escFadeMs":    ctp.GetEscFadeMs(),
 			"instanceName": InstanceName(),
+			"version":      Version,
 			"autoNumber":   ctp.GetAutoNumber(),
 			"cueNumStep":   ctp.GetCueNumStep(),
 			"displayMode":  displayModeLabel(),
