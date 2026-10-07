@@ -210,6 +210,7 @@ func Api(rg *gin.RouterGroup) {
 	registerAudioRoute(rg)
 	registerDiskRoute(rg)
 	registerLiveRoutes(rg)
+	registerActiveCuesRoutes(rg)
 	rg.GET("/ws", func(c *gin.Context) {
 		ws.Handle(c.Writer, c.Request)
 	})
@@ -248,6 +249,7 @@ func Api(rg *gin.RouterGroup) {
 				clientVersion = v
 			}
 		}
+		noteRunningCues()
 		version := ctp.CuesheetVersion()
 		c.JSON(http.StatusOK, gin.H{"changed": version != clientVersion, "version": version})
 	})

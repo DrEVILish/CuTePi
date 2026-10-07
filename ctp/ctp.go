@@ -96,6 +96,7 @@ type Cue struct {
 	MediaType       string // "video" | "audio" | "image" | "other", for the row icon
 	Selected        bool
 	Playing         bool   // true if this cue is the currently playing file
+	Running         bool   // running on any layer (§6.1.2), the focus included
 	PlayPos         int    // ms into the playing clip (progress bar) when Playing
 	PlayDur         int    // ms total duration of the playing clip
 	InSelection     bool   // member of the multi-selection (§12.4); anchor uses Selected

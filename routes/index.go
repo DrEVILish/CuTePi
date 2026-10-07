@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -475,6 +476,28 @@ func nowplayingData() gin.H {
 // enrichCuesheetWithPlayback marks the currently-playing cue (by filename,
 // matching the active gsp pipeline) and fills its per-cue progress-bar data
 // (PlayPos/PlayDur in ms). Only one cue plays at a time.
+// The cuesheet marks running cues, but its version counts sheet edits only:
+// noteRunningCues bumps it when the set of running cues changed since the
+// last look (called on each client's status check, which every playback
+// broadcast triggers).
+var (
+	runningMu   sync.Mutex
+	runningSeen string
+)
+
+func noteRunningCues() {
+	pos := gsp.RunningCues()
+	sort.Ints(pos)
+	sig := fmt.Sprint(gsp.CurrentCuePos(), pos)
+	runningMu.Lock()
+	changed := sig != runningSeen
+	runningSeen = sig
+	runningMu.Unlock()
+	if changed {
+		ctp.NotifyCuesheetChanged()
+	}
+}
+
 func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 	// Wait countdown (§12.2): tag the cue a chain wait is counting down on.
 	if w := CurrentWait(); w.CuePos != 0 {
@@ -490,6 +513,15 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 				break
 			}
 		}
+	}
+	// Other running cues (§6.1.2): marked, without the focus's scrub bar
+	// (a seek acts on the focus).
+	running := map[int]bool{}
+	for _, pos := range gsp.RunningCues() {
+		running[pos] = true
+	}
+	for i := range cuesheet.Cues {
+		cuesheet.Cues[i].Running = running[cuesheet.Cues[i].CuePos]
 	}
 	// Match by cue position, not filename: two cues can reference the same
 	// media file, and filename matching highlights the wrong row.
@@ -972,6 +1004,7 @@ func Index(rg *gin.RouterGroup) {
 				data["GroupInspector"] = gi
 			}
 		}
+		data["ActiveCues"] = activeCuesData()
 		data["ShowMode"] = ctp.GetShowMode()
 		data["title"] = "CuTePi"
 		c.HTML(http.StatusOK, "index.html", data)

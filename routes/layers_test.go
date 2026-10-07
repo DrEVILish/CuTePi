@@ -242,6 +242,32 @@ func TestFireKeepsOthersRunning(t *testing.T) {
 	if gsp.CurrentCuePos() != 2 {
 		t.Fatalf("focus = %d, want the newest cue (2)", gsp.CurrentCuePos())
 	}
+
+	// The Active Cues pane lists both and stops one alone.
+	pane := get(t, r, "/api/activecues").Body.String()
+	for _, want := range []string{`data-count="2"`, `/api/activecues/1/stop`, `/api/activecues/2/fade`, `stack1.png`, `stack2.png`} {
+		if !strings.Contains(pane, want) {
+			t.Fatalf("pane missing %s:\n%s", want, pane)
+		}
+	}
+	if w := post(t, r, "/api/activecues/1/stop"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `data-count="1"`) {
+		t.Fatalf("stop cue 1 alone = %d: %s", w.Code, w.Body.String())
+	}
+	waitRunning("2")
+	if w := post(t, r, "/api/activecues/1/stop"); w.Code != http.StatusNotFound {
+		t.Fatalf("stopping a cue that is not running = %d, want 404", w.Code)
+	}
+	if w := post(t, r, "/api/activecues/x/fade"); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad position = %d, want 400", w.Code)
+	}
+	if body := get(t, r, "/").Body.String(); !strings.Contains(body, `id="activecues-pane"`) || !strings.Contains(body, `id="activecues-toggle"`) {
+		t.Fatal("the page has no Active Cues pane or toggle")
+	}
+	// Cue 1 stops the others again; cue 2 joins it.
+	post(t, r, "/api/cue/1/play")
+	waitRunning("1")
+	post(t, r, "/api/cue/2/play")
+	waitRunning("1 2")
 	// Cue 3 keeps the default: everything else stops.
 	if w := post(t, r, "/api/cue/3/play"); w.Code != http.StatusOK {
 		t.Fatalf("play 3 = %d: %s", w.Code, w.Body.String())

@@ -744,6 +744,9 @@ func slideshowRunner(g ctp.Group) {
 			opts.Loop = false
 			opts.FadeIn = 0
 			opts.Crossfade = 0
+			// Each slide replaces the last: a member's Stop others and Layer
+			// (§6.1.2) do not apply inside a slideshow.
+			opts.KeepOthers = false
 			if pass > 0 || i > 0 {
 				opts.Crossfade = fade
 			}

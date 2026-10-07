@@ -21,6 +21,10 @@
         <div class="app-pane" id="cuesheet-pane">
           {{ template "cuesheet.html" . }}
         </div>
+        <div id="activecues-resizer" title="Resize the active cues pane (drag)" aria-label="Resize the active cues pane"></div>
+        <div class="app-pane d-flex flex-column" id="activecues-pane">
+          {{ template "activecues.html" .ActiveCues }}
+        </div>
       </div>
       <div class="inspector-panel mt-xs" id="cueinspector-panel">
         <div class="inspector-header row is-items-center is-gap-xs px-2 py-1">
@@ -68,6 +72,10 @@
         <button type="button" class="btn btn-secondary" id="cueinspector-toggle" aria-pressed="true"
           title="Show or hide the cue inspector" aria-label="Toggle the cue inspector">
           <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-columns"/></svg><span class="panel-btn-label">Inspector</span>
+        </button>
+        <button type="button" class="btn btn-secondary" id="activecues-toggle" aria-pressed="true"
+          title="Show or hide the running cues" aria-label="Toggle the active cues pane">
+          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-layers"/></svg><span class="panel-btn-label">Active</span><span class="activecues-count" id="activecues-count"></span>
         </button>
       </div>
       <div class="btn-group" role="group" aria-label="Test output">

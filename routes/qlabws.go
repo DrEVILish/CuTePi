@@ -216,20 +216,21 @@ func qlabCue(c ctp.Cue) map[string]any {
 		color = "none"
 	}
 	dur := float64(ctp.EffectiveCueDuration(c)) / 1000
-	current := gsp.CurrentCuePos() == c.CuePos && gsp.CurrentPlaying() != ""
+	// Any running cue counts, on whichever layer (§6.1.2).
+	v, current := runningVoice(c.CuePos)
 	// A clip parked on its last frame (a still, or hold at end) is still a
 	// running cue in QLab's terms; only an operator pause is isPaused.
-	paused := current && gsp.IsPaused() && !gsp.HeldAtEnd()
+	paused := current && v.Paused && !v.Held
 	elapsed, pct := 0.0, 0.0
 	if current {
 		// Progress through the cue's trimmed span, in cue (wall) time.
 		in := float64(c.PosStart) / 1000
-		span := gsp.CurrentDuration() - in
+		span := v.Duration - in
 		if c.PosEnd > c.PosStart {
 			span = float64(c.PosEnd-c.PosStart) / 1000
 		}
 		if span > 0 {
-			pct = math.Max(0, math.Min(1, (gsp.CurrentPosition()-in)/span))
+			pct = math.Max(0, math.Min(1, (v.Position-in)/span))
 		}
 		elapsed = pct * dur
 	}
@@ -400,10 +401,17 @@ func qlabRequest(c *qlabClient, addr string, args []any) (any, error) {
 		}
 		return []map[string]any{}, nil
 	case "/runningCues", "/runningCues/shallow", "/runningOrPausedCues", "/runningOrPausedCues/shallow":
-		if cue, ok := qlabActive(); ok {
-			return []map[string]any{qlabCue(cue)}, nil
+		// Every running cue, top layer first (§6.1.2).
+		out := []map[string]any{}
+		for _, v := range gsp.Voices() {
+			if v.CuePos <= 0 {
+				continue
+			}
+			if cue, err := ctp.GetCue(strconv.Itoa(v.CuePos)); err == nil {
+				out = append(out, qlabCue(cue))
+			}
 		}
-		return []map[string]any{}, nil
+		return out, nil
 	case "/playheadID", "/playheadId":
 		if cue, ok := qlabSelected(); ok {
 			return qlabCueID(cue), nil
@@ -532,6 +540,16 @@ func qlabCueRequest(path string, args []any) (any, error) {
 		}
 		return nil, FireSelected()
 	case "stop", "panic", "hardStop":
+		if _, running := runningVoice(cue.CuePos); running && len(gsp.RunningCues()) > 1 {
+			// Other cues are running: stop this one alone, as QLab does.
+			logs.Printf(logs.RTEStop, "STOP cue %s alone (qlab)", target)
+			fade := 0
+			if cmd == "stop" {
+				fade = cue.FadeOut
+			}
+			gsp.StopCue(cue.CuePos, fade)
+			return nil, nil
+		}
 		if current {
 			logs.Printf(logs.RTEStop, "STOP cue %s (qlab)", target)
 			if cmd == "stop" && cue.FadeOut > 0 {

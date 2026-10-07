@@ -797,7 +797,17 @@ Any number of cues can run at once, each on its own display layer, stacked; the 
   played alone. A live page on a lower layer keeps running; its recovery applies while it is the focus.
 - **Stop, ESC, Panic** end every running cue. **Pause/Play** pause and resume every running cue.
 - **Active Cues pane** (right side, a pop-out like the media pool on the left): every running cue in stack order,
-  top first, with its title, position and a **Stop** (cut) and **Fade out** (the ESC fade time) for that cue alone.
+  top first, with its number, title, display layer (L1 = bottom), state, position and a **Stop** (cut) and
+  **Fade out** (the ESC fade time) for that cue alone. The footer's **Active** button shows or hides it and shows
+  the count of running cues; width and visibility are kept per browser. Unlike the media pool it stays in Show
+  mode. It re-renders on every WebSocket sync (`GET /api/activecues`; `POST /api/activecues/:cuePos/stop|fade`,
+  404 when that cue is not running). Without display layers (one picture) Fade out fades the cue the way ESC does.
+- **Cuesheet:** the focus row keeps the playing glow and scrub bar (a seek acts on the focus); every other running
+  cue's row has a steady tint. The sheet re-renders when the set of running cues changes.
+- **Slideshows** (§6.4): each slide replaces the last; members' Stop others and Layer do not apply inside one.
+- **QLab** (§12.8): `/runningCues` lists every running cue, top first, and `isRunning`/`isPaused`/elapsed are per
+  cue. `/cue/N/stop` (fading over the cue's fade-stop time), `hardStop` and `panic` stop cue N alone while other
+  cues run; with N the only cue they act as before. Pause/resume of a cue act on the transport (every cue).
 - **Sound.** Every cue's sound goes into one mixer (`interaudiosink` per cue → `interaudiosrc` → `audiomixer` →
   the configured sink), so running cues are heard together at their own volumes. The HDMI device takes one stream
   only (TEST_REPORT "Performance round, 2026-10-07": ALSA `dmix` cannot produce its format), so this is also what

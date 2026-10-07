@@ -955,6 +955,129 @@ filterMedia();
   });
 })();
 
+// --- Active Cues pane (§6.1.2): the media pool's mirror on the right ---
+// Collapse/expand from the footer button and drag-to-resize, both kept per
+// browser. The list re-renders on every WebSocket sync (one a second while
+// anything plays) and on reconnect; the footer button shows the count, so
+// it is useful collapsed too.
+(function () {
+  const pane = document.getElementById("activecues-pane");
+  const resizer = document.getElementById("activecues-resizer");
+  if (!pane || !resizer) return;
+
+  const STORAGE_WIDTH = "cutepi.activecues.width";
+  const STORAGE_COLLAPSED = "cutepi.activecues.collapsed";
+  const DEFAULT_WIDTH = 280;
+
+  function getWidth() {
+    try {
+      const w = parseFloat(localStorage.getItem(STORAGE_WIDTH));
+      return isNaN(w) || w < 160 ? DEFAULT_WIDTH : w;
+    } catch (e) {
+      return DEFAULT_WIDTH;
+    }
+  }
+  function setWidth(w) {
+    document.documentElement.style.setProperty("--activecues-width", w + "px");
+  }
+  function setCollapsed(state) {
+    document.body.classList.toggle("activecues-collapsed", state);
+    const t = document.getElementById("activecues-toggle");
+    if (t) {
+      t.setAttribute("aria-pressed", state ? "false" : "true");
+      t.classList.toggle("active", !state);
+    }
+    try {
+      localStorage.setItem(STORAGE_COLLAPSED, state ? "1" : "0");
+    } catch (e) {}
+  }
+  setWidth(getWidth());
+  try {
+    setCollapsed(localStorage.getItem(STORAGE_COLLAPSED) === "1");
+  } catch (e) {
+    setCollapsed(false);
+  }
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("#activecues-toggle")) {
+      setCollapsed(!document.body.classList.contains("activecues-collapsed"));
+    }
+  });
+
+  // The splitter sits left of the pane: dragging left widens it.
+  resizer.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = pane.getBoundingClientRect().width;
+    const minW = 160;
+    const maxW = Math.max(minW, window.innerWidth * 0.5);
+    const onMove = (ev) => {
+      setWidth(Math.min(maxW, Math.max(minW, startWidth - (ev.clientX - startX))));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      try {
+        localStorage.setItem(STORAGE_WIDTH, String(pane.getBoundingClientRect().width));
+      } catch (e) {}
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  function showCount(el) {
+    const badge = document.getElementById("activecues-count");
+    if (!badge || !el) return;
+    const n = parseInt(el.dataset.count || "0", 10);
+    badge.textContent = n > 0 ? String(n) : "";
+  }
+  showCount(document.getElementById("activecues"));
+  // Its own Stop/Fade buttons swap the list through htmx.
+  document.addEventListener("htmx:after:swap", () => showCount(document.getElementById("activecues")));
+
+  // A press on Stop / Fade out must not straddle a re-render (the browser
+  // drops a click whose press and release land on different elements).
+  let pressing = false, missed = false;
+  document.addEventListener("pointerdown", (e) => {
+    if (e.target instanceof Element && e.target.closest("#activecues")) pressing = true;
+  }, true);
+  const release = () => {
+    if (!pressing) return;
+    pressing = false;
+    if (missed) { missed = false; setTimeout(refresh, 0); }
+  };
+  document.addEventListener("pointerup", release, true);
+  document.addEventListener("pointercancel", release, true);
+
+  let busy = false, again = false;
+  async function refresh() {
+    if (pressing) { missed = true; return; }
+    if (busy) { again = true; return; }
+    busy = true;
+    try {
+      const res = await fetch("/api/activecues", { headers: { "Accept": "text/html" } });
+      if (!res.ok) return;
+      const html = (await res.text()).trim();
+      const el = document.getElementById("activecues");
+      if (!el || pressing) { missed = pressing; return; }
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = html;
+      const next = wrapper.querySelector("#activecues");
+      if (!next) return;
+      showCount(next);
+      if (next.outerHTML === el.outerHTML.replace(/ data-htmx-powered="[^"]*"/g, "")) return;
+      el.replaceWith(next);
+      if (window.htmx) htmx.process(next);
+    } catch (e) {
+      // Transient; the next sync retries.
+    } finally {
+      busy = false;
+      if (again) { again = false; refresh(); }
+    }
+  }
+  document.addEventListener("cutepi-sync", refresh);
+  document.addEventListener("cutepi-ws", (e) => { if (e.detail.connected) refresh(); });
+})();
+
 document.addEventListener("dragstart", (e) => {
     const bar = e.target.closest(".cue-progress-bar");
     if (bar) e.preventDefault(); // drag would conflict with the pointer-drag scrub
