@@ -26,6 +26,7 @@
             <div class="tab-pane fade show active" id="settingsPaneAppearance" role="tabpanel">
               <div class="settings-about">
                 <img src="/img/cutepi-logo.svg" alt="CuTePi" class="cutepi-logo">
+                <span class="settings-version text-muted" id="settingsVersion">v{{ appVersion }}</span>
               </div>
               <h2 class="settings-heading">Appearance</h2>
               <div class="field">
@@ -115,6 +116,7 @@
                     </button>
                   </div>
                   <div class="field-hint text-muted">Modes reported by the connected display. &ldquo;(file&rsquo;s own)&rdquo; forces nothing.</div>
+                  <div class="field-hint text-muted">CuTePi restarts automatically if changing the display mode requires it.</div>
                 </div>
                 <div class="field">
                   <label class="label" for="settingsDisplayRefresh">Refresh rate (Hz)</label>
@@ -163,7 +165,7 @@
                 <div class="field">
                   <label class="label" for="settingsPort">Web port</label>
                   <input class="input settings-short" id="settingsPort" name="port" type="text" inputmode="numeric" data-validate="int" data-min="1" data-max="65535" required />
-                  <div class="field-hint text-muted">Takes effect after a restart.</div>
+                  <div class="field-hint text-muted">CuTePi restarts automatically when the saved port changes.</div>
                 </div>
               </div>
 

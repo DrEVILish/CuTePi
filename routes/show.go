@@ -2,10 +2,13 @@ package routes
 
 import (
 	"archive/zip"
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -157,6 +160,9 @@ func Show(rg *gin.RouterGroup) {
 			return
 		}
 		for _, cue := range manifest.Cues {
+			if cue.SourceKind == "endpoint" {
+				continue
+			}
 			if !registered[cue.Filename] {
 				if _, inZip := mediaFiles[cue.Filename]; !inZip {
 					c.String(http.StatusUnprocessableEntity, fmt.Sprintf("cue %q references %q, which is neither in the .CTP nor the local media pool", cue.Title, cue.Filename))
@@ -170,6 +176,9 @@ func Show(rg *gin.RouterGroup) {
 		// media entries were streamed to temp files during parsing;
 		// importMedia moves each into place (rename, or copy across mounts).
 		for _, cue := range manifest.Cues {
+			if cue.SourceKind == "endpoint" {
+				continue
+			}
 			if registered[cue.Filename] {
 				continue
 			}
@@ -178,10 +187,42 @@ func Show(rg *gin.RouterGroup) {
 				continue
 			}
 			delete(mediaFiles, cue.Filename) // importMedia owns (and cleans up) tmp now
-			if err := importMedia(cue.Filename, tmp); err != nil {
+			_, release, err := reserveMediaName(cue.Filename, reserveReplace)
+			if err != nil {
+				os.Remove(tmp)
+				c.String(http.StatusConflict, "imported media %q: %v", cue.Filename, err)
+				return
+			}
+			err = importMedia(cue.Filename, tmp)
+			release()
+			if err != nil {
 				c.String(http.StatusUnprocessableEntity, "imported media %q failed: %v", cue.Filename, err)
 				return
 			}
+		}
+
+		// Only after the media is in place: overwrite clears the sheet (and
+		// any local groups — stale folders would otherwise survive the
+		// import). This must run BEFORE ImportGroups: ClearCueSheet deletes
+		// every group, so clearing afterwards dropped the show's own groups
+		// and left its cues pointing at deleted parents. If an insert below
+		// fails mid-way, the cues and groups inserted so far are rolled back
+		// so the sheet is left empty-but-consistent (with an audit note)
+		// instead of a random half-show.
+		appendedOffset := 0
+		switch mode {
+		case "overwrite":
+			if err := ctp.ClearCueSheet(); err != nil {
+				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
+				return
+			}
+		case "append":
+			count, err := ctp.CueCount()
+			if err != nil {
+				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
+				return
+			}
+			appendedOffset = count
 		}
 
 		// Groups are created before cues: cue Parent values reference group
@@ -194,36 +235,20 @@ func Show(rg *gin.RouterGroup) {
 			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
-
-		appendedOffset := 0
-		if mode == "append" {
-			if count, err := ctp.CueCount(); err != nil {
-				ctp.ImportGroupsRollback(idMap)
-				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
-				return
-			} else {
-				appendedOffset = count
-			}
-		}
-
-		// Only after the media is in place: overwrite clears the sheet (and
-		// any local groups — stale folders would otherwise survive the
-		// import), then cues are inserted. If an insert fails mid-way, the
-		// cues and groups inserted so far are rolled back so the sheet is
-		// left empty-but-consistent (with an audit note) instead of a random
-		// half-show.
-		if mode == "overwrite" {
-			if err := ctp.ClearCueSheet(); err != nil {
-				ctp.ImportGroupsRollback(idMap)
-				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
-				return
-			}
-			appendedOffset = 0
-		}
 		inserted := 0
+		// Layer "under" names a cue by its number in the show; numbers can
+		// change on import (append mode), so links are made once every cue
+		// is in, through the positions the show's numbers landed on.
+		posByNum := map[string]int{}
+		type underLink struct {
+			pos int
+			num string
+		}
+		var unders []underLink
 		for _, cue := range manifest.Cues {
 			cue.Parent = idMap[cue.Parent]
-			if _, err := ctp.AddCueFull(cue); err != nil {
+			pos, err := ctp.AddCueFull(cue)
+			if err != nil {
 				// Roll back only this import's inserts. AddCueFull always
 				// appends (it ignores the exported cuePos), so in append mode
 				// the inserts sit at appendedOffset+1.., never at the top of
@@ -237,6 +262,17 @@ func Show(rg *gin.RouterGroup) {
 				return
 			}
 			inserted++
+			posByNum[cue.CueNum] = pos
+			if cue.LayerUnder != "" {
+				unders = append(unders, underLink{pos, cue.LayerUnder})
+			}
+		}
+		for _, u := range unders {
+			if target := posByNum[u.num]; target > 0 {
+				if err := ctp.SetCueLayerUnderPos(u.pos, target); err != nil {
+					logs.PrintfWarn(logs.RTEEdit, "import: layer under cue %s: %v", u.num, err)
+				}
+			}
 		}
 		ctp.SelectedCuePosFor(manifest.SelectedCuePos, len(manifest.Cues), appendedOffset)
 		logs.Emit(logs.AuditEvent{Event: "show_imported", Title: fmt.Sprintf("%s: %d cues", mode, inserted)})
@@ -281,6 +317,10 @@ func writeShowZip(dst io.Writer, m showManifest) error {
 
 	written := map[string]bool{}
 	for _, cue := range m.Cues {
+		// Live pages carry their URL in the manifest and have no file.
+		if cue.SourceKind == "endpoint" || cue.Filename == "" {
+			continue
+		}
 		// One entry per file: cues sharing media must not duplicate it.
 		if written[cue.Filename] {
 			continue
@@ -291,7 +331,9 @@ func writeShowZip(dst io.Writer, m showManifest) error {
 		if err != nil {
 			continue
 		}
-		w, err := zw.Create("media/" + cue.Filename)
+		// Stored, not deflated: media is already compressed, and deflating
+		// a multi-GB show burns the Pi's CPU (possibly mid-show) for ~0 gain.
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: "media/" + cue.Filename, Method: zip.Store, Modified: time.Now()})
 		if err != nil {
 			f.Close()
 			return err
@@ -356,6 +398,58 @@ func moveIntoPlace(tmp, dest string) error {
 // errShowTooLarge: the archive's media would not fit on the media volume.
 var errShowTooLarge = errors.New("not enough free space for the show's media")
 
+// maxShowEntries bounds a .CTP's entries: a show is a manifest plus one
+// entry per media file, so 10 000 is far above any real show, while an
+// archive of millions of tiny entries (cheap in bytes, costly to parse and
+// extract) is refused.
+const maxShowEntries = 10000
+
+var errShowTooManyEntries = errors.New("too many entries in the show file")
+
+// zipDeclaredEntries reads the entry count a ZIP declares in its end of
+// central directory record (following the ZIP64 locator when the count
+// overflows 16 bits), without parsing the directory. ok is false when the
+// record cannot be found; archive/zip then decides.
+func zipDeclaredEntries(path string) (n uint64, ok bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return 0, false
+	}
+	const eocdLen, maxComment = 22, 65535
+	tail := int64(eocdLen + maxComment)
+	if tail > st.Size() {
+		tail = st.Size()
+	}
+	buf := make([]byte, tail)
+	if _, err := f.ReadAt(buf, st.Size()-tail); err != nil {
+		return 0, false
+	}
+	i := bytes.LastIndex(buf, []byte{'P', 'K', 5, 6})
+	if i < 0 || len(buf)-i < eocdLen {
+		return 0, false
+	}
+	n = uint64(binary.LittleEndian.Uint16(buf[i+10:]))
+	if n != 0xFFFF || i < 20 || !bytes.Equal(buf[i-20:i-16], []byte{'P', 'K', 6, 7}) {
+		return n, true
+	}
+	// ZIP64: the locator just before the record points at the ZIP64 end
+	// record, whose total entry count is 8 bytes at offset 32.
+	off := int64(binary.LittleEndian.Uint64(buf[i-20+8:]))
+	rec := make([]byte, 40)
+	if off < 0 || off > st.Size()-40 {
+		return 0, false
+	}
+	if _, err := f.ReadAt(rec, off); err != nil || !bytes.Equal(rec[:4], []byte{'P', 'K', 6, 6}) {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint64(rec[32:]), true
+}
+
 // parseShowZip reads cutepi.json and the media/ entries from a .CTP archive
 // on disk. Entry names are validated with safeMediaName before they ever
 // reach filepath.Join on import. Media content is streamed out to temp files
@@ -367,20 +461,32 @@ var errShowTooLarge = errors.New("not enough free space for the show's media")
 // inflate an entry past its declared size, so a zip bomb cannot exceed the
 // total checked here.
 func parseShowZip(path string) (_ showManifest, _ map[string]string, err error) {
+	// Entry count first, from the archive's end record: a directory of
+	// millions of tiny entries is refused before archive/zip parses it.
+	if n, ok := zipDeclaredEntries(path); ok && n > maxShowEntries {
+		return showManifest{}, nil, fmt.Errorf("%w: %d entries (at most %d)", errShowTooManyEntries, n, maxShowEntries)
+	}
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return showManifest{}, nil, err
 	}
 	defer zr.Close()
+	if len(zr.File) > maxShowEntries {
+		return showManifest{}, nil, fmt.Errorf("%w: %d entries (at most %d)", errShowTooManyEntries, len(zr.File), maxShowEntries)
+	}
 
 	// Duplicate media/ entries are legitimate (older exports wrote one
 	// entry per cue, so cues sharing a file repeat it); only the first of
-	// each name is extracted or counted.
+	// each name is extracted or counted. The sum is overflow-checked: a
+	// crafted ZIP64 size could otherwise wrap it past the free-space check.
 	var total uint64
 	counted := map[string]bool{}
 	for _, f := range zr.File {
 		if strings.HasPrefix(f.Name, "media/") && !counted[f.Name] {
 			counted[f.Name] = true
+			if f.UncompressedSize64 > math.MaxUint64-total {
+				return showManifest{}, nil, fmt.Errorf("%w: declared sizes overflow", errShowTooLarge)
+			}
 			total += f.UncompressedSize64
 		}
 	}
@@ -429,6 +535,14 @@ func parseShowZip(path string) (_ showManifest, _ map[string]string, err error) 
 		return showManifest{}, nil, fmt.Errorf("missing cutepi.json manifest")
 	}
 	for _, cue := range m.Cues {
+		// Live pages have no file: check the URL now, before an overwrite
+		// import clears the sheet.
+		if cue.SourceKind == "endpoint" {
+			if err := ctp.ValidateEndpointURL(cue.EndpointURL); err != nil {
+				return showManifest{}, nil, fmt.Errorf("manifest cue %q: %w", cue.Title, err)
+			}
+			continue
+		}
 		if !safeMediaName(cue.Filename) {
 			return showManifest{}, nil, fmt.Errorf("manifest cue %q has an unsafe media filename %q", cue.Title, cue.Filename)
 		}

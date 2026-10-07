@@ -42,16 +42,17 @@ body.upload-body {
   padding: 0;
 }
 
+/* Full width at every screen size. ftl-themes caps the shell at --app-max
+   (1800px) and centres it on wider screens (CONTRACT.md "XL gutters"); a
+   cue console wants every pixel, so lift the cap. html:root out-ranks a
+   theme's own :root default. */
+html:root {
+  --app-max: 100vw;
+}
+
 .navbar .container-fluid {
   flex-wrap: wrap;
   gap: 0.5rem;
-}
-
-/* bg-dark's Bootstrap rule is !important and would beat a shared theme's
-   .app-bar background, so the utility is gone from the topbar markup
-   and the identical colour lives here at zero specificity instead. */
-:where(.app-shell) > :where(nav.navbar) {
-  background-color: #212529;
 }
 
 .navbar #mediainfo {
@@ -292,6 +293,86 @@ body.mediapool-collapsed #mediapool-pane {
 }
 body.mediapool-collapsed #mediapool-resizer {
   display: none;
+}
+
+/* Active Cues pane (§6.1.2): the media pool's mirror on the right, with its
+   own splitter; collapsed the same way. Unlike the pool it stays in Show
+   mode: stopping one running cue is a show action. */
+#activecues-pane {
+  flex: 0 0 var(--activecues-width, 280px);
+  min-width: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  background-color: rgba(0, 0, 0, 0.15);
+}
+#activecues {
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+#activecues-resizer {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  touch-action: none;
+  background: linear-gradient(90deg,
+    transparent calc(50% - 0.5px),
+    var(--ctp-hairline, var(--ctp-border, #176095)) calc(50% - 0.5px),
+    var(--ctp-hairline, var(--ctp-border, #176095)) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px));
+  transition: background-color 0.2s;
+}
+#activecues-resizer:hover,
+#activecues-resizer:active {
+  background: var(--ctp-flare, #d85cff);
+}
+body.activecues-collapsed #activecues-pane {
+  flex-basis: 0;
+  padding: 0;
+  overflow: hidden;
+  border-left: 0;
+}
+body.activecues-collapsed #activecues-resizer {
+  display: none;
+}
+.active-cues-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.active-cue {
+  border: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  border-left-width: 4px;
+  border-radius: 0.25rem;
+  padding: 0.4rem 0.5rem;
+}
+.active-cue.is-focus {
+  box-shadow: inset 0 0 0 1px var(--ctp-flare, #d85cff);
+}
+.active-cue-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.active-cue-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.active-cue-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--ctp-flare, #d85cff);
+}
+.activecues-count:not(:empty) {
+  margin-left: 0.35em;
+  padding: 0 0.4em;
+  border-radius: 0.6em;
+  font-size: 0.8em;
+  background: var(--ctp-flare, #d85cff);
+  color: #fff;
 }
 
 /* Expand button floats at the left edge of the content area; hidden unless
@@ -588,6 +669,8 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   accent-color: var(--ctp-accent);
 }
 .insp-fadein { max-width: 11rem; }
+/* Live page cue: the URL sits atop the wide right column. */
+.insp-live-url { max-width: 48rem; }
 .insp-audio-wrap { display: flex; gap: 3rem; align-items: flex-start; justify-content: flex-start; padding-top: 0.75rem; }
 .insp-audio-settings { display: flex; flex-direction: column; gap: 0.45rem; }
 .insp-audio-settings input[type="range"] { min-width: 0; }
@@ -657,11 +740,6 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover {
 body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
   color: #fff;
 }
-/* Trim timeline: the panel default (320px) fits header + identity + timeline
-   + two field rows exactly; no scrollbars. */
-.inspector-collapse .trim-timeline {
-  height: 6.75rem;
-}
 /* Media info: one aligned label:value column; `.media-cols-2` (toggled by JS
    when the list would overflow the inspector) doubles it into two aligned
    columns so the info uses horizontal space instead of forcing a scroll. */
@@ -697,11 +775,9 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
 
 /* --- Sticky footer: panel toggles, Tests, Settings, Edit/Show mode ------ */
 /* === ftl-themes shell adoption ==========================================
-   .app-shell mirrors the library's .ft-app contract: topbar = bar,
-   app-content = main, footer = status, plus an aria-hidden decorative rail.
-   Under this app's own themes no ftl stylesheet is linked, so the .ftl-*
-   classes are inert and :where() (zero specificity) keeps these rules from
-   out-ranking a shared theme's shell rules when one IS linked. */
+   The theme owns the .app grid and its responsive arrangement. Keep only
+   the app's available-height constraint here; don't replace the grid with a
+   flex column or hide the theme's decorative rail. */
 :where(body.app-body) > :where(.app-shell) {
   flex: 1 1 auto;
   min-height: 0;
@@ -709,23 +785,11 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
   flex-direction: column;
 }
 
-/* Hidden by default (empty aside); a shared theme's own .app-rail rule,
-   which loads later at equal specificity, turns the rail on. */
-.app-rail {
-  display: none;
-}
-
-/* The footer's own id-level background/border must not out-rank a shared
-   theme's .app-status styling: :where() drops it to zero specificity
-   while rendering identically under this app's own themes. */
+/* Keep the empty footer in the theme's status row without overriding its
+   spacing, surface, or border tokens. */
 :where(#app-footer) {
   flex: 0 0 auto;
-  border-top: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
-  background-color: var(--ctp-surface, #07172a);
   overflow-x: auto;
-  /* replaces the px-2/py-1 utilities (those are !important and would beat a
-     shared theme's .app-status padding) */
-  padding: 0.25rem 0.5rem;
 }
 
 /* Settings modal: the .field wrappers in the markup give a shared theme
@@ -928,4 +992,10 @@ body.show-mode #app-footer #mediapool-toggle {
    `.row` only as the library's flex row, so the grid parts are switched off. */
 .row { --bs-gutter-x: 0; --bs-gutter-y: 0; margin-left: 0; margin-right: 0; margin-top: 0; }
 .row > * { flex-shrink: 1; width: auto; max-width: none; padding-left: 0; padding-right: 0; margin-top: 0; }
-#settingsModal .settings-about { margin-bottom: 0.75rem; } #settingsModal .settings-about .cutepi-logo { height: 28px; width: auto; }
+/* ...except a switch, whose track sits in its own left padding. */
+.row > .form-switch { padding-left: 2.5em; }
+#settingsModal .settings-about { margin-bottom: 0.75rem; display: flex; align-items: baseline; gap: 0.5rem; } #settingsModal .settings-version { font-size: 0.8125rem; } #settingsModal .settings-about .cutepi-logo { height: 28px; width: auto; }
+
+/* Layer (Video tab, §6.1.2): the cue number field only for "Under cue". */
+.insp-layer .insp-layer-under { display: none; }
+.insp-layer:has(#insp-layer option[value="under"]:checked) .insp-layer-under { display: block; }

@@ -32,7 +32,7 @@ func TestGetScheduledCuesRoundTrip(t *testing.T) {
 	if err := UpdateCueFields("1", map[string]string{"fit_mode": "stretch", "rotation": "90", "flip": "h"}); err != nil {
 		t.Fatalf("UpdateCueFields geometry: %v", err)
 	}
-	rows, err := GetScheduledCues(now)
+	rows, err := GetScheduledCuesSince(now.Add(-time.Second), now)
 	if err != nil {
 		t.Fatalf("GetScheduledCues: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestGetScheduledCuesRoundTrip(t *testing.T) {
 	if err := SetCueSchedule(1, true, day, thisSec-5); err != nil {
 		t.Fatalf("SetCueSchedule recent: %v", err)
 	}
-	rows, err = GetScheduledCues(now)
+	rows, err = GetScheduledCuesSince(now.Add(-time.Second), now)
 	if err != nil {
 		t.Fatalf("GetScheduledCues recent: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestGetScheduledCuesRoundTrip(t *testing.T) {
 	if err := SetCueSchedule(1, true, day, thisSec-7200); err != nil {
 		t.Fatalf("SetCueSchedule stale: %v", err)
 	}
-	rows, err = GetScheduledCues(now)
+	rows, err = GetScheduledCuesSince(now.Add(-time.Second), now)
 	if err != nil {
 		t.Fatalf("GetScheduledCues stale: %v", err)
 	}

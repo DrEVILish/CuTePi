@@ -1,0 +1,37 @@
+{{ define "liveModal.html" }}
+
+<!-- Live page cue (DESIGN §12.14): a TimerPi display, or any http(s) page,
+     rendered on the wall. Added straight to the cuesheet, not the pool. -->
+<div class="app-modal fade" id="liveModal" tabindex="-1" aria-labelledby="liveModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content modal">
+      <div class="modal-header">
+        <span class="modal-title" id="liveModalLabel">
+          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-clock"/></svg>&nbsp;Add live page cue
+        </span>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form id="live-cue-form" hx-post="/api/cue/live" hx-target="#cuesheet" hx-swap="outerHTML">
+        <div class="modal-body">
+          <label class="form-label" for="live-url">Page URL</label>
+          <input class="form-control" id="live-url" type="url" name="url" required
+            autocomplete="url" spellcheck="false" placeholder="https://timerpi.local/d/room">
+          <label class="form-label mt-m" for="live-title">Cue name</label>
+          <input class="form-control" id="live-title" type="text" name="title"
+            autocomplete="off" placeholder="Room A timer (blank = the page's host name)">
+          <p class="small text-muted mt-m mb-0">
+            The page shows on the wall like a video cue, with no sound. It stays up until
+            Stop, Panic or another cue replaces it; if it stops answering, the panic holding
+            image shows until it comes back. Edit the URL later in the Cue Inspector.
+          </p>
+          <div id="live-error" class="small text-danger mt-xs d-none" role="alert"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" type="submit">Add cue</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{{ end }}

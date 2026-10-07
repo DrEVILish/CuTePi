@@ -3,17 +3,8 @@ const fileInput = document.getElementById('file-input');
 const form = document.getElementById('dropform');
 const fileList = document.getElementById("filelist");
 
-var isAdvancedUpload = function() {
-  var div = document.createElement('div');
-  return (('draggable' in div) || ('ondragstart' in div && 'ondrop' in div)) && 'FormData' in window && 'FileReader' in window;
-}();
-
-if (isAdvancedUpload) {
-  dropzone.classList.add('has-advanced-upload');
-
-  var droppedFiles = new DataTransfer();
-}
-
+dropzone.classList.add('has-advanced-upload');
+let droppedFiles = new DataTransfer();
 
 function preventDefaults(e) {
   e.preventDefault();
@@ -69,10 +60,10 @@ fileInput.addEventListener("change", () => {
   }
 });
 
-// XHR upload with live progress + success/failure feedback (both this modal
-// and the standalone /upload page share the same markup ids). htmx is not
-// involved in the submission, so its early "looks like nothing happened"
-// behaviour is gone; the status line carries the operator-facing feedback.
+// Upload with live progress + success/failure feedback (both this modal and
+// the standalone /upload page share the same markup ids), through ui.js's
+// upload helpers like the pool drop. htmx is not involved in the submission;
+// the status line carries the operator-facing feedback.
 const uploadProgress = document.getElementById("progress");
 const uploadStatus = document.getElementById("upload-status");
 
@@ -91,11 +82,11 @@ form.addEventListener("submit", async (e) => {
     return;
   }
   // Warn before sending more than the media disk can hold (§5.7).
-  if (window.cutepiCheckSpace && !(await window.cutepiCheckSpace(Array.from(files)))) {
+  if (!(await cutepiCheckSpace(Array.from(files)))) {
     setUploaderFeedback("Upload cancelled — not enough disk space.", "text-warning");
     return;
   }
-  const choice = window.cutepiUploadChoice ? await window.cutepiUploadChoice(files) : { go: true, onConflict: "" };
+  const choice = await cutepiUploadChoice(files);
   if (!choice.go) {
     setUploaderFeedback("Upload cancelled.", "text-warning");
     return;
@@ -108,68 +99,37 @@ form.addEventListener("submit", async (e) => {
   if (uploadProgress) { uploadProgress.hidden = false; uploadProgress.value = 0; }
   setUploaderFeedback("Uploading… 0%");
 
-  const xhr = new XMLHttpRequest();
-  xhr.open("POST", "/upload");
-  // Same header the fetch path uses; the server returns the #mediapool partial.
-  xhr.setRequestHeader("HX-Request", "true");
-  xhr.upload.addEventListener("progress", (ev) => {
-    if (!ev.lengthComputable || !uploadProgress) return;
-    const pct = Math.round((ev.loaded / ev.total) * 100);
-    uploadProgress.value = pct;
-    setUploaderFeedback("Uploading… " + pct + "%");
-  });
-  // Bytes are all sent: the server now probes/validates each file before it
-  // joins the pool, so show an indeterminate bar instead of a stuck 100%.
-  xhr.upload.addEventListener("load", () => {
-    if (uploadProgress) uploadProgress.removeAttribute("value");
-    setUploaderFeedback("Importing… validating media on the server");
-  });
-  xhr.addEventListener("load", () => {
-    if (btn) { btn.disabled = false; btn.classList.remove("disabled"); }
-    if (uploadProgress) uploadProgress.value = xhr.status >= 200 && xhr.status < 300 ? 100 : 0;
-    if (xhr.status >= 200 && xhr.status < 300) {
-      const summary = window.cutepiUploadSummary ? window.cutepiUploadSummary(xhr.getResponseHeader("X-Upload-Result")) : "Upload complete";
-      setUploaderFeedback(summary, "text-success");
-      fileList.innerHTML = "";
-      fileInput.value = "";
-      if (droppedFiles && droppedFiles.items) droppedFiles = new DataTransfer();
-      // The partial is a standalone #mediapool; splice it in when present
-      // (the control centre modal). The standalone /upload page just keeps
-      // the success message.
-      if (document.getElementById("mediapool")) {
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = (xhr.responseText || "").trim();
-        const replacement = wrapper.firstElementChild;
-        const current = document.getElementById("mediapool");
-        if (replacement && replacement.id === "mediapool" && current) {
-          current.replaceWith(replacement);
-          if (window.htmx) htmx.process(replacement);
-        }
+  let res;
+  try {
+    // pct null: bytes are all sent and the server is probing/validating each
+    // file, so the bar goes indeterminate instead of sticking at 100%.
+    res = await cutepiUpload("/upload", formData, (pct, text) => {
+      if (uploadProgress) {
+        if (pct === null) uploadProgress.removeAttribute("value"); else uploadProgress.value = pct;
       }
-      if (typeof showToast === "function") showToast(summary, "success");
-      if (window.bootstrap && document.getElementById("uploadModal")) {
-        try { bootstrap.Modal.getInstance(document.getElementById("uploadModal")).hide(); } catch (err) {}
-      }
-    } else {
-      let reason = "";
-      try {
-        const j = JSON.parse(xhr.responseText);
-        if (j && j.error) reason = j.error;
-      } catch (err) { /* not JSON */ }
-      // htmx requests get the reason as plain text; a full error.html page
-      // (non-htmx fallback) keeps it in its <pre>.
-      const body = (xhr.responseText || "").trim();
-      if (!reason && !body.startsWith("<")) reason = body.replace(/\s+/g, " ").slice(0, 300);
-      if (!reason) try {
-        const doc = new DOMParser().parseFromString(body, "text/html");
-        reason = (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim().slice(0, 300);
-      } catch (err) { /* status alone still shows */ }
-      setUploaderFeedback("Upload failed (" + xhr.status + ")" + (reason ? ": " + reason : ""), "text-danger");
-    }
-  });
-  xhr.addEventListener("error", () => {
-    if (btn) { btn.disabled = false; btn.classList.remove("disabled"); }
+      setUploaderFeedback(text);
+    });
+  } catch (err) {
     setUploaderFeedback("Upload failed (network error).", "text-danger");
-  });
-  xhr.send(formData);
+    return;
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("disabled"); }
+  }
+  const ok = res.status >= 200 && res.status < 300;
+  if (uploadProgress) uploadProgress.value = ok ? 100 : 0;
+  if (!ok) {
+    setUploaderFeedback("Upload failed (" + res.status + "): " + uploadErrorText(res.status, res.text), "text-danger");
+    return;
+  }
+  const summary = cutepiUploadSummary(res.result);
+  setUploaderFeedback(summary, "text-success");
+  fileList.innerHTML = "";
+  fileInput.value = "";
+  droppedFiles = new DataTransfer();
+  // The partial is a standalone #mediapool; splice it in when present (the
+  // control centre modal). The standalone /upload page just keeps the
+  // success message.
+  if (document.getElementById("mediapool")) replaceById("mediapool", res.text);
+  showToast(summary, "success");
+  hideModal("uploadModal");
 });

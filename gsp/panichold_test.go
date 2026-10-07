@@ -6,8 +6,11 @@ import "testing"
 // must report the miss so the caller takes the cold load path.
 func TestPanicHoldFallsBackWhenNotArmed(t *testing.T) {
 	ArmPanicHold("hold.png")
-	if got := PanicHoldArmed(); got != "" {
-		t.Fatalf("armed %q without a KMS wall", got)
+	standby.mu.Lock()
+	armed := standby.p != nil
+	standby.mu.Unlock()
+	if armed {
+		t.Fatal("armed without a KMS wall")
 	}
 	if PanicToHold("hold.png") {
 		t.Fatal("PanicToHold claimed a cut with nothing armed")

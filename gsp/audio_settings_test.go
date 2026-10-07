@@ -42,7 +42,6 @@ func TestAudioSettingsPlayback(t *testing.T) {
 			q := gst.NewSegmentQuery(gst.FormatTime)
 			ok := vol.Query(q)
 			rate, _, _, _ = q.ParseSegment()
-			q.Unref()
 			if ok && rate == want {
 				return
 			}
@@ -50,12 +49,20 @@ func TestAudioSettingsPlayback(t *testing.T) {
 		}
 		t.Fatalf("rate=%v want=%v", rate, want)
 	}
+	// Live mix changes go straight to the manager (ApplyCueMix needs a cue).
+	mix := func(f func()) {
+		mgr.mu.Lock()
+		f()
+		mgr.applyGain()
+		mgr.panEl.Set("panorama", float32(mgr.balance))
+		mgr.mu.Unlock()
+	}
 	checkGain(0)
-	SetVolume(6)
+	mix(func() { mgr.volume = 6 })
 	checkGain(0)
-	SetMute(false)
+	mix(func() { mgr.mute = false })
 	checkGain(1)
-	SetBalance(1)
+	mix(func() { mgr.balance = 1 })
 	value, err := pan.GetProperty("panorama")
 	if err != nil || value.(float32) != 1 {
 		t.Fatalf("pan=%v err=%v", value, err)
@@ -97,7 +104,10 @@ func TestAudioSettingsPlayback(t *testing.T) {
 	}
 	time.Sleep(300 * time.Millisecond)
 	checkGain(1)
-	SetMute(true)
+	mgr.mu.Lock()
+	mgr.mute = true
+	mgr.applyGain()
+	mgr.mu.Unlock()
 	done := make(chan struct{})
 	go func() { FadeAndStop(100); close(done) }()
 	time.Sleep(40 * time.Millisecond)

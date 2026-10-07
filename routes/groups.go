@@ -33,12 +33,9 @@ type GoBar struct {
 // computeGoBar derives the strip from the shared selection walk, so the
 // preview can never disagree with what Space/GO actually fires.
 func computeGoBar(sheet *ctp.Cuesheet) GoBar {
-	units, err := ctp.SelectUnits()
-	if err != nil {
-		return GoBar{}
-	}
-	idx, err := ctp.SelectUnitIndex()
-	if err != nil || idx < 0 || idx >= len(units) {
+	units := ctp.SheetUnits(sheet)
+	idx := ctp.UnitIndex(units)
+	if idx < 0 || idx >= len(units) {
 		return GoBar{}
 	}
 	describe := func(u ctp.SelectUnit) (string, string) {
@@ -147,9 +144,8 @@ func Groups(rg *gin.RouterGroup) {
 	})
 
 	rg.DELETE("/group/:id", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
+		id, ok := groupIDParam(c)
+		if !ok {
 			return
 		}
 		if err := ctp.DeleteGroupWithCues(id); err != nil {
@@ -161,14 +157,8 @@ func Groups(rg *gin.RouterGroup) {
 	})
 
 	rg.PUT("/group/:id", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
-			return
-		}
-		g, err := ctp.GetGroup(id)
-		if err != nil {
-			c.String(http.StatusNotFound, "group not found")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
 		if name := strings.TrimSpace(c.PostForm("name")); name != "" {
@@ -244,14 +234,8 @@ func Groups(rg *gin.RouterGroup) {
 	// Inline group-name edit from the cuesheet (dblclick on the group name).
 	// Same pattern as the cue row's POST/PUT edit/:col pair.
 	rg.POST("/group/:id/edit/name", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
-			return
-		}
-		g, err := ctp.GetGroup(id)
-		if err != nil {
-			c.String(http.StatusNotFound, "group not found")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
 		c.HTML(http.StatusOK, "cueeditcol.html", gin.H{
@@ -260,14 +244,8 @@ func Groups(rg *gin.RouterGroup) {
 		})
 	})
 	rg.PUT("/group/:id/name", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
-			return
-		}
-		g, err := ctp.GetGroup(id)
-		if err != nil {
-			c.String(http.StatusNotFound, "group not found")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
 		g.Name = strings.TrimSpace(c.PostForm("val"))
@@ -285,9 +263,8 @@ func Groups(rg *gin.RouterGroup) {
 	// Move a group block (its member cues, in order) so it starts before the
 	// cue at beforePos (0 = end of sheet). Used by group-header drag reorder.
 	rg.POST("/group/:id/move", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
+		id, ok := groupIDParam(c)
+		if !ok {
 			return
 		}
 		before, _ := strconv.Atoi(c.PostForm("beforePos"))
@@ -303,14 +280,8 @@ func Groups(rg *gin.RouterGroup) {
 	// A dedicated endpoint so the generic PUT /group/:id form-save's missing
 	// checkboxes cannot wipe slideshow state.
 	rg.POST("/group/:id/color", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
-			return
-		}
-		g, err := ctp.GetGroup(id)
-		if err != nil {
-			c.String(http.StatusNotFound, "group not found")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
 		g.Color = strings.TrimSpace(c.PostForm("color"))
@@ -326,14 +297,8 @@ func Groups(rg *gin.RouterGroup) {
 	})
 
 	rg.POST("/group/:id/collapse", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
-			return
-		}
-		g, err := ctp.GetGroup(id)
-		if err != nil {
-			c.String(http.StatusNotFound, "group not found")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
 		g.Collapse = !g.Collapse
@@ -347,15 +312,11 @@ func Groups(rg *gin.RouterGroup) {
 	// Select a group like a cue row: persists the selection (as the negative
 	// group id) so other clients and reloads mirror it.
 	rg.POST("/group/:id/select", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
-		if _, gerr := ctp.GetGroup(id); gerr != nil {
-			c.String(http.StatusNotFound, "group not found")
-			return
-		}
+		id := g.GroupID
 		// Same modifiers as cue rows (§12.4): shift extends the visible
 		// range to this header, cmd toggles its membership.
 		if c.Query("extend") == "1" {
@@ -407,14 +368,8 @@ func Groups(rg *gin.RouterGroup) {
 
 	// Inline group cue-number edit from the cuesheet (dblclick the number).
 	rg.POST("/group/:id/edit/cueNum", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
-			return
-		}
-		g, err := ctp.GetGroup(id)
-		if err != nil {
-			c.String(http.StatusNotFound, "group not found")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
 		c.HTML(http.StatusOK, "cueeditcol.html", gin.H{
@@ -423,21 +378,15 @@ func Groups(rg *gin.RouterGroup) {
 		})
 	})
 	rg.PUT("/group/:id/cue_num", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
-			return
-		}
-		g, err := ctp.GetGroup(id)
-		if err != nil {
-			c.String(http.StatusNotFound, "group not found")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
 		if g.CueNum = strings.TrimSpace(c.PostForm("val")); len(g.CueNum) > 24 {
 			g.CueNum = g.CueNum[:24]
 		}
 		if err := ctp.UpdateGroup(g); errors.Is(err, ctp.ErrDuplicateCueNum) {
-			rejectCueNum(c, err, `#cuesheet tr.cue-group-header[data-group-id="`+strconv.Itoa(id)+`"] .cue-num`, "")
+			rejectCueNum(c, err, `#cuesheet tr.cue-group-header[data-group-id="`+strconv.Itoa(g.GroupID)+`"] .cue-num`, "")
 		} else if err != nil {
 			respondError(c, http.StatusInternalServerError, err.Error())
 			return
@@ -448,9 +397,8 @@ func Groups(rg *gin.RouterGroup) {
 	// Group inspector: renders the group's settings partial (shared with
 	// GET /api/cue/inspector when the persisted selection is a group).
 	rg.GET("/group/:id/inspector", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
+		id, ok := groupIDParam(c)
+		if !ok {
 			return
 		}
 		renderGroupInspector(c, id)
@@ -461,14 +409,8 @@ func Groups(rg *gin.RouterGroup) {
 	// cues; otherwise it just plays the first member (cues are a list - a
 	// plain group has no implicit queue).
 	rg.POST("/group/:id/play", func(c *gin.Context) {
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			c.String(http.StatusBadRequest, "invalid group id")
-			return
-		}
-		g, err := ctp.GetGroup(id)
-		if err != nil {
-			c.String(http.StatusNotFound, "group not found")
+		g, ok := groupParam(c)
+		if !ok {
 			return
 		}
 		playGroup(g)
@@ -799,12 +741,15 @@ func slideshowRunner(g ctp.Group) {
 			opts.Loop = false
 			opts.FadeIn = 0
 			opts.Crossfade = 0
+			// Each slide replaces the last: a member's Stop others and Layer
+			// (§6.1.2) do not apply inside a slideshow.
+			opts.KeepOthers = false
 			if pass > 0 || i > 0 {
 				opts.Crossfade = fade
 			}
 			slideStart := time.Now()
-			if err := gsp.LoadWithOpts(cue.Filename, opts); err != nil {
-				log.Printf("slideshow: loading %q failed: %v", cue.Filename, err)
+			if err := loadCueSource(cue, opts); err != nil {
+				log.Printf("slideshow: loading %q failed: %v", cue.Title, err)
 				ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
 				return
 			}
@@ -889,4 +834,27 @@ func rejectCueNum(c *gin.Context, err error, anchor, value string) {
 		"cueNumRejected": map[string]string{"target": "body", "message": err.Error(), "anchor": anchor, "value": value},
 	})
 	c.Header("HX-Trigger", string(payload))
+}
+
+// groupIDParam reads the :id route parameter; a bad id answers 400.
+func groupIDParam(c *gin.Context) (int, bool) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.String(http.StatusBadRequest, "invalid group id")
+	}
+	return id, err == nil
+}
+
+// groupParam loads the :id route parameter's group; a bad id answers 400,
+// an unknown group 404.
+func groupParam(c *gin.Context) (ctp.Group, bool) {
+	id, ok := groupIDParam(c)
+	if !ok {
+		return ctp.Group{}, false
+	}
+	g, err := ctp.GetGroup(id)
+	if err != nil {
+		c.String(http.StatusNotFound, "group not found")
+	}
+	return g, err == nil
 }

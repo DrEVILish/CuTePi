@@ -8,14 +8,17 @@ package gsp
 // chases a soundtrack around the console.
 
 import (
+	"errors"
 	"math"
-	"os"
+	"net/url"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
 
 	"CuTePi/config"
+	"CuTePi/logs"
 )
 
 var (
@@ -61,6 +64,10 @@ func BackgroundPlaylist(files []string, volumeDB float64) (stop func()) {
 	return stopFn
 }
 
+// bgRetryPause is the pause after a track that failed to play, so a bad
+// file can never make the playlist spin. A variable for tests.
+var bgRetryPause = time.Second
+
 func runPlaylist(files []string, volumeDB float64, done <-chan struct{}, dereg func()) {
 	defer dereg()
 	// playbin's volume is linear (0..10); cue volume is dB.
@@ -69,49 +76,91 @@ func runPlaylist(files []string, volumeDB float64, done <-chan struct{}, dereg f
 		linear = 10
 	}
 	for {
+		played := false
 		for _, f := range files {
-			if !playOneTrack(f, linear, done) {
-				return // stopped
-			}
-			select {
-			case <-done:
+			stopped, err := playOneTrack(f, linear, done)
+			if stopped {
 				return
-			default:
 			}
+			if err != nil {
+				logs.PrintfWarn(logs.GSPBackground, "background track %q: %v", f, err)
+				select {
+				case <-done:
+					return
+				case <-time.After(bgRetryPause):
+				}
+				continue
+			}
+			played = true
+		}
+		// A pass in which nothing played would only fail the same way
+		// again: end the soundtrack instead of looping on it.
+		if !played {
+			logs.PrintfWarn(logs.GSPBackground, "background playlist stopped: none of its %d track(s) could be played", len(files))
+			return
 		}
 	}
 }
 
+// fileURI is the file:// URI for path: absolute, with every character a URI
+// path cannot carry percent-escaped (pool names may hold spaces, '#', '?'
+// or '%'; "file://"+path broke on all of them).
+func fileURI(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String(), nil
+}
+
 // playOneTrack builds and plays one audio pipeline, blocking until EOS,
-// error, or stop. Returns false only when the playlist was stopped.
-func playOneTrack(filename string, linear float64, done <-chan struct{}) bool {
-	path := config.MediaLocation() + string(os.PathSeparator) + filename
+// error, or stop. stopped reports the playlist was stopped; err that the
+// track could not be played (setup, state change or a pipeline error).
+func playOneTrack(filename string, linear float64, done <-chan struct{}) (stopped bool, err error) {
+	uri, err := fileURI(filepath.Join(config.MediaLocation(), filename))
+	if err != nil {
+		return false, err
+	}
 	p, err := gst.NewPipeline("cutepi-bgm")
 	if err != nil {
-		return true
+		return false, err
 	}
+	defer p.SetState(gst.StateNull)
 	pb, err := gst.NewElement("playbin")
 	if err != nil {
-		return true
+		return false, err
 	}
 	p.Add(pb)
-	_ = pb.Set("uri", "file://"+path)
-	_ = pb.Set("volume", linear)
+	// The soundtrack's sound goes into the audio bus, mixed with the cues'.
+	sink, err := audioBusInput(p)
+	if err != nil {
+		return false, err
+	}
+	defer audioBusRelease(p)
+	if err := pb.Set("audio-sink", sink); err != nil {
+		return false, err
+	}
+	if err := pb.Set("uri", uri); err != nil {
+		return false, err
+	}
+	if err := pb.Set("volume", linear); err != nil {
+		return false, err
+	}
 
-	eos := make(chan struct{})
+	result := make(chan error, 1)
 	p.GetPipelineBus().AddWatch(func(msg *gst.Message) bool {
 		switch msg.Type() {
 		case gst.MessageEOS:
-			close(eos)
+			result <- nil
 			return false
 		case gst.MessageError:
-			close(eos)
+			result <- msg.ParseError()
 			return false
 		}
 		return true
 	})
-	if p.SetState(gst.StatePlaying) != nil {
-		return true
+	if err := p.SetState(gst.StatePlaying); err != nil {
+		return false, err
 	}
 
 	tick := time.NewTicker(100 * time.Millisecond)
@@ -119,17 +168,14 @@ func playOneTrack(filename string, linear float64, done <-chan struct{}) bool {
 	for {
 		select {
 		case <-done:
-			_ = p.SetState(gst.StateNull)
-			return false
-		case <-eos:
-			_ = p.SetState(gst.StateNull)
-			return true
+			return true, nil
+		case err := <-result:
+			return false, err
 		case <-tick.C:
-			// Liveness check: a playbin that never reaches EOS or error
-			// (broken file) would otherwise hang the playlist forever.
-			_, state := p.GetState(gst.StateNull, 0)
-			if state == gst.StateNull {
-				return true
+			// Liveness check: a playbin that dropped to NULL without EOS or
+			// an error would otherwise hang the playlist forever.
+			if _, state := p.GetState(gst.StateNull, 0); state == gst.StateNull {
+				return false, errors.New("pipeline stopped without finishing")
 			}
 		}
 	}

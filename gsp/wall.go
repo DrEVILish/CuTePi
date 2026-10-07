@@ -30,6 +30,7 @@ type wallLayer struct {
 	visible bool                        // part of the on-screen stack (not a warm/prerolling slot)
 	parked  bool                        // invisible at the top zpos, ready to be raised (panic image)
 	still   atomic.Bool                 // shows a single-frame image: no video to share commits with
+	framed  atomic.Bool                 // the sink has received its first frame
 
 	// Alpha writes are commits that wait for the next vblank (~16 ms), so
 	// they run on the layer's own writer: callers (fade loops holding the
@@ -230,11 +231,13 @@ func opacityOf(opts LoadOpts) float64 {
 	return opts.Opacity
 }
 
-// showLayer puts p's layer on screen at the bottom of the visible stack
-// (under every layer still fading out) at alpha opacity*level.
-func showLayer(p *gst.Pipeline, level float64) {
+// showLayer puts p's layer on screen at alpha opacity*level, at its place in
+// the visible stack (§6.1.2): LayerBottom under everything (a cue that stops
+// the others starts under the cues fading out), LayerTop above everything,
+// LayerUnder directly beneath ref's layer (on top if ref has none).
+func showLayer(p *gst.Pipeline, level float64, at string, ref *gst.Pipeline) {
 	if glOpen {
-		glShow(p, level)
+		glShow(p, level, at, ref)
 		return
 	}
 	w := kmsWall()
@@ -245,11 +248,61 @@ func showLayer(p *gst.Pipeline, level float64) {
 	layersMu.Lock()
 	if !l.visible {
 		l.visible = true
-		stack = append([]*wallLayer{l}, stack...)
+		stack = insertLayer(stack, l, stackIndex(stack, layers[ref], at))
 	}
 	restackLocked(w)
 	layersMu.Unlock()
 	setLayerLevel(p, level)
+}
+
+// stackIndex is where a layer placed at `at` goes in a bottom-to-top stack;
+// refLayer is LayerUnder's reference (nil or absent: on top).
+func stackIndex[T comparable](st []T, refLayer T, at string) int {
+	switch at {
+	case LayerBottom:
+		return 0
+	case LayerUnder:
+		var zero T
+		if refLayer != zero {
+			for i, x := range st {
+				if x == refLayer {
+					return i
+				}
+			}
+		}
+	}
+	return len(st)
+}
+
+// insertLayer inserts l at index i of st.
+func insertLayer[T any](st []T, l T, i int) []T {
+	st = append(st, l)
+	copy(st[i+1:], st[i:])
+	st[i] = l
+	return st
+}
+
+// stackPosition is p's layer's place in the visible stack, 1 = bottom; 0
+// when it has no visible layer.
+func stackPosition(p *gst.Pipeline) int {
+	if glOpen {
+		glMu.Lock()
+		defer glMu.Unlock()
+		for i, l := range glStack {
+			if glLayers[p] == l {
+				return i + 1
+			}
+		}
+		return 0
+	}
+	layersMu.Lock()
+	defer layersMu.Unlock()
+	for i, l := range stack {
+		if layers[p] == l {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // zposTop is the highest plane zpos (the vc4 range is 1..17). Visible
@@ -396,6 +449,7 @@ type outgoing struct {
 	curve    string
 	done     chan struct{}
 	start    chan struct{} // closed once the incoming cue is on screen
+	wait     time.Duration // longest wait for start before fading anyway
 }
 
 var (
@@ -446,7 +500,7 @@ func fadeOutgoing(o *outgoing, durMs int) {
 		case <-o.start:
 		case <-o.done:
 			return
-		case <-time.After(5 * time.Second): // the new cue never showed; fade anyway
+		case <-time.After(o.wait): // the new cue never showed; fade anyway
 		}
 	}
 	total := time.Duration(durMs) * time.Millisecond
@@ -560,17 +614,6 @@ func geomValue(s string, full, def int) int {
 		return def
 	}
 	return int(math.Round(f))
-}
-
-// ValidGeom reports whether s is a usable geometry value ("", px or %).
-func ValidGeom(s string) bool {
-	s = strings.TrimSpace(strings.ToLower(s))
-	if s == "" {
-		return true
-	}
-	s = strings.TrimSuffix(strings.TrimSuffix(s, "%"), "px")
-	_, err := strconv.ParseFloat(s, 64)
-	return err == nil
 }
 
 // kmsVideoTail names the video output chain for the KMS wall. Hardware
@@ -724,6 +767,11 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 	sink.Set("fd", w.fd)
 	sink.Set("plane-id", int(l.plane.id))
 	sink.Set("skip-vsync", true) // one vsync waiter per DRM fd: several sinks share it
+	// First-frame flag: a live page has no preroll, so its show waits on this.
+	sink.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer, func(*gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
+		l.framed.Store(true)
+		return gst.PadProbeRemove
+	})
 	x, y, bw, bh := wallRect(opts, w.Width, w.Height)
 	// kmssink fits the (cropped) frame inside this box, aspect kept.
 	sink.SetArg("render-rectangle", fmt.Sprintf("<%d,%d,%d,%d>", x, y, bw, bh))

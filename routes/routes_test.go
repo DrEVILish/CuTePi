@@ -790,11 +790,11 @@ func TestCuesheetRendersColumnResizeMarkers(t *testing.T) {
 	}
 	// Inline-edit cells must resolve their own swap target (the cell), not
 	// inherit the row's #cuesheet target - otherwise the editor form would
-	// replace the whole sheet. The row's select trigger is delayed and
-	// cancellable (justEdited) so a single-click selection still works but
-	// can't re-render the sheet out from under the editor opened by the
-	// double-click that just happened.
-	for _, want := range []string{`class="cue-inline-edit" hx-target="this" hx-trigger="dblclick"`, `click[!justEdited()] delay:250ms`} {
+	// replace the whole sheet. The row's select trigger fires at once (no
+	// delay: a click selects as fast as an arrow key) and is cancellable
+	// (justEdited); ui.js holds back its sheet swap while an editor is open,
+	// so it can't re-render the sheet out from under the editor.
+	for _, want := range []string{`class="cue-inline-edit" hx-target="this" hx-trigger="dblclick"`, `hx-trigger="click[!justEdited()]"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected inline-edit markup %q to render, got:\n%s", want, body)
 		}
@@ -860,7 +860,7 @@ func TestDeleteCueReturnsRenderedCuesheet(t *testing.T) {
 		t.Fatalf("DELETE /api/cue/1 = %d, want 200: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if !strings.HasPrefix(strings.TrimSpace(body), "<div id=\"cuesheet\">") {
+	if !strings.HasPrefix(strings.TrimSpace(body), "<div id=\"cuesheet\"") {
 		t.Fatalf("expected DELETE /api/cue/1 to return the rendered cuesheet, got:\n%s", body)
 	}
 	if strings.Contains(body, "delroute.mp4") {
@@ -1132,24 +1132,6 @@ func TestMediapoolEmptyStateWithMedia(t *testing.T) {
 	}
 }
 
-func TestLoadCueRouteExists(t *testing.T) {
-	r := setupTestServer(t)
-	if err := ctp.RegisterMedia("loadroute.mp4", 100, media.Metadata{
-		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
-	}, "loadroute.mp4"); err != nil {
-		t.Fatalf("RegisterMedia: %v", err)
-	}
-	// The MediaPool "Load" dropdown action posts here; the handler loads via
-	// gsp. In this test gsp is not initialized (no gstreamer), so it should
-	// still hit the route and return an error/status rather than a gin 404
-	// "no route" for a bogus path.
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/load/loadroute.mp4", nil))
-	if w.Code == http.StatusNotFound {
-		t.Fatalf("expected /api/load/:filename route to exist, got 404")
-	}
-}
-
 // The settings modal populates itself from GET /api/settings: 200 with the
 // port and pollInterval JSON keys.
 func TestSettingsGet(t *testing.T) {
@@ -1296,33 +1278,20 @@ func TestTransportControlsEndpoints(t *testing.T) {
 	}
 }
 
-// systemdUnit resolves the unit name from the environment: only when running
-// under systemd (INVOCATION_ID set), defaulting to cutepi but honoring a
-// CUTEPI_SERVICE override. Outside a unit it is "", so standalone launches keep
-// the self re-exec restart path.
+// systemdUnit is "cutepi" only when running under systemd (INVOCATION_ID
+// set). Outside a unit it is "", so standalone launches keep the self
+// re-exec restart path.
 func TestSystemdUnitResolution(t *testing.T) {
-	setenv := func(kv map[string]string) {
-		for k, v := range kv {
-			if v == "" {
-				os.Unsetenv(k)
-			} else {
-				os.Setenv(k, v)
-			}
-		}
-	}
-	defer setenv(map[string]string{"INVOCATION_ID": "", "CUTEPI_SERVICE": ""})
-
-	setenv(map[string]string{"INVOCATION_ID": "", "CUTEPI_SERVICE": "custom"})
+	// t.Setenv restores the original value afterwards: clearing it for good
+	// changed which restart path the rest of the suite would take.
+	t.Setenv("INVOCATION_ID", "")
+	os.Unsetenv("INVOCATION_ID")
 	if got := systemdUnit(); got != "" {
 		t.Fatalf("no INVOCATION_ID -> expected %q, got %q", "", got)
 	}
-	setenv(map[string]string{"INVOCATION_ID": "abc123", "CUTEPI_SERVICE": ""})
+	t.Setenv("INVOCATION_ID", "abc123")
 	if got := systemdUnit(); got != "cutepi" {
-		t.Fatalf("under systemd with no override -> expected cutepi, got %q", got)
-	}
-	setenv(map[string]string{"INVOCATION_ID": "abc123", "CUTEPI_SERVICE": "cutepi-custom"})
-	if got := systemdUnit(); got != "cutepi-custom" {
-		t.Fatalf("CUTEPI_SERVICE override -> expected cutepi-custom, got %q", got)
+		t.Fatalf("under systemd -> expected cutepi, got %q", got)
 	}
 }
 
@@ -1452,8 +1421,8 @@ func TestNowPlayingWidgetControlsMarkup(t *testing.T) {
 	if err := ctp.RegisterMedia("control-tone.wav", 40000, mediaProbe, "Control Tone"); err != nil {
 		t.Fatalf("RegisterMedia: %v", err)
 	}
-	if err := gsp.Load("control-tone.wav"); err != nil {
-		t.Fatalf("gsp.Load: %v", err)
+	if err := gsp.LoadWithOpts("control-tone.wav", gsp.DirectOpts("control-tone.wav", 0)); err != nil {
+		t.Fatalf("gsp.LoadWithOpts: %v", err)
 	}
 	body = get(t, r, "/api/nowplaying").Body.String()
 	for _, want := range []string{`id="nowplaying-scrubber"`} {
@@ -1749,8 +1718,8 @@ func TestInspectorSelfHealsStaleAudioMeta(t *testing.T) {
 
 // The per-cue playback columns (loop, colour, autofollow, fade) round-trip
 // through the API and are reflected in the rendered cuesheet/context-menu
-// attributes, and the /api/fade endpoint is wired.
-func TestCuePlaybackColumnsAndFadeAPI(t *testing.T) {
+// attributes.
+func TestCuePlaybackColumns(t *testing.T) {
 	r := setupTestServer(t)
 
 	if err := ctp.RegisterMedia("cols-route.mp4", 100, media.Metadata{
@@ -1805,11 +1774,6 @@ func TestCuePlaybackColumnsAndFadeAPI(t *testing.T) {
 	body = get(t, r, "/api/cuesheet").Body.String()
 	if !strings.Contains(body, "#ff0055") {
 		t.Fatalf("expected the cue colour in the rendered row, got:\n%s", body)
-	}
-
-	// /api/fade is wired (no active pipeline -> 200 no-op).
-	if w3 := post(t, r, "/api/fade"); w3.Code != 200 {
-		t.Fatalf("POST /api/fade = %d, want 200", w3.Code)
 	}
 }
 
@@ -2622,8 +2586,10 @@ func TestScheduleNextEndpoint(t *testing.T) {
 	postForm(t, r, "/api/setting/showmode", "showmode", "")
 }
 
-// The client caches nothing except images: static assets get no-store,
-// image paths get a short public cache.
+// The client caches nothing except images and stamped CSS/JS: unstamped
+// static assets get no-store, image paths a short private cache, CSS/JS
+// linked with the deployment stamp are kept for good; pool files under
+// /media never.
 func TestCachePolicy(t *testing.T) {
 	r := gin.New()
 	r.Use(CachePolicy())
@@ -2633,9 +2599,17 @@ func TestCachePolicy(t *testing.T) {
 	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("GET /src/ui.js Cache-Control = %q, want no-store", cc)
 	}
+	for _, p := range []string{"/src/ui.js?v=" + AssetStamp(), "/css/index.css?v=x"} {
+		if cc := get(t, r, p).Header().Get("Cache-Control"); cc != "private, max-age=31536000, immutable" {
+			t.Fatalf("GET %s Cache-Control = %q, want the immutable stamp cache", p, cc)
+		}
+	}
+	if cc := get(t, r, "/media/x.mp4?v=1").Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("a stamp must not make pool media cacheable: %q", cc)
+	}
 	w = get(t, r, "/img/cutepi-logo.svg")
-	if cc := w.Header().Get("Cache-Control"); cc != "public, max-age=3600" {
-		t.Fatalf("GET /img/cutepi-logo.svg Cache-Control = %q, want public, max-age=3600", cc)
+	if cc := w.Header().Get("Cache-Control"); cc != "private, max-age=3600" {
+		t.Fatalf("GET /img/cutepi-logo.svg Cache-Control = %q, want private, max-age=3600", cc)
 	}
 	w = get(t, r, "/")
 	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {

@@ -34,6 +34,8 @@ type Theme struct {
 	// Scheme is "light" or "dark": how Bootstrap's data-bs-theme is set while
 	// the theme is active.
 	Scheme string `json:"scheme"`
+	// Version is the generated ftl-themes CSS content hash for cache busting.
+	Version string `json:"version"`
 	// Variants are the theme's sub-themes (html[data-variant=<id>]), offered
 	// beneath it in the picker (contract "Palette variants").
 	Variants []ThemeVariant `json:"variants,omitempty"`
@@ -86,6 +88,7 @@ func Themes() []Theme {
 		Slug     string         `json:"slug"`
 		Label    string         `json:"label"`
 		Scheme   string         `json:"scheme"`
+		Version  string         `json:"version"`
 		Variants []ThemeVariant `json:"variants"`
 		Tint     *ThemeTint     `json:"tint"`
 	}
@@ -109,6 +112,7 @@ func Themes() []Theme {
 			// the layers so the app's unlayered CSS always wins.
 			Href:     "/ftl/themes/" + m.Slug + ".css",
 			Scheme:   scheme,
+			Version:  m.Version,
 			Variants: m.Variants,
 			Tint:     validTint(m.Tint),
 		})
@@ -132,15 +136,6 @@ var (
 	hexColorRE = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 )
 
-// ThemeNames reports the valid data-theme values.
-func ThemeNames() []string {
-	names := []string{}
-	for _, t := range Themes() {
-		names = append(names, t.Name)
-	}
-	return names
-}
-
 // ThemeMap is the id -> {name, href, scheme, variants, tint} map the
 // pre-paint boot script in header.html uses to pick a stylesheet, variant and
 // tint before the first render, and that ui.js reuses when the picker changes.
@@ -161,6 +156,7 @@ func ThemeMap() template.JS {
 // break template parsing in only one of them).
 func TemplateFuncs() map[string]any {
 	return map[string]any{
+		"appVersion":  func() string { return Version },
 		"contains":    strings.Contains,
 		"hasPrefix":   strings.HasPrefix,
 		"hasSuffix":   strings.HasSuffix,

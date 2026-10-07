@@ -125,6 +125,18 @@ htmx.on("htmx:after:request", (e) => {
     if (ok) hideModal("ytdlModal");
     return;
   }
+  if (el && el.id === "live-cue-form") {
+    const err = document.getElementById("live-error");
+    if (ok) {
+      el.reset();
+      if (err) { err.textContent = ""; err.classList.add("d-none"); }
+      hideModal("liveModal");
+    } else if (err) {
+      err.textContent = (e.detail.ctx?.text || "").trim() || "Could not add the live page.";
+      err.classList.remove("d-none");
+    }
+    return;
+  }
   if (el && el.id === "dropform" && ok) hideModal("uploadModal");
   if (el && el.id === "testHideBtn" && ok) { hideModal("testModal"); setTestPressed(false); }
   if (el && el.id === "deleteConfirmBtn" && ok) hideModal("deleteModal");
@@ -173,6 +185,23 @@ function hideModal(id) {
   if (m) m.hide();
 }
 
+// Swap #id for a rendered partial whose root is #id again and re-process its
+// htmx attributes. Returns the new element, or null when either is missing.
+function replaceById(id, html) {
+  const current = document.getElementById(id);
+  if (!current) return null;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = html.trim();
+  const replacement = wrapper.firstElementChild;
+  if (!replacement || replacement.id !== id) {
+    console.error("CuTePi: unexpected partial response for #" + id);
+    return null;
+  }
+  current.replaceWith(replacement);
+  if (window.htmx) htmx.process(replacement);
+  return replacement;
+}
+
 // --- Upload helpers (§5.7) -------------------------------------------------
 // Every upload path (modal, pool drop, /upload page, show import) checks the
 // batch against the media volume's free space first, and reports live
@@ -197,7 +226,6 @@ function cutepiCheckSpace(files) {
     })
     .catch(() => true);
 }
-window.cutepiCheckSpace = cutepiCheckSpace;
 // Floating progress card for uploads that have no modal of their own (pool
 // drag-and-drop). set(pct, text) updates it; done(text, ok) fades it out.
 function cutepiProgress(label) {
@@ -223,7 +251,6 @@ function cutepiProgress(label) {
     },
   };
 }
-window.cutepiProgress = cutepiProgress;
 // XHR POST with upload progress; onProgress(pct|null, phaseText). Resolves
 // {status, text}. pct null = indeterminate (the server is importing).
 function cutepiUpload(url, formData, onProgress) {
@@ -242,7 +269,19 @@ function cutepiUpload(url, formData, onProgress) {
     xhr.send(formData);
   });
 }
-window.cutepiUpload = cutepiUpload;
+
+// Server refusals are plain text (htmx requests), an error page (reason in
+// its <pre>) or, for a name clash, JSON with an "error" field.
+function uploadErrorText(status, text) {
+  try {
+    const j = JSON.parse(text);
+    if (j && j.error) return j.error;
+  } catch (err) { /* not JSON */ }
+  const body = (text || "").trim();
+  if (body && !body.startsWith("<")) return body.replace(/\s+/g, " ").slice(0, 300);
+  const doc = new DOMParser().parseFromString(body, "text/html");
+  return (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim().slice(0, 300) || ("server returned " + status);
+}
 
 // Name clashes are settled before any bytes are sent: ask the server which
 // names already exist (or repeat in the batch), then let the operator pick.
@@ -261,7 +300,6 @@ async function cutepiUploadChoice(files) {
   const choice = await askUploadConflict(conflicts);
   return choice ? { go: true, onConflict: choice } : { go: false };
 }
-window.cutepiUploadChoice = cutepiUploadChoice;
 
 function askUploadConflict(names) {
   return new Promise((resolve) => {
@@ -316,7 +354,6 @@ function cutepiUploadSummary(header) {
     return "Upload complete";
   }
 }
-window.cutepiUploadSummary = cutepiUploadSummary;
 
 // One dismissible bootstrap toast per error; the container is created lazily
 // so every page that loads ui.js gets feedback with no markup changes.
@@ -359,6 +396,7 @@ try {
     appThemeMap[DEFAULT_THEME_ID] = {
       name: document.documentElement.dataset.theme,
       href: boot.getAttribute("href"),
+      version: "",
     };
   }
 } catch (e) {}
@@ -368,7 +406,7 @@ fetch("/api/themes", { headers: { Accept: "application/json" } })
     if (Array.isArray(list)) {
       list.forEach((t) => {
         if (t && t.id && t.name && t.href) {
-          appThemeMap[t.id] = { name: t.name, href: t.href, scheme: t.scheme, variants: t.variants || [], tint: t.tint || null };
+          appThemeMap[t.id] = { name: t.name, href: t.href, scheme: t.scheme, version: t.version || "", variants: t.variants || [], tint: t.tint || null };
         }
       });
     }
@@ -468,10 +506,8 @@ function applyAppTheme(id) {
   applyIconSprite(id);
   const link = document.getElementById("cutepi-theme-css");
   if (link) {
-    // Keep the ?v= stamp the boot script put on the link so the swapped-in
-    // stylesheet caches under the same deployment version.
-    const v = (link.getAttribute("href") || "").split("?")[1];
-    link.href = appThemeMap[id].href + (v ? "?" + v : "");
+    const version = appThemeMap[id].version || document.documentElement.dataset.assetStamp || "";
+    link.href = appThemeMap[id].href + "?v=" + encodeURIComponent(version);
   }
   // The outgoing theme's tint token must not linger on <html>.
   const prev = appThemeMap[document.documentElement.dataset.themeId];
@@ -687,17 +723,7 @@ window.addEventListener("keydown", (e) => {
         if (!res.ok) throw new Error("server returned " + res.status);
         return res.text();
       })
-      .then((html) => {
-        const current = document.getElementById("cuesheet");
-        if (!current) return;
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = html.trim();
-        const replacement = wrapper.firstElementChild;
-        if (replacement && replacement.id === "cuesheet") {
-          current.replaceWith(replacement);
-          if (window.htmx) htmx.process(replacement);
-        }
-      })
+      .then((html) => replaceById("cuesheet", html))
       .catch((err) => console.error("CuTePi: delete failed", err));
   }
 }, false);
@@ -929,46 +955,135 @@ filterMedia();
   });
 })();
 
-// Delete is handled outside htmx because the control lives inside a native
-// draggable row. Capture the click before row-selection handlers can consume
-// it, then replace the authoritative cuesheet returned by the server.
-document.addEventListener("click", (e) => {
-  const button = e.target instanceof Element ? e.target.closest("[data-cue-delete]") : null;
-  if (!button) return;
-  // Shift/Ctrl-click is multi-select (§12.4): let the selection handler own
-  // it instead of deleting the cue out from under the operator.
-  if (e.shiftKey || e.ctrlKey || e.metaKey) return;
-  if (!needEditMode()) return;
-  e.preventDefault();
-  e.stopPropagation();
-  button.disabled = true;
-  fetch("/api/cue/" + encodeURIComponent(button.dataset.cueDelete), {method: "DELETE"})
-    .then((res) => {
-      if (!res.ok) throw new Error("server returned " + res.status);
-      return res.text();
-    })
-    .then((html) => {
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = html.trim();
-      const replacement = wrapper.firstElementChild;
-      const current = document.getElementById("cuesheet");
-      if (!replacement || replacement.id !== "cuesheet" || !current) {
-        throw new Error("unexpected cuesheet response");
-      }
-      current.replaceWith(replacement);
-      if (window.htmx) {
-        htmx.process(replacement);
-        if (document.getElementById("cueinspector-body")) {
-          htmx.ajax("GET", "/api/cue/inspector", {target: "#cueinspector-body", swap: "outerHTML"});
-        }
-      }
-    })
-    .catch((err) => {
-      button.disabled = false;
-      console.error("CuTePi: delete cue failed", err);
-      showToast("Delete cue failed: " + err.message);
-    });
+// --- Active Cues pane (§6.1.2): the media pool's mirror on the right ---
+// Collapse/expand from the footer button and drag-to-resize, both kept per
+// browser. The list re-renders on every WebSocket sync (one a second while
+// anything plays) and on reconnect; the footer button shows the count, so
+// it is useful collapsed too.
+(function () {
+  const pane = document.getElementById("activecues-pane");
+  const resizer = document.getElementById("activecues-resizer");
+  if (!pane || !resizer) return;
+
+  const STORAGE_WIDTH = "cutepi.activecues.width";
+  const STORAGE_COLLAPSED = "cutepi.activecues.collapsed";
+  const DEFAULT_WIDTH = 280;
+
+  function getWidth() {
+    try {
+      const w = parseFloat(localStorage.getItem(STORAGE_WIDTH));
+      return isNaN(w) || w < 160 ? DEFAULT_WIDTH : w;
+    } catch (e) {
+      return DEFAULT_WIDTH;
+    }
+  }
+  function setWidth(w) {
+    document.documentElement.style.setProperty("--activecues-width", w + "px");
+  }
+  function setCollapsed(state) {
+    document.body.classList.toggle("activecues-collapsed", state);
+    const t = document.getElementById("activecues-toggle");
+    if (t) {
+      t.setAttribute("aria-pressed", state ? "false" : "true");
+      t.classList.toggle("active", !state);
+    }
+    try {
+      localStorage.setItem(STORAGE_COLLAPSED, state ? "1" : "0");
+    } catch (e) {}
+  }
+  setWidth(getWidth());
+  try {
+    setCollapsed(localStorage.getItem(STORAGE_COLLAPSED) === "1");
+  } catch (e) {
+    setCollapsed(false);
+  }
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("#activecues-toggle")) {
+      setCollapsed(!document.body.classList.contains("activecues-collapsed"));
+    }
+  });
+
+  // The splitter sits left of the pane: dragging left widens it.
+  resizer.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = pane.getBoundingClientRect().width;
+    const minW = 160;
+    const maxW = Math.max(minW, window.innerWidth * 0.5);
+    const onMove = (ev) => {
+      setWidth(Math.min(maxW, Math.max(minW, startWidth - (ev.clientX - startX))));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      try {
+        localStorage.setItem(STORAGE_WIDTH, String(pane.getBoundingClientRect().width));
+      } catch (e) {}
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  function showCount(el) {
+    const badge = document.getElementById("activecues-count");
+    if (!badge || !el) return;
+    const n = parseInt(el.dataset.count || "0", 10);
+    badge.textContent = n > 0 ? String(n) : "";
+  }
+  showCount(document.getElementById("activecues"));
+  // Its own Stop/Fade buttons swap the list through htmx.
+  document.addEventListener("htmx:after:swap", (e) => {
+    if (e.detail?.ctx?.target?.id !== "activecues") return;
+    showCount(document.getElementById("activecues"));
+    document.dispatchEvent(new Event("cutepi-activecues"));
+  });
+
+  // A press on Stop / Fade out must not straddle a re-render (the browser
+  // drops a click whose press and release land on different elements).
+  let pressing = false, missed = false;
+  document.addEventListener("pointerdown", (e) => {
+    if (e.target instanceof Element && e.target.closest("#activecues")) pressing = true;
   }, true);
+  const release = () => {
+    if (!pressing) return;
+    pressing = false;
+    if (missed) { missed = false; setTimeout(refresh, 0); }
+  };
+  document.addEventListener("pointerup", release, true);
+  document.addEventListener("pointercancel", release, true);
+
+  let busy = false, again = false;
+  async function refresh() {
+    if (pressing) { missed = true; return; }
+    if (busy) { again = true; return; }
+    busy = true;
+    try {
+      const res = await fetch("/api/activecues", { headers: { "Accept": "text/html" } });
+      if (!res.ok) return;
+      const html = (await res.text()).trim();
+      const el = document.getElementById("activecues");
+      if (!el || pressing) { missed = pressing; return; }
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = html;
+      const next = wrapper.querySelector("#activecues");
+      if (!next) return;
+      showCount(next);
+      if (next.outerHTML !== el.outerHTML.replace(/ data-htmx-powered="[^"]*"/g, "")) {
+        el.replaceWith(next);
+        if (window.htmx) htmx.process(next);
+      }
+      // New positions from the server (the trim timeline's playhead).
+      document.dispatchEvent(new Event("cutepi-activecues"));
+    } catch (e) {
+      // Transient; the next sync retries.
+    } finally {
+      busy = false;
+      if (again) { again = false; refresh(); }
+    }
+  }
+  document.addEventListener("cutepi-sync", refresh);
+  document.addEventListener("cutepi-ws", (e) => { if (e.detail.connected) refresh(); });
+})();
 
 document.addEventListener("dragstart", (e) => {
     const bar = e.target.closest(".cue-progress-bar");
@@ -1079,18 +1194,6 @@ function patternOptions() {
     }
   }
 
-  // Replace #cuesheet with a rendered partial and re-process its htmx attrs.
-  function replaceCuesheet(html) {
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = html.trim();
-    const replacement = wrapper.firstElementChild;
-    const current = document.getElementById("cuesheet");
-    if (replacement && replacement.id === "cuesheet" && current) {
-      current.replaceWith(replacement);
-      if (window.htmx) htmx.process(replacement);
-    }
-  }
-
   // PUT a new column value and refresh on success.
   function putCol(cuePos, col, val) {
     const params = new URLSearchParams({col, val});
@@ -1139,7 +1242,7 @@ function patternOptions() {
     }).then((res) => {
       if (!res.ok) throw new Error("server returned " + res.status);
       return res.text();
-    }).then((html) => replaceCuesheet(html));
+    }).then((html) => replaceById("cuesheet", html));
   }
 
   document.addEventListener("contextmenu", (e) => {
@@ -1247,7 +1350,7 @@ function patternOptions() {
               return res.text();
             })
             .then((html) => {
-              replaceCuesheet(html);
+              replaceById("cuesheet", html);
             })
             .catch((err) => {
               console.error("CuTePi: bulk delete failed", err);
@@ -1261,7 +1364,7 @@ function patternOptions() {
               return res.text();
             })
             .then((html) => {
-              replaceCuesheet(html);
+              replaceById("cuesheet", html);
             })
             .catch((err) => {
               console.error("CuTePi: cue delete failed", err);
@@ -1288,7 +1391,7 @@ function patternOptions() {
             return res.text();
           })
           .then((html) => {
-            replaceCuesheet(html);
+            replaceById("cuesheet", html);
           })
           .catch((err) => {
             console.error("CuTePi: group create failed", err);
@@ -1366,16 +1469,7 @@ function patternOptions() {
         if (!res.ok) throw new Error("server returned " + res.status);
         return res.text();
       })
-      .then((html) => {
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = html.trim();
-        const replacement = wrapper.firstElementChild;
-        const current = document.getElementById("cuesheet");
-        if (replacement && replacement.id === "cuesheet" && current) {
-          current.replaceWith(replacement);
-          if (window.htmx) htmx.process(replacement);
-        }
-      })
+      .then((html) => replaceById("cuesheet", html))
       .catch((err) => {
         console.error("CuTePi: group action failed", err);
         showToast("Group action failed: " + err.message);
@@ -1594,16 +1688,7 @@ function patternOptions() {
         if (!res.ok) throw new Error("server returned " + res.status);
         return res.text();
       })
-      .then((html) => {
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = html.trim();
-        const replacement = wrapper.firstElementChild;
-        const current = document.getElementById("cuesheet");
-        if (replacement && replacement.id === "cuesheet" && current) {
-          current.replaceWith(replacement);
-          if (window.htmx) htmx.process(replacement);
-        }
-      })
+      .then((html) => replaceById("cuesheet", html))
       .catch((err) => {
         console.error("CuTePi: add cue failed", err);
         showToast("Add cue failed: " + err.message);
@@ -1910,8 +1995,13 @@ initNowPlaying();
     }
     return "/api/cue/inspector?_=" + Date.now();
   }
+  // A trim-timeline drag would die with the panel it is in: wait for the
+  // release (trimline.js signals it), then follow.
+  document.addEventListener("ctp-trim-released", () => {
+    if (refreshDirty && !saveInFlight) { refreshDirty = false; refresh(); }
+  });
   function refresh() {
-    if (saveInFlight) { refreshDirty = true; return; }
+    if (saveInFlight || window.ctpTrim?.pressing()) { refreshDirty = true; return; }
     clearTimeout(timer);
     timer = setTimeout(() => {
       // Cache-bust: without no-store headers the browser may reuse a cached
@@ -1922,9 +2012,18 @@ initNowPlaying();
     }, 0);
   }
 
+  // Both entry points below see the same render: follow each new #cuesheet
+  // node once (two fetches per click before).
+  let followed = null;
+  function sheetRendered() {
+    const sheet = document.getElementById("cuesheet");
+    if (!sheet || sheet === followed) return;
+    followed = sheet;
+    refresh();
+  }
   document.body.addEventListener("htmx:after:swap", (e) => {
     const t = e.detail.ctx?.target;
-    if (t && t.id === "cuesheet") refresh();
+    if (t && t.id === "cuesheet") sheetRendered();
   });
 
   // Only colour and auto-continue are visible on the cuesheet; rate, trim,
@@ -1963,7 +2062,7 @@ initNowPlaying();
     for (const m of muts) {
       for (const n of m.addedNodes) {
         if (n.nodeType === Node.ELEMENT_NODE && (n.id === "cuesheet" || n.querySelector("#cuesheet"))) {
-          refresh();
+          sheetRendered();
           return;
         }
       }
@@ -2262,8 +2361,36 @@ document.addEventListener("click", (e) => {
   // redundant full render on load.
   fetch("/api/cuesheet/status?version=0", {headers: {"Accept": "application/json"}})
     .then((r) => r.json()).then((b) => { lastSeen = b.version; }).catch(() => {});
+  // A sheet that arrived some other way (an action's response: a row
+  // click, GO, an edit) carries its version: no need to fetch it again when
+  // the sync for that same change arrives.
+  function domVersion() {
+    const el = document.getElementById("cuesheet");
+    const v = el ? parseInt(el.dataset.version, 10) : NaN;
+    return isNaN(v) ? 0 : v;
+  }
+  // The server signals a change as soon as it is made, often before the
+  // response of the request that made it (which carries the new sheet) has
+  // landed. While such a request is in flight, wait for it, then check.
+  let inFlight = 0, deferred = false;
+  const sheetRequest = (e) => e.detail?.ctx?.target?.id === "cuesheet";
+  document.body.addEventListener("htmx:before:request", (e) => { if (sheetRequest(e)) inFlight++; });
+  document.body.addEventListener("htmx:finally:request", (e) => {
+    if (!sheetRequest(e)) return;
+    inFlight = Math.max(0, inFlight - 1);
+    if (inFlight === 0 && deferred) { deferred = false; setTimeout(refresh, 0); }
+  });
   async function refresh() {
+    // Nor over an open inline editor: its save (or Escape) re-renders the
+    // sheet, and that request's end runs the deferred check.
+    if (inFlight > 0 || window.inlineEditing?.()) {
+      deferred = true;
+      // A double-click that opened no editor ends nothing: look again.
+      if (inFlight === 0 && !document.querySelector("#cuesheet #updateValue")) setTimeout(refresh, 400);
+      return;
+    }
     try {
+      if (domVersion() > lastSeen) lastSeen = domVersion();
       const status = await fetch("/api/cuesheet/status?version=" + lastSeen, {headers: {"Accept": "application/json"}});
       const body = await status.json();
       // Always advance lastSeen to server version to avoid tight loop
@@ -2547,28 +2674,29 @@ document.addEventListener("click", (e) => {
     if (btn) btn.disabled = false;
   });
 
+  // DOMParser builds an inert document: unlike innerHTML on a live-document
+  // element, an <img onerror> echoed back in an error message never runs.
   function stripHtml(html) {
-    var d = document.createElement("div");
-    d.innerHTML = (html || "").trim();
-    return (d.textContent || "").trim();
+    var doc = new DOMParser().parseFromString((html || "").trim(), "text/html");
+    return (doc.body.textContent || "").trim();
   }
 })();
 
 // In-cell editor helper: a double-click on a cue/group field opens an inline
-// editor, but those rows also re-render the whole sheet on a single click
-// (select). The row's "click[!justEdited()] delay:250ms" trigger and a
-// before:request veto consult this timestamp so the delayed select - which would land AFTER the editor
-// swapped in and wipe it - is suppressed when a double-click just happened.
+// editor, and those rows also select on a single click, which re-renders the
+// whole sheet. The select is sent at once (no delay: a click selects as fast
+// as an arrow key). Its response can land after a double-click has opened the
+// editor (or while its request is out), and swapping the sheet then would
+// wipe the editor: that swap is skipped. The selection is saved all the same,
+// and the editor's own save (or Escape) brings the new sheet.
 let inlineEditAt = 0;
 document.addEventListener("dblclick", (e) => {
   const t = e.target;
   if (t instanceof Element && t.closest(".cue-inline-edit")) inlineEditAt = Date.now();
 });
-// The second click of a double-click (detail === 2) lands well before the
-// first click's 250ms delayed select fires: stamp the guard now so that
-// pending select can't wipe the editor the dblclick just opened. (The
-// dblclick listener above fires too late for this — the editor doesn't exist
-// yet on the second click, and the first click's timer is already armed.)
+// The second click of a double-click (detail === 2) comes before the
+// dblclick event: stamp the guard now, so a select response landing between
+// the two is held back too.
 document.addEventListener("click", (e) => {
   if (!(e.target instanceof Element)) return;
   if (e.detail >= 2 && e.target.closest("#cuesheet .cue-inline-edit")) {
@@ -2595,11 +2723,11 @@ document.addEventListener("click", (e) => {
   }
 }, true);
 window.justEdited = () => Date.now() - inlineEditAt < 350;
-// htmx evaluates the trigger filter when the click arrives, not when the
-// 250ms delay expires, so also veto the delayed select at request time.
-document.body.addEventListener("htmx:before:request", (e) => {
+// An inline editor is open in the sheet (or a double-click just asked for one).
+window.inlineEditing = () => window.justEdited() || !!document.querySelector("#cuesheet #updateValue");
+document.body.addEventListener("htmx:before:swap", (e) => {
   const src = e.detail?.ctx?.sourceElement;
-  if (src instanceof Element && src.matches("tr.cue, tr.cuegroup") && window.justEdited()) e.preventDefault();
+  if (src instanceof Element && src.matches("tr.cue, tr.cuegroup") && window.inlineEditing()) e.preventDefault();
 });
 
 // QA harness: ?settings=1 opens the Settings modal directly (headless

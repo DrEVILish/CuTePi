@@ -78,8 +78,6 @@ func TestSelectedPlayRunsToEnd(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool { return strings.Contains(s, sub) }
-
 // The Tests toggle: on when dark, off when showing, unknown names rejected.
 // The on half needs a real videotestsrc; the 400 needs nothing.
 func TestTestToggleAndPatterns(t *testing.T) {
@@ -93,13 +91,13 @@ func TestTestToggleAndPatterns(t *testing.T) {
 	}
 	body := w.Body.String()
 	for _, want := range []string{`smpte`, `smpte100`, `snow`, `circular`, `solid-color`, `checkers-8`, `blink`, `bar`} {
-		if !contains(body, `"`+want+`"`) {
+		if !strings.Contains(body, `"`+want+`"`) {
 			t.Errorf("testpatterns missing %q", want)
 		}
 	}
 	// Curated set (§12.10): the rest of the videotestsrc enum stays out.
 	for _, bad := range []string{`smpte-rp-219`, `"circle"`, `"solid"`, `"pinwheel"`, `"zone-plate"`, `"smpte75"`} {
-		if contains(body, bad) {
+		if strings.Contains(body, bad) {
 			t.Errorf("testpatterns still carries invalid nick %s", bad)
 		}
 	}
@@ -111,18 +109,18 @@ func TestTestToggleCycle(t *testing.T) {
 		t.Skip("gst-launch-1.0 not available; skipping toggle test")
 	}
 	if out, err := exec.Command("gst-inspect-1.0", "videotestsrc").Output(); err != nil ||
-		!contains(string(out), "GstVideoTestSrcPattern") {
+		!strings.Contains(string(out), "GstVideoTestSrcPattern") {
 		t.Skip("videotestsrc unavailable; skipping toggle test")
 	}
 	t.Setenv("CUTEPI_WALL_SINK", "fakesink")
 	r := setupTestServer(t)
 	defer gsp.Stop()
 	w := post(t, r, "/api/test/toggle")
-	if w.Code != http.StatusOK || !contains(w.Body.String(), `"showing":true`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"showing":true`) {
 		t.Fatalf("toggle on = %d %s, want showing:true", w.Code, w.Body.String())
 	}
 	w = post(t, r, "/api/test/toggle")
-	if w.Code != http.StatusOK || !contains(w.Body.String(), `"showing":false`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"showing":false`) {
 		t.Fatalf("toggle off = %d %s, want showing:false", w.Code, w.Body.String())
 	}
 }
@@ -133,7 +131,7 @@ func TestEscFadeMsSetting(t *testing.T) {
 	if w := postForm(t, r, "/api/settings", "escFadeMs", "750"); w.Code != http.StatusOK {
 		t.Fatalf("POST settings escFadeMs = %d: %s", w.Code, w.Body.String())
 	}
-	if got := get(t, r, "/api/settings"); !contains(got.Body.String(), `"escFadeMs":750`) {
+	if got := get(t, r, "/api/settings"); !strings.Contains(got.Body.String(), `"escFadeMs":750`) {
 		t.Fatalf("settings lacks escFadeMs 750: %s", got.Body.String())
 	}
 	if w := postForm(t, r, "/api/settings", "escFadeMs", "99999"); w.Code != http.StatusBadRequest {
@@ -162,8 +160,8 @@ func TestThemeControlLivesInAppearanceTab(t *testing.T) {
 func requireH264Decoder(t *testing.T) {
 	t.Helper()
 	if out, err := exec.Command("gst-inspect-1.0").Output(); err != nil ||
-		!(contains(string(out), "avdec_h264") || contains(string(out), "openh264dec") ||
-			contains(string(out), "v4l2h264dec")) {
+		!(strings.Contains(string(out), "avdec_h264") || strings.Contains(string(out), "openh264dec") ||
+			strings.Contains(string(out), "v4l2h264dec")) {
 		t.Skip("no H.264 decoder plugin; cannot verify decoded playback")
 	}
 }
@@ -303,13 +301,13 @@ func TestNowPlayingFlagFollowsPause(t *testing.T) {
 	if w := post(t, r, "/api/cue/1/play"); w.Code != http.StatusOK {
 		t.Fatalf("play = %d: %s", w.Code, w.Body.String())
 	}
-	if body := get(t, r, "/api/nowplaying").Body.String(); !contains(body, `data-playing="1"`) {
+	if body := get(t, r, "/api/nowplaying").Body.String(); !strings.Contains(body, `data-playing="1"`) {
 		t.Fatalf("nowplaying while playing lacks data-playing=\"1\"")
 	}
 	if w := post(t, r, "/api/togglePause"); w.Code != http.StatusOK {
 		t.Fatalf("togglePause = %d: %s", w.Code, w.Body.String())
 	}
-	if body := get(t, r, "/api/nowplaying").Body.String(); !contains(body, `data-playing="0"`) {
+	if body := get(t, r, "/api/nowplaying").Body.String(); !strings.Contains(body, `data-playing="0"`) {
 		t.Fatalf("nowplaying while paused lacks data-playing=\"0\"")
 	}
 }

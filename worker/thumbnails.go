@@ -42,12 +42,12 @@ func RunThumbnailWorker(pollInterval time.Duration) {
 // resolution; a file already matching the target is left untouched (and the
 // check is cheap: a comma count, no JSON decode).
 func reFlagLowResWaveforms() {
-	pool, err := ctp.GetMediapool()
+	analysed, err := ctp.AnalysedWaveforms()
 	if err != nil {
 		log.Printf("worker: listing media for waveform rebuild: %v", err)
 		return
 	}
-	for _, m := range pool.Medias {
+	for _, m := range analysed {
 		if m.Waveform != "" && needsWaveformRebuild(m) {
 			if err := ctp.RequestWaveformAnalysis(m.Filename); err != nil {
 				log.Printf("worker: re-flagging low-res waveform for %q: %v", m.Filename, err)

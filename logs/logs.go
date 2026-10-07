@@ -194,6 +194,7 @@ const (
 	GSPPadAdded    = "GSP-E150" // stream pad-added detection detail
 	GSPWarm        = "GSP-E160" // prewarmed pipeline activated (deck-style cue load)
 	GSPFireTiming  = "GSP-E161" // cue fire latency measurement (build/preroll ms)
+	GSPBackground  = "GSP-E170" // background playlist track failed / playlist ended
 )
 
 // YDL - YouTube/yt-dlp import stages.
@@ -220,15 +221,12 @@ const (
 	RTEStop        = "RTE-E209" // POST /api/stop
 	RTETest        = "RTE-E210" // POST /api/test/*pattern
 	RTEDirect      = "RTE-E211" // POST /api/play/:filename (direct play)
-	RTELoad        = "RTE-E212" // POST /api/load/:filename
 	RTEAddCue      = "RTE-E213" // POST /api/cue/add
 	RTEDelete      = "RTE-E214" // DELETE /api/media/:filename
 	RTEDeleteBusy  = "RTE-E215" // cannot delete currently playing file
 	RTECueNext     = "RTE-E216" // POST /api/cue/next
 	RTECuePrev     = "RTE-E217" // POST /api/cue/prev
 	RTECuePlay     = "RTE-E218" // POST /api/cue/:cuePos/play
-	RTEUp          = "RTE-E219" // POST /api/cue/:cuePos/move/up
-	RTEDown        = "RTE-E220" // POST /api/cue/:cuePos/move/down
 	RTEUse         = "RTE-E221" // POST /api/cue/:cuePos (selected)
 	RTEEdit        = "RTE-E222" // POST /api/cue/:cuePos/edit/:col
 	RTEUpdate      = "RTE-E223" // PUT /api/cue/:cuePos/edit/:col
@@ -245,6 +243,16 @@ const (
 	NETListErr     = "NET-E300" // error fetching network interfaces
 	NETHotspot     = "NET-E310" // Wi-Fi hotspot applied (up/down/edited)
 	NETHotspotWarn = "NET-E311" // hotspot failed but the settings save went through
+)
+
+// SCH - wall-clock scheduler (routes/scheduler.go). All are warnings.
+const (
+	SCHFireFailed  = "SCH-E600" // a scheduled fire attempt failed (the first is retried once)
+	SCHFailed      = "SCH-E610" // a scheduled cue failed: it did not fire
+	SCHStalled     = "SCH-E620" // the scheduler stalled; cues due in the gap failed
+	SCHLate        = "SCH-E630" // a scheduled cue fired more than 1s late
+	SCHQueryFailed = "SCH-E640" // the due-cue query failed (nothing armed this pass)
+	SCHPrewarm     = "SCH-E650" // a scheduled cue's prewarm failed (it loads cold)
 )
 
 // AUD - structured playback audit records (also exposed to the Web UI).

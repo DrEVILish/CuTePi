@@ -9,6 +9,18 @@ remote control from Bitfocus Companion (HyperDeck and QLab).
 - **Servers:** [AGENTS.md](AGENTS.md) — the test (Pi 4) and dev machines and how to test on them.
 - **Codec test tools:** [tools/codec-corpus/](tools/codec-corpus/).
 
+## Running as a service
+
+On the Pi, from the checkout in `/opt/cutepi` (binary built there):
+
+```
+sudo deploy/install-service-user.sh
+```
+
+It creates the unprivileged `cutepi` system user, installs the polkit rules (`deploy/50-cutepi.rules`) and the unit
+(`cutepi.service`), copies existing data from `/root/cutepi` into `/var/lib/cutepi` (keeping the original), and
+restarts the service. See DESIGN.md §7 for what the service user is allowed to do and why.
+
 ## Codec support
 
 CuTePi is meant to play **any codec GStreamer can decode**: hardware decoders are fast paths, never the supported
@@ -152,9 +164,10 @@ The same support set through the GPU compositor wall (DESIGN §6.1.1), which is 
 is blended by the GPU and the display shows one finished picture per refresh, so the test reads the wall's own
 counters of frames actually put on screen (`GET /api/debug/glwall`) instead of tracing display planes. Fades change
 the opacity on every refresh when the CPU is free. Software codecs mostly play faster than on the plane wall,
-because late frames are shown and the decoder skips ahead to stay in step with the sound. H.264 plays slower,
-because the compositing uses memory bandwidth the hardware decoder needs (TEST_REPORT, "GPU wall: measured as the
-viewer sees it"). To refresh this table, run the service with `CUTEPI_WALL=gl` and:
+because late frames are shown and the decoder skips ahead to stay in step with the sound. The table below dates from
+2026-10-03; since 2026-10-07 the wall's threads run real-time (SCHED_FIFO) and H.264 1080p60 plays at 59.6–60.1
+(TEST_REPORT, "Performance round, 2026-10-07"), so its H.264 rows are out of date until the next full run. To refresh
+this table, run the service with `CUTEPI_WALL=gl` and:
 
 ```
 python3 tools/codec-corpus/support.py --section gl --readme README.md

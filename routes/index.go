@@ -3,12 +3,15 @@ package routes
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +100,13 @@ func mediapoolView() ([]MediapoolItem, error) {
 		if m.ThumbnailPending {
 			thumbnail = ""
 		}
+		// Cache-bust by the thumbnail's mtime: a refreshed thumbnail keeps
+		// its name, and images are cached for an hour (CachePolicy).
+		if thumbnail != "" {
+			if st, err := os.Stat(filepath.Join(config.ThumbnailLocation(), m.Filename+".jpg")); err == nil {
+				thumbnail += "?v=" + strconv.FormatInt(st.ModTime().UnixNano(), 36)
+			}
+		}
 		mediapool = append(mediapool, MediapoolItem{
 			Filename:  m.Filename,
 			Size:      formatSize(m.Size),
@@ -147,7 +157,19 @@ type MediaRow struct {
 // mediaInfoRows flattens the stored media_meta JSON into a presentation list
 // (VLC/ProPresenter-style codec detail). Empty values are skipped; a media
 // file without stored detail falls back to the base Media columns.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func mediaInfoRows(cue ctp.Cue) []MediaRow {
+	if cue.SourceKind == "endpoint" {
+		return []MediaRow{
+			{Label: "Source", Value: "Live page (rendered by WPE)"},
+			{Label: "URL", Value: cue.EndpointURL},
+			{Label: "Video", Value: "Display size, 30 fps; no audio"},
+		}
+	}
 	rows := make([]MediaRow, 0, 14)
 	add := func(label, value string) {
 		if value != "" && value != "0" {
@@ -161,7 +183,9 @@ func mediaInfoRows(cue ctp.Cue) []MediaRow {
 	// so the Media tab reflects the real streams even for old imports.
 	// A genuinely silent file is re-probed once; Reprobed is persisted so it is not probed again.
 	isAV := strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "audio/")
-	if isAV && info.Audio == nil && !info.Reprobed {
+	// Not for a missing file: the probe would fail, nothing would be stored,
+	// and every inspector render (one per sheet change) would probe again.
+	if isAV && info.Audio == nil && !info.Reprobed && !cue.Missing && fileExists(filepath.Join(config.MediaLocation(), cue.Filename)) {
 		if meta, perr := media.Probe(filepath.Join(config.MediaLocation(), cue.Filename)); perr == nil && meta.Info != nil {
 			info = *meta.Info
 			info.Reprobed = true
@@ -334,20 +358,43 @@ func replacementPool() []MediapoolItem {
 // typeIcon maps the cached MediaType kind to a Bootstrap icon class used for
 // the cue row's media-type glyph.
 
-// AssetStamp returns a value that changes with every deployment (the running
-// binary's mtime), used as a versioned query string on the CSS/JS URLs in
-// header/footer so browsers drop stale cached files without a hard refresh.
+// AssetStamp returns a value that changes with every deployment, used as a
+// versioned query string on the CSS/JS URLs in header/footer. Stamped files
+// are cached by browsers for good (CachePolicy), so the stamp is the newest
+// modification time of the binary and every static file, taken once at
+// startup: a rebuild, or a pull of CSS/JS alone and a restart, changes it.
 func AssetStamp() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "0"
-	}
-	info, err := os.Stat(exe)
-	if err != nil {
-		return "0"
-	}
-	return strconv.FormatInt(info.ModTime().Unix(), 36)
+	assetStampOnce.Do(func() {
+		var newest time.Time
+		note := func(t time.Time) {
+			if t.After(newest) {
+				newest = t
+			}
+		}
+		if exe, err := os.Executable(); err == nil {
+			if info, err := os.Stat(exe); err == nil {
+				note(info.ModTime())
+			}
+		}
+		for _, dir := range []string{"public", "third_party/ftl-themes/dist", "third_party/ftl-themes/assets"} {
+			filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					if info, err := d.Info(); err == nil {
+						note(info.ModTime())
+					}
+				}
+				return nil
+			})
+		}
+		assetStamp = strconv.FormatInt(newest.Unix(), 36)
+	})
+	return assetStamp
 }
+
+var (
+	assetStampOnce sync.Once
+	assetStamp     string
+)
 
 // TypeIcon maps a media kind to an ftl-themes icon-pack symbol id
 // (assets/icons/icons.svg#icon-<id>); the templates render it as
@@ -361,6 +408,8 @@ func TypeIcon(kind string) string {
 		return "music-note"
 	case "image":
 		return "image"
+	case "endpoint":
+		return "clock"
 	default:
 		return "file"
 	}
@@ -415,31 +464,30 @@ func nowplayingData() gin.H {
 	// bar truthful.
 	data["GoAdvance"] = ctp.GetGoAdvance()
 	if sheet, err := ctp.GetCuesheet(); err == nil {
-		if idx, err := ctp.SelectUnitIndex(); err == nil {
-			if units, err := ctp.SelectUnits(); err == nil && idx >= 0 && idx < len(units) {
-				u := units[idx]
-				describe := func(u ctp.SelectUnit) (string, string, string) {
-					if u.IsGroup {
-						for _, g := range sheet.Groups {
-							if g.GroupID == u.GroupID {
-								return g.CueNum, g.Name, g.Color
-							}
-						}
-					} else {
-						for _, cue := range sheet.Cues {
-							if cue.CuePos == u.CuePos {
-								return cue.CueNum, cue.Title, cue.Color
-							}
+		units := ctp.SheetUnits(&sheet)
+		if idx := ctp.UnitIndex(units); idx >= 0 && idx < len(units) {
+			u := units[idx]
+			describe := func(u ctp.SelectUnit) (string, string, string) {
+				if u.IsGroup {
+					for _, g := range sheet.Groups {
+						if g.GroupID == u.GroupID {
+							return g.CueNum, g.Name, g.Color
 						}
 					}
-					return "", "", ""
+				} else {
+					for _, cue := range sheet.Cues {
+						if cue.CuePos == u.CuePos {
+							return cue.CueNum, cue.Title, cue.Color
+						}
+					}
 				}
-				data["GoNum"], data["GoTitle"], data["GoColor"] = describe(u)
-				data["GoHasSel"] = true
-				if idx+1 < len(units) {
-					data["GoNextNum"], data["GoNextTitle"], _ = describe(units[idx+1])
-					data["GoHasNext"] = true
-				}
+				return "", "", ""
+			}
+			data["GoNum"], data["GoTitle"], data["GoColor"] = describe(u)
+			data["GoHasSel"] = true
+			if idx+1 < len(units) {
+				data["GoNextNum"], data["GoNextTitle"], _ = describe(units[idx+1])
+				data["GoHasNext"] = true
 			}
 		}
 		if playingPos := gsp.CurrentCuePos(); playingPos != 0 {
@@ -458,6 +506,28 @@ func nowplayingData() gin.H {
 // enrichCuesheetWithPlayback marks the currently-playing cue (by filename,
 // matching the active gsp pipeline) and fills its per-cue progress-bar data
 // (PlayPos/PlayDur in ms). Only one cue plays at a time.
+// The cuesheet marks running cues, but its version counts sheet edits only:
+// noteRunningCues bumps it when the set of running cues changed since the
+// last look (called on each client's status check, which every playback
+// broadcast triggers).
+var (
+	runningMu   sync.Mutex
+	runningSeen string
+)
+
+func noteRunningCues() {
+	pos := gsp.RunningCues()
+	sort.Ints(pos)
+	sig := fmt.Sprint(gsp.CurrentCuePos(), pos)
+	runningMu.Lock()
+	changed := sig != runningSeen
+	runningSeen = sig
+	runningMu.Unlock()
+	if changed {
+		ctp.NotifyCuesheetChanged()
+	}
+}
+
 func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 	// Wait countdown (§12.2): tag the cue a chain wait is counting down on.
 	if w := CurrentWait(); w.CuePos != 0 {
@@ -473,6 +543,15 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 				break
 			}
 		}
+	}
+	// Other running cues (§6.1.2): marked, without the focus's scrub bar
+	// (a seek acts on the focus).
+	running := map[int]bool{}
+	for _, pos := range gsp.RunningCues() {
+		running[pos] = true
+	}
+	for i := range cuesheet.Cues {
+		cuesheet.Cues[i].Running = running[cuesheet.Cues[i].CuePos]
 	}
 	// Match by cue position, not filename: two cues can reference the same
 	// media file, and filename matching highlights the wrong row.
@@ -504,6 +583,9 @@ func armNextCue(gen uint64, pos int) {
 	}
 	next, err := ctp.GetCue(strconv.Itoa(pos))
 	if err != nil {
+		return
+	}
+	if next.SourceKind == "endpoint" {
 		return
 	}
 	goSafe(func() {
@@ -573,6 +655,11 @@ func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 		CropR:     cue.CropR,
 		CropT:     cue.CropT,
 		CropB:     cue.CropB,
+		// Stop others off (§6.1.2): the running cues carry on and this one
+		// joins the stack at its layer.
+		KeepOthers:  !cue.StopOthers,
+		Layer:       cue.Layer,
+		UnderCuePos: ctp.CuePosByID(cue.LayerUnder),
 	}
 }
 
@@ -580,8 +667,32 @@ func loadAndPlayCue(cue ctp.Cue) error {
 	return loadAndPlayCueKeep(cue, false)
 }
 
+// loadCueSource puts a cue's source on the wall with opts: its media file,
+// or for a live page the WPE renderer (plus the availability watch that
+// swaps in the panic image if the page goes away). Every transport that
+// fires a cue (GO, slideshow, Awards, the scheduler) loads through here so
+// a live cue never reaches the file loader.
+func loadCueSource(cue ctp.Cue, opts gsp.LoadOpts) error {
+	if cue.SourceKind != "endpoint" {
+		return gsp.LoadWithOpts(cue.Filename, opts)
+	}
+	if err := gsp.LoadEndpointWithOpts(liveLabel(cue), cue.EndpointURL, opts); err != nil {
+		return err
+	}
+	watchEndpointAvailability(cue, gsp.Generation())
+	return nil
+}
+
+// liveLabel is what Now Playing shows for a live cue ("Live: <label>").
+func liveLabel(cue ctp.Cue) string {
+	if cue.Title != "" {
+		return cue.Title
+	}
+	return cue.EndpointTitle
+}
+
 func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
-	if err := gsp.LoadWithOpts(cue.Filename, cueOpts(cue, keepBackground)); err != nil {
+	if err := loadCueSource(cue, cueOpts(cue, keepBackground)); err != nil {
 		ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
 		return err
 	}
@@ -610,6 +721,106 @@ func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
 	}
 	return nil
 }
+
+// watchEndpointAvailability checks that the page remains reachable. The
+// TimerPi page owns its WebSocket/fallback update behavior; this probe only
+// detects a dead or unreachable HTTP page (WPE would otherwise just render
+// its own error page on the wall) so CuTePi can show its fallback.
+func watchEndpointAvailability(cue ctp.Cue, generation uint64) {
+	goSafe(func() {
+		mark := markTransport()
+		delay := 2 * time.Second
+		for {
+			time.Sleep(delay)
+			delay = 5 * time.Second
+			if gsp.Generation() != generation || !mark.unchanged() {
+				return // replaced, stopped or panicked: nothing to watch
+			}
+			if err := probeEndpoint(cue.EndpointURL); err != nil {
+				logs.PrintfWarn(logs.GSPPipeStopped, "live page %q unavailable: %v", cue.EndpointURL, err)
+				gsp.FailEndpoint(generation)
+				return
+			}
+		}
+	})
+}
+
+// probeEndpoint reports whether a live page answers with a non-error status.
+func probeEndpoint(pageURL string) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(pageURL)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// recoverLiveCue runs when the live cue at pos (fired as generation) loses
+// its page: mark the cue failed, show the panic holding image (black when
+// none is set), and bring the page back once it answers again — retrying
+// with backoff from 1s to 30s, and only while no operator action (Stop,
+// Panic, another cue) has superseded the fallback.
+func recoverLiveCue(pos int, _ string, generation uint64) {
+	if pos == 0 || gsp.Generation() != generation {
+		return
+	}
+	ctp.SetCueResult(pos, ctp.CueResultError)
+	if cue, err := ctp.GetCue(strconv.Itoa(pos)); err != nil || cue.SourceKind != "endpoint" {
+		return
+	}
+	mark := showLiveFallback()
+	delay := time.Second
+	var attempt func()
+	attempt = func() {
+		if !mark.unchanged() {
+			return // the operator moved on: Stop, Panic or another cue
+		}
+		next := func() {
+			delay = min(delay*2, 30*time.Second)
+			time.AfterFunc(delay, safe(attempt))
+		}
+		fresh, err := ctp.GetCue(strconv.Itoa(pos))
+		if err != nil || fresh.SourceKind != "endpoint" {
+			return // cue deleted or replaced meanwhile
+		}
+		// Reload only once the page answers: WPE renders a dead page as its
+		// own error screen, which must never replace the fallback.
+		if probeEndpoint(fresh.EndpointURL) != nil {
+			next()
+			return
+		}
+		if err := loadAndPlayCueKeep(fresh, false); err != nil {
+			logs.PrintfWarn(logs.GSPPipeStopped, "live page %q: reload failed: %v", fresh.EndpointURL, err)
+			mark = showLiveFallback()
+			next()
+			return
+		}
+		logs.Printf(logs.GSPPipeStopped, "live page %q back on air", fresh.EndpointURL)
+	}
+	time.AfterFunc(delay, safe(attempt))
+}
+
+// showLiveFallback cuts to the panic holding image exactly as Panic does
+// (the armed standby, else a fresh load, else black) and returns a mark of
+// the transport state it left.
+func showLiveFallback() transportMark {
+	_ = remotePanic()
+	return markTransport()
+}
+
+// transportMark snapshots the operator-decision counters. Generation is not
+// enough here: Stop and Panic do not move it, and an operator Stop during an
+// outage must cancel the live page's recovery.
+type transportMark struct{ halts, loads uint64 }
+
+func markTransport() transportMark { return transportMark{gsp.Halts(), gsp.Loads()} }
+
+func (m transportMark) unchanged() bool { return m == markTransport() }
 
 // waitState is the live wait countdown (§12.2): which cue is waiting, what
 // kind of wait, and when it ends (unix ms). The auto-continue chain writes
@@ -770,6 +981,9 @@ func autoContinueFrom(endingPos int) {
 // renderCuesheet fetches the cuesheet, tags the currently-playing cue, and
 // renders the partial. Shared by every action that returns the cuesheet HTML.
 func renderCuesheet(c *gin.Context) {
+	// Read before the sheet: the client takes this render as of this
+	// version, so a change landing during it still shows as newer.
+	version := ctp.CuesheetVersion()
 	cuesheet, err := ctp.GetCuesheet()
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, err.Error())
@@ -781,10 +995,12 @@ func renderCuesheet(c *gin.Context) {
 		"Rows":      sheetRowsWithSelection(&cuesheet),
 		"GoBar":     computeGoBar(&cuesheet),
 		"GoAdvance": ctp.GetGoAdvance(),
+		"Version":   version,
 	})
 }
 
 func Index(rg *gin.RouterGroup) {
+	gsp.SetEndpointFailureHook(recoverLiveCue)
 	// Auto-continue: when a cue with the autoContinue flag reaches its end,
 	// wait its postWait, then play the next cue in sheet order (waiting the
 	// next cue's preWait too if it is itself auto-continuing). Loop always
@@ -803,6 +1019,7 @@ func Index(rg *gin.RouterGroup) {
 			return
 		}
 
+		version := ctp.CuesheetVersion()
 		cuesheet, err := ctp.GetCuesheet()
 		if err != nil {
 			respondError(c, http.StatusInternalServerError, err.Error())
@@ -811,6 +1028,7 @@ func Index(rg *gin.RouterGroup) {
 		enrichCuesheetWithPlayback(&cuesheet)
 
 		data := nowplayingData()
+		data["Version"] = version
 		data["Mediapool"] = mediapool
 		data["Cuesheet"] = cuesheet
 		data["Rows"] = sheetRowsWithSelection(&cuesheet)
@@ -822,6 +1040,7 @@ func Index(rg *gin.RouterGroup) {
 				data["GroupInspector"] = gi
 			}
 		}
+		data["ActiveCues"] = activeCuesData()
 		data["ShowMode"] = ctp.GetShowMode()
 		data["title"] = "CuTePi"
 		c.HTML(http.StatusOK, "index.html", data)
@@ -855,6 +1074,16 @@ func Index(rg *gin.RouterGroup) {
 // directories are stripped, so no temp/media path leaks (O5).
 func importMedia(filename, srcPath string) (err error) {
 	defer func() { err = importError(err, filename, srcPath) }()
+	if !safeMediaName(filename) {
+		os.Remove(srcPath)
+		return fmt.Errorf("invalid filename %q", filename)
+	}
+	// Replacing the file under the running clip would swap its source
+	// mid-show (delete and rename refuse this too).
+	if gsp.CurrentPlaying() == filename && mediaFileExists(filename) {
+		os.Remove(srcPath)
+		return fmt.Errorf("can't replace the clip that is playing")
+	}
 	meta, err := media.Probe(srcPath)
 	if err != nil {
 		os.Remove(srcPath)

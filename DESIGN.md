@@ -15,7 +15,8 @@ selection, settings).
 - **Client**: HTML5/CSS3/vanilla JS, deps vendored under `public/src/` (no CDN).
 - **Media tooling**: ffmpeg/ffprobe (metadata, thumbnails, waveforms), yt-dlp
   (URL downloads).
-- **Playback**: GStreamer, including test-pattern playback.
+- **Playback**: GStreamer, including test-pattern playback; live web pages use
+  the optional WPE source from Debian's `gstreamer1.0-wpe` package.
 - **DB**: SQLite3 via `sqlx`
 - **Config/defaults**: `~/cutepi/config/config.json` (env-overridable), port
   3001 default in dev, port 80 in production and test, media in
@@ -82,6 +83,11 @@ selection, settings).
   **append to end or overwrite**.
 - **Logs**: viewable in the Web UI with level filter + clear; changing the level changes what is **recorded** (runtime switch). Structured playback events form an **audit trail** (append-only ring; clearing the log never clears it).
 - **yt-dlp**: URL import is a core, imperative feature (not a convenience).
+- **Live endpoint cues**: TimerPi display pages are video-only and use
+  WebSocket updates with a fallback transport. They have no natural end and
+  stay on the wall until Stop/Clear or another cue is triggered. Pairing,
+  authentication and credential storage are deferred until the playback path
+  works; see §12.14.
 
 ## 3. Architecture & repo layout
 
@@ -113,11 +119,17 @@ Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
 
 - `mediapool`: `media_id`, `filename` (unique), `mimetype`, `size`,
   `duration` (float sec), `resolution`, `thumbnail_pending`, `waveform`
-  (JSON peaks), `waveform_pending`, `missing` (source absent from disk),
+  (kept empty: peaks live in `media_waveform`), `waveform_pending`, `missing` (source absent from disk),
   `loudness_gain` (EBU R128), `media_meta` (ffprobe JSON for the Media tab),
-  `date_added`. `codec` and `media_title` were removed by migration
+  `date_added`. Live endpoint entries will need a source kind and endpoint URL
+  (with file-only fields nullable or in a separate endpoint table); they must
+  not be represented as fake filenames. `codec` and `media_title` were removed by migration
   (write-only, read by nothing) — codec detail lives in `media_meta`.
   Sort newest-first (`date_added DESC, media_id DESC`).
+- `media_waveform`: `media_id` (deleted with its media row), `peaks` (JSON), `updated` (unix ms). Kept apart because a
+  long clip's peaks are hundreds of KB: inside `mediapool`, every column after them was read through SQLite's overflow
+  pages, so every sheet render read every clip's whole waveform (80 cues over 10 long clips: 0.7 s per render). Bulk
+  reads (sheet, pool) never load peaks; the inspector links them (Cue Inspector, Time tab).
 - `cuesheet`: `cue_id`, order `cuePos` (unique, stable identity — never
   reindexed); `cueNum` (TEXT label); `media_id` FK → mediapool
   (ON DELETE CASCADE); `title`; `preWait`, `cueDuration`, `postWait`, trim
@@ -142,7 +154,7 @@ Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
   anchor + set), `escFadeMs`, `goAdvance`, `showMode`, `autoNumberCues`,
   `panicHoldImage`, `testPatterns` (pinned custom patterns).
 - `config.json`: port, `loop` (direct-load default), `auth_password`,
-  `allowed_hosts`, working-dir paths, audio device/channels/rate, hotspot
+  working-dir paths, audio device/channels/rate, hotspot
   SSID/password, remote enable flags + ports (see §12.8). Written atomically
   (temp file + rename) with file mode `0600`.
 - `<working dir>/tmp`: scratch space for uploads, `.CTP` imports and yt-dlp
@@ -216,6 +228,10 @@ One row, left to right:
 - Live Progress bar shown as background behind numerals of PreWait, Duration, PostWait if one of those items is in progress.
 - Sticky header, scrollable body. Columns: **icon** (media type / missing warning), **Number**, **Name**, **PreWait**, **Duration**, **PostWait**.
   per-cue actions live in the Inspector and the row context menu.
+- **A click selects a row at once** (no delay; as fast as the arrow keys: about 34 ms to the highlight against 270 ms with
+  the old 250 ms double-click delay). The first click of a double-click therefore selects too; if that response lands
+  once the inline editor is open (or the double-click has just asked for one), its sheet swap is skipped, and so are
+  sheet refreshes while an editor is open: the selection is saved, and the editor's save or Escape shows it.
 - All cells editable by double-click; save on blur/enter. **Escape cancels** the edit: the editor closes, the old value
   stays and nothing is saved (the Escape does not reach the transport, so it never fades out the show).
   Time parser: `hh:mm:ss.ms` or a bare number = seconds. Times (PreWait, Duration, PostWait) have **no upper limit**.
@@ -262,10 +278,25 @@ One row, left to right:
 - Built and behaved like the Media Pool pane: shared resizer/collapse chrome
   (collapse = fully hidden, one form spanning all tabs so any change saves instantly (htmx `change delay:200ms`).
 - Tabs (static strip in `index.html`; audio panes are omitted for image cues:
-  - **Time** — waveform trim timeline (canvas of JSON peaks, draggable In/Out markers; **only dragging a handle changes trim**; clicks elsewhere are inert),
-    Trim In/Out fields, Pre-Wait, Post-Wait, Loop + loop-count, Hold-last-frame, Auto-continue, fade-stop scope/time, playback-rate slider with 1× reset.
-    Renders even where duration is unknown (timeline duration-gated). The timeline shades the shared audio+video
-    fade-in/out envelope over the trim window (same curve the engine ramps).
+  - **Time** — the **trim timeline** (`public/src/trimline.js`; the ftl-themes `.waveform` with regions and markers):
+    - **Bars** from the clip's stored peaks (`GET /api/media/:filename/peaks?v=<stored time>`, cached by the browser
+      for good and kept parsed; the inspector HTML carries only the link), one per ~3 px; a shimmer while the
+      waveform is being analysed. A clip without audio has no bars; the timeline still works.
+    - **Trim window** = a region whose two edges are Trim In and Trim Out: drag a handle, or focus it and use the
+      arrow keys (one step: about a thousandth of the visible span, at least 1 ms), Page Up/Down (a tenth of the
+      clip) or Home/End. In and Out stay at least 50 ms apart. A change saves like the Trim In/Out fields (they are
+      updated from it). The region body does not move the window.
+    - **Clicks on the waveform do nothing.** The waveform's seek layer is only the **playhead**: while the selected
+      cue is running, the bars colour in up to its position, as the server reports it (the Active Cues data,
+      refreshed on each sync); no position is predicted in the browser. A hover chip shows the time at the pointer.
+    - **Fades** are drawn into the bars: each bar is the peak times the engine's fade gain at that moment (same curve
+      as the engine, §12.7; inside the trim window only), so the waveform shows what will be heard.
+    - **Markers**: In and Out times (hh:mm:ss.mmm), the fade-in end and fade-out start ("Fade in 2 s", on a second
+      row), and the trim length (a chip in the middle of the window).
+    - A drag is never cut short by an inspector refresh: the refresh waits for the release.
+    - Also on the tab: Trim In/Out fields, Pre-Wait, Post-Wait, Loop + loop-count, Hold-last-frame, Auto-continue,
+      fade-stop scope/time, playback-rate slider with 1× reset. The tab renders even where the duration is unknown
+      (the timeline needs one).
   - **Video** — video Fade In / Fade Out (times), then how the picture sits on the wall:
     - **Frame fit** (inside the picture's box — the display unless Position & size is set):
       **Fit** (whole picture, aspect kept, letterboxed), **Fill width** (as wide as the box; top/bottom overflow
@@ -290,7 +321,11 @@ One row, left to right:
   colour and structural settings are read when a cue fires — editing a playing cue never disturbs it.
   Exception: volume, mute, balance and rate are pushed live to the running pipeline when you edit the
   cue that is currently playing (and persisted for next time).
-- **Trim timeline extras**: Zoom mode (arm, then drag a box over the waveform), +/- zoom steps, Zoom reset; mouse-wheel pans a zoomed window left/right.
+- **Trim timeline zoom** (the app's own; requested upstream in `docs/upstream/ftl-themes-waveform-zoom.md`): Zoom mode
+  (arm, then drag a box over the waveform), +/- zoom steps, Zoom reset; mouse-wheel pans a zoomed window left/right.
+  Zoomed past the stored peaks' detail (windows under 60 s), a finer envelope for the window is fetched
+  (`/api/media/:filename/wave`). The window resets when another clip is selected. A trim point outside the window:
+  its edge is disabled and hidden (never read back clamped by the browser), its marker hidden.
   Deep zoom fetches a pixel-matched envelope (`/api/media/:name/wave`) so bars stay ~1 per CSS pixel at every depth.
   The zoom window survives inspector re-renders (saves don't reset view).
 - Top of the panel: cue badge, title, `Source: <file>`. When the source is missing, a warning banner replaces the timeline area with a **Re-link** dropdown (media pool) and **Delete cue**.
@@ -577,10 +612,10 @@ wall pipeline (always running)                                    ▼
 - **Quality notes.** The mixer composites in 8-bit RGBA at the output size. Unscaled layers are pixel-exact. Scaled
   layers use the GPU's bilinear filter, softer than the display controller's polyphase scaler, so full-screen,
   unscaled output is the reference case. Colour conversion follows each stream's colorimetry (`glcolorconvert`).
-- **Audio** stays per cue on its own sink for now (simultaneous cues, §6.1.2, add a mixer). The wall shows a frame
+- **Audio** goes through the audio bus (§6.1.2), one mixer on the device. The wall shows a frame
   later than its time: the presenter measures it on every frame (frame time to the vblank that latched it, a moving
-  average; 107–117 ms measured, plus half a refresh to the middle of the screen: 115–126 ms in all). Each cue's audio
-  sink gets that as its `ts-offset` when it is built, so the sound plays when the picture is seen (`autoaudiosink`
+  average; 107–117 ms measured, plus half a refresh to the middle of the screen: 115–126 ms in all). The bus's
+  device sink gets that as its `ts-offset` when it is built and whenever an input joins, so the sound plays when the picture is seen (`autoaudiosink`
   passes it to the sink inside). Not the pipeline latency: a non-live cue pipeline does not pass a configured latency
   on to its sinks (set to 120 ms, the audio sink received 0). `GET /api/debug/glwall` shows `displayDelayMs` and the
   current cue's `cueAudioOffsetMs`. Not measured acoustically (no ALSA loopback on the test machine); the monitor's
@@ -654,7 +689,11 @@ wall pipeline (always running)                                    ▼
   and no TFU copies traced; the same `DirectDmabufExternal` route as HEVC); the decoder simply has no spare capacity
   for the extra memory traffic. `v4l2h264dec` cannot output the tiled NC12 layout the hardware offers (GStreamer has
   no mapping for it). With the wall's threads ahead of the decoders H.264 High reached 57.8–58.4 shown (and steps):
-  level with the plane wall's 58.4 steady (whose fades step 30 times a second). Neither path reaches 59: the decoder
+  level with the plane wall's 58.4 steady (whose fades step 30 times a second). **Corrected 2026-10-07:** with every
+  wall thread on SCHED_FIFO 10 (now the default, `CUTEPI_WALL_RT`), H.264 1080p60 shows 59.6–60.1 in 8 of 8 runs and
+  59.8–60.2 through a 10-minute soak, so the remaining shortfall below was scheduling delay, not the decoder's memory
+  bandwidth (TEST_REPORT "Performance round, 2026-10-07"). The analysis that follows is kept for its measurements.
+  Neither path reaches 59: the decoder
   itself manages 63–66 fps on these clips with any display running. Closed options: switching the hidden console
   plane off (decoder 63.5 → 66.1 fps, but H.264 shown 56.5–57.6, no gain), and RGBA (AB24) from the decoder so the GPU
   samples a tiled copy (`v4l2h264dec` will not preroll with it). Left: the firmware's `h264_freq` (an overclock, the
@@ -766,10 +805,47 @@ A 25 fps animated GIF plays every frame, through the fades as well, now as a tim
 display: the plane's pixel format must carry alpha and its blend mode must be straight (Coverage), and an animated
 image must present every one of its frames at its own rate through the fades.
 
-### 6.1.2 Simultaneous cues (planned, after §6.1.1)
+### 6.1.2 Simultaneous cues and the layer stack (decided 2026-10-07)
 
-Several cues playing at once, each on its own layer, with one audio mixer (`audiomixer`) feeding the HDMI device;
-the interface and remote protocols show every running cue. What "stop others" means per cue is still to be decided.
+Any number of cues can run at once, each on its own display layer, stacked; the **Active Cues** pane lists them.
+
+- **Stop others** (per cue, Time tab toggle, on by default): when on, firing the cue fades out and stops every
+  running cue over the cue's fade-stop time (0 = cut), as before (§6.5): the outgoing cues stay above the new one
+  while they fade, so they reveal it. When off, the running cues carry on and the new cue joins the stack.
+- **Layer** (per cue, Video tab), used when Stop others is off:
+  - **Top** (default): above every running cue.
+  - **Bottom**: beneath every running cue.
+  - **Under cue N**: directly beneath cue N's layer. If cue N is not running when the cue fires, the cue goes to
+    **Top** and the log says so. N is stored by the cue's identity (`cue_id`), so reordering the sheet keeps it.
+- **Focus.** The most recently fired running cue is the focus: the transport's position, seek, rate and live
+  volume, Now Playing's details and the remote protocols' "current clip" refer to it. When it ends or is stopped,
+  the most recently fired remaining cue becomes the focus.
+- **Each running cue keeps its own behaviour:** trim, hold, loop and its end (auto-continue, post-wait) as if it
+  played alone. A live page on a lower layer keeps running; its recovery applies while it is the focus.
+- **Stop, ESC, Panic** end every running cue. **Pause/Play** pause and resume every running cue.
+- **Active Cues pane** (right side, a pop-out like the media pool on the left): every running cue in stack order,
+  top first, with its number, title, display layer (L1 = bottom), state, position and a **Stop** (cut) and
+  **Fade out** (the ESC fade time) for that cue alone. The footer's **Active** button shows or hides it and shows
+  the count of running cues; width and visibility are kept per browser. Unlike the media pool it stays in Show
+  mode. It re-renders on every WebSocket sync (`GET /api/activecues`; `POST /api/activecues/:cuePos/stop|fade`,
+  404 when that cue is not running). Without display layers (one picture) Fade out fades the cue the way ESC does.
+- **Cuesheet:** the focus row keeps the playing glow and scrub bar (a seek acts on the focus); every other running
+  cue's row has a steady tint. The sheet re-renders when the set of running cues changes.
+- **Slideshows** (§6.4): each slide replaces the last; members' Stop others and Layer do not apply inside one.
+- **QLab** (§12.8): `/runningCues` lists every running cue, top first, and `isRunning`/`isPaused`/elapsed are per
+  cue. `/cue/N/stop` (fading over the cue's fade-stop time), `hardStop` and `panic` stop cue N alone while other
+  cues run; with N the only cue they act as before. `pause`/`resume`/`togglePause` on cue N act on the transport
+  (every running cue) when N is the focus, and do nothing for another running cue.
+- **Sound.** Every cue's sound goes into one mixer (`interaudiosink` per cue → `interaudiosrc` → `audiomixer` →
+  the configured sink), so running cues are heard together at their own volumes. The HDMI device takes one stream
+  only (TEST_REPORT "Performance round, 2026-10-07": ALSA `dmix` cannot produce its format), so this is also what
+  lets a crossfade between two cues with sound play both.
+- **Stored** per cue as `stop_others` (1), `layer` (`top`) and `layer_under` (a `cue_id`, 0 = none). The inspector
+  takes cue N by its number and refuses an unknown cue or the cue itself. A `.CTP` show carries them as `stopOthers`
+  (absent in older shows = on), `layer` and `layerUnder` (the cue number); on import the link is made after every
+  cue is in, to the cue that number landed on (append mode renumbers).
+- **Limits:** the plane wall has one display plane per layer (16 on the Pi 4, one kept for the panic image); the
+  hardware decoders' totals apply (two 1080p60 H.264 layers cannot both run at full rate, HEVC can: §6.1.1).
 
 ### 6.2 Trim, Hold, Loop, Volume, Seek
 
@@ -835,6 +911,18 @@ Space (not in an editable field) → plays the selected cue; on a group selectio
 WebSocket hub (`/api/ws`) is the **only** channel: while playing, the pipeline ticker pushes one sync per displayed second over the socket.
 No polling anywhere — every widget (nowplaying, cuesheet, clocks) renders
 from socket pushes. The topbar shows the socket state as a status dot.
+- **The browser never acts ahead of the server.** Every change shown (selection, transport state, edits) comes from the
+  server's reply; nothing is predicted or applied optimistically. Speed comes from fast replies and fewer requests.
+- A sync is a signal only: each widget asks its status endpoint (`/api/cuesheet/status?version=`,
+  `/api/nowplaying/status?version=`) and fetches the partial only when its version moved.
+- Every cuesheet render carries its version (`data-version` on `#cuesheet`, read before the sheet, so the stamp is never
+  newer than the content: a change landing during a render costs at most one extra fetch, never a stale sheet). A sheet that arrived
+  as an action's response (row click, GO, edit, delete) therefore counts as seen: the sync for that same change does not
+  fetch it again. While an htmx request targeting `#cuesheet` is in flight, the refresher waits for it, since the sync
+  for a change usually arrives before the response of the request that made it. The inspector follows each new
+  `#cuesheet` node once.
+- One read of the sheet per render: the GO bar and Now Playing derive the selection walk from the sheet the handler
+  already loaded (`ctp.SheetUnits`, `ctp.UnitIndex`).
 
 ### 6.8b Scheduled fire (wall-clock)
 
@@ -844,6 +932,15 @@ The scheduler ticks every 200ms and fires cues due within the last 1s (one misse
 enabling Show mode late never replays the day's past cues. Each cue fires once per day (tracked by `cue_id`, so reordering the sheet
 mid-day neither re-fires nor blocks a cue); schedules arm only in Show mode. An armed fire re-checks at its second that Show mode is still
 on and the cue's schedule is unchanged, and records the cue's result and playing position on both the warm and cold paths.
+A scheduled cue fires within 1 s of its time or it has failed:
+- **Failed fire:** if the load fails (device busy, decoder error, file briefly unavailable) it is retried once, 250 ms later.
+  If the retry fails too, or the operator acts on the transport in between (fires a cue, Stop, Panic), the cue has failed for
+  the day.
+- **Stalled scheduler:** if the scheduler loop itself is held up (more than 1 s between its 200 ms passes), the cues that fell
+  due in the gap have failed. They are not fired late.
+Every failure is recorded: the cue's result shows the error, the log viewer gets a warning (`SCH-E600` failed attempt,
+`SCH-E610` cue failed, `SCH-E620` stall, `SCH-E630` fired over 1 s late, `SCH-E640` query failed, `SCH-E650` prewarm failed)
+and the audit trail gets a `schedule_failed` record.
 Multi-node sync-fire (several Pis firing the same second) assumes NTP-synced clocks and identical shows — each node fires on its own clock
 crossing. Decision-accurate, not output-accurate: pipeline build takes ~100s of ms, so frame-exact joint output needs timed pre-roll (v2).
 
@@ -874,6 +971,9 @@ moves the generation. Keep them consistent.
 
 ## 7. Error handling & logging
 
+- **Data ingress:** media upload (`/upload`) and show import (`/api/show/import`) are the only paths that bring data in, and the
+  only routes allowed bodies up to 2 GiB. Every other route is capped at 1 MiB (`LimitBody`), and a request declaring more is
+  refused (413) before it is read.
 - Failures at trust boundaries reject cleanly with conventional statuses:
   undecodable imports 422 at import rather than cue time; absent pool items
   404; delete-while-playing 409; firing a cue whose source is missing 409;
@@ -881,6 +981,10 @@ moves the generation. Keep them consistent.
   validation 400/422.
 - Optional auth: `AuthMiddleware` (config `auth_password`, editable in Settings) applies to all routes including static assets; browser basic-auth
   prompt; 401 wrong password; 200 once accepted. `GET /api/settings` reports `authEnabled` but never the password.
+  Responses never invite shared caching: media is `no-store`, images
+  `private`, CSS/JS linked with the deployment stamp `private, max-age=31536000, immutable` (the stamp is the newest
+  mtime of the binary and every static file, taken at startup, so each deployment changes the URLs), and the 401 `no-store`, so a reverse proxy or CDN can't replay
+  an authenticated response to someone without the password.
 - **Operator password is stored in plain text.** `auth_password` is kept
   unhashed in `config.json` (HTTP Basic needs nothing more, and the operator
   may need to read it back off the SD card). The file is created mode `0600`,
@@ -888,19 +992,41 @@ moves the generation. Keep them consistent.
   service user or root, or physical access to the SD card — can read it.
   Basic auth also sends it on every request in cleartext over plain HTTP, so
   it guards against casual access on the show LAN, not a hostile network.
+  CuTePi only ever sits on a trusted LAN (the trust model above), so it
+  serves plain HTTP and the password is optional: it keeps casual hands
+  off the controls, it is not a defence against the network.
   Don't reuse a valuable password here. The Wi-Fi hotspot password is
   stored the same way, and is also visible in the process list while
   `nmcli` runs.
+- **Service user.** CuTePi runs as the unprivileged `cutepi` system user (`cutepi.service`,
+  set up by `deploy/install-service-user.sh`); data lives in `/var/lib/cutepi` (`StateDirectory`,
+  `WORKING_DIR`), which is also the user's home (WebKit's caches). What it needs, and how it gets it:
+  - port 80: `CAP_NET_BIND_SERVICE`, the only capability (`AmbientCapabilities` / `CapabilityBoundingSet`,
+    `NoNewPrivileges=yes`). CuTePi clears its *ambient* set at load (`caps_linux.go`), so the programs it
+    starts get no capabilities: WebKit's bwrap sandbox refuses to run with unexpected ones, and the
+    failed web process took CuTePi down with it.
+  - the display: `video` (DRM master — the first program to open the device holds it, no root needed —
+    framebuffer, hardware decoders, DMA heaps); `render` (WebKit's GPU node); `audio` (ALSA).
+  - the console sharing the HDMI output: graphics mode needs `CAP_SYS_TTY_CONFIG` on a tty getty keeps
+    owner-only, so the unit's root steps `cutepi --console graphics|text` (ExecStartPre/ExecStopPost `+`)
+    set it; the mode stays after the step exits.
+  - Restart, Wi-Fi hotspot and instance rename: `systemctl restart cutepi.service`, `nmcli` and
+    `hostnamectl`, each allowed for the `cutepi` user alone by polkit (`deploy/50-cutepi.rules`).
+  The data paths in `config.json` are informational: the environment and defaults decide them, so a copy
+  stored by an older install cannot pin the data to its old place.
+- **YouTube import fetches any URL yt-dlp accepts** (decided: trusted LAN, operator-triggered, and other
+  sites yt-dlp supports are wanted). The URL is passed after `--`, so it cannot be read as an option, and
+  yt-dlp refuses `file://` URLs.
+- **Plain-text password: decided.** Kept as above (trusted LAN, optional, recoverable from the SD card).
+  A password starting or ending with whitespace is refused rather than silently trimmed.
 - **Cross-site guard** (`SameOrigin`, before auth): state-changing requests
   (anything but GET/HEAD/OPTIONS) whose `Origin`/`Referer` names another
   host get 403 — browsers attach cached Basic credentials to cross-site
   form posts, so the password alone does not stop CSRF. Requests with
-  neither header (curl, Companion) pass. The `Host` header must be an IP
-  literal, `localhost`, a dotless name, a name under a local-only suffix
-  (`.local`, `.lan`, `.home.arpa`, `.internal`), the machine hostname, or be
-  listed in config `allowed_hosts` (e.g. a reverse-proxy domain); anything
-  else gets 421 (DNS-rebinding guard: public DNS can't serve those names). The WebSocket handshake checks
-  `Origin` the same way.
+  neither header (curl, Companion) pass. The `Host` header is not
+  restricted: the app answers under any name so any reverse proxy works
+  without configuration. The WebSocket handshake checks `Origin` the same
+  way.
 - **Resource bounds**: request bodies cap at 2 GiB; a `.CTP` import is
   refused (507) when its declared media size plus 256 MiB headroom exceeds
   the media volume's free space. Scratch files live in `<working dir>/tmp`
@@ -1211,3 +1337,164 @@ single member, without the selection ever leaving the group header.
 - **Scope**: the member list is the group's subtree in sheet order (same
   scope as `playFirstGroupMember`/slideshow), snapshotted when the session
   starts.
+
+### 12.14 Live endpoint cues (TimerPi display pages, issue #4)
+
+Add a cue source that renders a live HTTP(S) page into CuTePi's existing
+HDMI wall path. It must participate in the normal cue transport, fades, waits,
+selection and recovery behavior. Keep the renderer behind a source interface
+so the cue engine does not depend on a particular browser implementation.
+TimerPi pages are video-only. They remain active until Stop/Clear or a user
+triggers another cue: there is no duration timeout, natural EOS, or automatic
+advance from AutoContinue. A replacement cue follows the existing cue-switch
+fade behavior; Stop/Clear and Panic retain their normal semantics.
+
+- **Renderer**: the first implementation uses GStreamer's `wpevideosrc` from
+  `gstreamer1.0-wpe`; it feeds the standard video processing path and wall
+  sink. The package is required on a Pi that will play endpoint cues, but is
+  optional on development systems that do not use them. Measure CPU/GPU/memory
+  use and confirm usable output on Pi 4 and Pi 5 before treating either model
+  as supported for live pages. Keep normal file playback working when the
+  plugin is absent; firing an endpoint then gives an actionable dependency
+  error.
+  *Measured on a Pi 4 (1080p60 KMS wall, 2026-10-05):* `wpevideosrc` →
+  BGRA `capsfilter` at the display size → `decodebin` (raw passthrough) →
+  the normal KMS tail, rendered at 15 fps (`endpointFPS`; fades run on the
+  plane, not the page). Pages render exactly as designed, animations
+  included: CuTePi never forces reduced motion on a display output. The
+  TimerPi display page's ftl-themes background drift costs WPE ~200–310%
+  CPU (a static page ~0.5%). CuTePi itself ~28% of a core at 15 fps (~54%
+  at 30). The display commits one frame per
+  rendered frame. (That count was taken on the plane, not the picture: until
+  2026-10-06 the plane stayed at alpha 0 and the wall showed black. Check
+  live output with the plane's `alpha` as well as its frames.) WebKit's two helper processes stay resident
+  and are reused after Stop; they do not accumulate, and a stopped page
+  stops running (0% CPU between fires). *Soak, 2026-10-06:* 30 fire/stop
+  cycles of a TimerPi page held WebKit at 300–370 MB RSS with no upward
+  trend (CuTePi ~175 MB), first frame 261–832 ms after Fire every time. A
+  heavier site caches more: google.co.uk grew ~30 MB per fire to ~900 MB
+  over 20 fires, and the same growth occurs with `wpevideosrc` outside
+  CuTePi, so it is WebKit's cache, not a pipeline leak.
+- **Renderer spike / fallback**: if WPE cannot meet the wall's resource budget,
+  evaluate a headless render-to-texture path. Do not use a normal desktop
+  browser or let a renderer compete with the wall for the display. Record the
+  measured minimum Pi model and supported frame size/rate before rollout.
+  The renderer must produce frames without taking DRM master.
+- **WebSocket and fallback**: the embedded TimerPi page owns its WebSocket
+  connection and its fallback update transport; WPE displays the page as
+  delivered. CuTePi probes the page's HTTP availability and responds to
+  renderer errors, but does not inspect whether TimerPi's WebSocket is fresh.
+  TimerPi must keep its own display current when WebSocket drops.
+- **Source model**: live pages are not media-pool items. The clock button in
+  the pool's add-buttons group opens "Add live page cue" (URL, optional name;
+  blank name = the page's host), which appends a cue to the sheet and
+  selects it (`POST /api/cue/live`). Each live cue owns one hidden
+  `mediapool` row (`source_kind = 'endpoint'`, URL, title); those rows are
+  excluded from the pool view, the HyperDeck clip list and the media worker.
+  Orphaned ones are removed by the asset-cache keeper (below), at startup
+  and within ~5 s of a cue going. Editing a cue's URL (Cue Inspector, Time
+  tab) changes only that cue: it gets a fresh source row, so the old one is
+  orphaned. The page reloads if the cue is on the wall. Authentication fields are reserved for the deferred
+  pairing work. Validate `http`/`https` URLs and reject local-file, script,
+  credential-bearing and other schemes, including in imported shows.
+  Endpoint cues use ordinary pre-wait, post-wait and fade fields, but have no
+  finite cue duration, trim, loop or EOS semantics; AutoContinue does not end
+  them. Keep endpoint fields in show export/import
+  and define an explicit credential policy before enabling endpoint export.
+  The pool and inspector must not show file-only duration, waveform, thumbnail,
+  re-link or missing-file actions for endpoint entries; endpoint reachability
+  is runtime health, not the file startup scan's `missing` flag. Include a DB
+  migration and update any file-source assumptions in media lookup/deletion.
+- **Asset cache**: a live page's `.js`, `.css`, images and fonts are kept in
+  WebKit's own HTTP disk cache (`~/.cache/cutepi/WebKitCache`), under the
+  server's cache headers. TimerPi sends a ~12 h `max-age`; `no-store`
+  responses are never cached. A keeper (`routes/livecache.go`, every 5 s):
+  - **Pre-load:** loads each live cue's page once per run, off screen
+    (private `wpevideosrc` → `fakesink`, 1 fps, no display plane, no
+    audio), so a fire loads from disk. It runs only while the wall is idle
+    (nothing on air, no test pattern) and stops the moment anything fires.
+    A pre-load costs about 1.5 cores for its ~1–3 s. It's retried a minute
+    after a failure.
+  - **Removal:** when a cue goes (deleted, URL changed, show cleared or
+    replaced) its source row is orphaned. The keeper removes the cached
+    assets of that site unless a remaining live cue uses the same site,
+    then deletes the row. With no live cue left it empties the cache.
+  - **Granularity is the site, not the cue:** WebKit files
+    `timer.example.com` under `example.com`, and two cues on one site share
+    its cache. Third-party asset hosts a page uses (CDNs) are only removed
+    when the last live cue goes; until then WebKit evicts them by its own
+    rules.
+  - **Runtime-only WebKit:** WebKit is reached at run time (`dlopen` of
+    `libWPEWebKit-2.0.so.1`, `gsp/webcache`), so no WebKit development
+    package is needed to build. Without WebKit, caching is off and the
+    keeper only prunes rows.
+  - **Sandbox folders:** WebKit leaves a sandbox folder per web-process
+    launch in `~/.cache/.flatpak/webkit-<pid>-<n>` and never removes it. The
+    keeper deletes the stale ones (owner gone, or sandboxed process exited)
+    at start and once a minute. It keeps the folder of the web process
+    WebKit holds for reuse. 78 had piled up on the test Pi.
+  *Measured on a Pi 4, TimerPi page:* on screen 0.7 s after Fire with a warm
+  cache, 1.9–2.5 s cold. Removing a site took its 25 cached records to 0
+  and left other sites' records alone.
+- **Pairing credential (deferred)**: authentication and credential design are
+  explicitly deferred until unauthenticated playback works end to end. Before
+  authenticated endpoints ship, support a room-scoped revocable TimerPi device token.
+  Store credentials separately from display titles and cue text; never include
+  them in logs, errors, WebSocket state, or exported show manifests by default.
+  Build the authenticated request only at runtime and redact the token from
+  renderer diagnostics. Prefer a renderer request/header mechanism; if the
+  TimerPi contract requires a URL parameter, ensure the URL is not persisted
+  and is stripped from logs/history. Provide re-pair / revoke guidance in the
+  editor. Define storage permissions and backup behavior for credentials.
+- **Playback integration**: implement endpoint playback as a video source
+  feeding CuTePi's existing wall sink, not a separately displayed window.
+  Make source switching use the same serialized
+  pipeline ownership and generation guards as file cues. Respect pre-wait,
+  cue start, Stop/Clear, replacement cue, post-wait and the cue's fade
+  settings. A live page has no natural EOS; only an operator transport action
+  ends it. TimerPi produces no audio; endpoint playback is video-only and must
+  not create or route a second audio stream. Ignore AutoContinue for endpoint
+  cues so it cannot end a page without an operator action.
+  Stopping or replacing it must release renderer and pipeline resources.
+  *When it appears:* a live page loads hidden. It renders on its own layer
+  at alpha 0 until WebKit reports the load complete (`wpe-stats`
+  `estimated-load-progress` 100) plus a 400 ms paint settle
+  (`livePaintSettle`, for late layout and web fonts), and only then is
+  shown and fades in. The audience never sees WebKit's blank white page or
+  a half-loaded one. New live cues get a 1 s fade-in (`LiveCueFadeInMs`),
+  editable like any cue. The cue it replaces stays on screen, sound
+  included, until the page is shown, even on a cut. It then cuts (fade-out
+  0) or crossfades over the page (the live cue's fade-out time). A page that
+  draws frames but never reports its load complete is shown after 15 s
+  (`liveLoadWait`). One that draws no frame within 20 s (`liveFrameWait`)
+  is treated as a renderer failure (the same handling as a pipeline
+  error). Measured on a Pi 4, TimerPi page: shown 0.5–2.5 s after Fire.
+- **Failure and recovery**: distinguish initial load failure from an active
+  endpoint dropping. Surface a clear cue error at initial failure. During an
+  active cue, transition to the configured panic holding image (existing
+  fallback to black if unavailable), then retry with bounded exponential
+  backoff. On recovery, restore the endpoint only if the same cue generation
+  is still current; Stop, Panic, or a newer cue always wins. Report state and
+  failure through the cue result indicator. Authentication is deferred, so
+  this first path does not carry credentials.
+- **Phased delivery**:
+  1. Measure the renderer spike on supported Pi hardware and document resource
+     limits and package/runtime dependencies.
+  2. Add endpoint source storage, validation and pool UI (without
+     authentication in this first working path);
+     cover database migration and `.CTP` import/export behavior.
+  3. Add renderer lifecycle and GStreamer wall-source integration with ordinary
+     cue transport, fade and teardown behavior.
+  4. Add disconnect detection, panic-image fallback, backoff and guarded
+     recovery; expose useful operator status and errors.
+  5. Verify using a TimerPi test page that changes over time over WebSocket and
+     fallback transport; test WebSocket loss, endpoint loss/recovery, cue
+     replacement/Stop/Panic during retry, and repeated cue fire/teardown for
+     leaks or stuck layers. Add authentication and revoked-token checks when
+     the deferred credential work is implemented.
+- **Acceptance**: an operator can add an endpoint and fire it through
+  the normal cue list; genuinely live page changes appear on HDMI; cue fades
+  and end behavior match other visual cues; endpoint loss shows the panic
+  image and recovers automatically only while that cue remains active; missing
+  or invalid endpoints produce actionable errors; no browser window, stuck
+  layer, leaked renderer, or credential disclosure occurs.

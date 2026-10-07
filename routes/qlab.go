@@ -23,17 +23,6 @@ import (
 	"CuTePi/logs"
 )
 
-// ListenOSC serves OSC datagrams until the socket closes. No-op replies
-// are the norm here: controllers fire-and-forget UDP actions.
-func ListenOSC(addr string) {
-	pc, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		logs.Printf(logs.RTEDeckErr, "osc listener: %v", err)
-		return
-	}
-	serveOSC(pc)
-}
-
 // startOSC binds synchronously and serves in the background; closing the
 // returned socket stops it.
 func startOSC(addr string) (io.Closer, error) {
@@ -56,20 +45,6 @@ func serveOSC(pc net.PacketConn) {
 			logs.Printf(logs.RTEDeckErr, "osc %s: %v", from, err)
 		}
 	}
-}
-
-// ListenOSCTCP serves the OSC dictionary over TCP, SLIP-framed (RFC 1055
-// END-delimited) as QLab 5 does, for the controllers that want replies —
-// Companion's QLab module and QLab Remote. Every message is answered with
-// QLab's reply envelope (qlabws.go). Shares the port number with the UDP
-// listener (different protocol, no conflict).
-func ListenOSCTCP(addr string) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		logs.Printf(logs.RTEDeckErr, "osc/tcp listener: %v", err)
-		return
-	}
-	serveOSCListener(ln)
 }
 
 // startOSCTCP binds synchronously and serves in the background; closing the
@@ -119,10 +94,6 @@ func (s *oscTCPServer) Close() error {
 	}
 	s.mu.Unlock()
 	return err
-}
-
-func serveOSCListener(ln net.Listener) {
-	(&oscTCPServer{ln: ln, conns: map[net.Conn]bool{}}).serve()
 }
 
 func serveOSCTCP(conn net.Conn) {

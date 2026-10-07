@@ -34,12 +34,8 @@ body.upload-body {
    .app-bar when one is linked (Bootstrap's bg-* utility, which these
    !importants used to outrank, is no longer on the topbar markup). */
 .navbar {
-  background: var(--ctp-surface);
-  border-bottom: 1px solid var(--ctp-border);
-}
-
-.navbar-brand {
-  color: var(--ctp-text);
+  background: var(--app-bar-bg, var(--ctp-surface));
+  border-bottom: var(--app-bar-rule-width, 1px) solid var(--app-bar-rule, var(--ctp-border));
 }
 
 .cutepi-logo {
@@ -49,12 +45,12 @@ body.upload-body {
 }
 
 .app-pane,
-.inspector-panel,
-.card,
-.modal-content {
+.inspector-panel {
   background-color: var(--ctp-surface);
   border-color: var(--ctp-border) !important;
 }
+.card { background-color: var(--card-bg, var(--ctp-surface)); }
+.modal-content { background-color: var(--modal-bg, var(--ctp-surface)); }
 
 /* Scrollbars: slim console rails. Transparent track (the pane surface shows
    through — no boxed gutter), translucent thumb that brightens toward the
@@ -84,6 +80,7 @@ body.upload-body {
 /* Console readout headers: pane + column titles set as tracked uppercase
    micro-labels in the muted tone — structure, not decoration. */
 #mediapool h5,
+#activecues h5,
 #cuesheet thead th,
 .inspector-header h6 {
   text-transform: uppercase;
@@ -156,26 +153,26 @@ body.upload-body {
   border-color: var(--ctp-accent-2);
 }
 
-.btn {
+html[data-theme-id^="app:"] .btn {
   border-radius: var(--ctp-radius);
 }
 
-.btn-primary {
+html[data-theme-id^="app:"] .btn-primary {
   --bs-btn-bg: var(--ctp-accent);
   --bs-btn-border-color: var(--ctp-accent);
   --bs-btn-hover-bg: var(--ctp-accent-2);
   --bs-btn-hover-border-color: var(--ctp-accent-2);
 }
 
-.btn-outline-primary {
+html[data-theme-id^="app:"] .btn-outline-primary {
   --bs-btn-color: var(--ctp-accent-2);
   --bs-btn-border-color: var(--ctp-accent-2);
   --bs-btn-hover-bg: var(--ctp-accent-2);
   --bs-btn-hover-border-color: var(--ctp-accent-2);
 }
 
-.btn-danger,
-.btn-outline-danger {
+html[data-theme-id^="app:"] .btn-danger,
+html[data-theme-id^="app:"] .btn-outline-danger {
   --bs-btn-bg: var(--ctp-danger);
   --bs-btn-border-color: var(--ctp-danger);
   --bs-btn-color: #fff;
@@ -183,13 +180,13 @@ body.upload-body {
   --bs-btn-hover-border-color: var(--ctp-accent);
 }
 
-.btn-success {
+html[data-theme-id^="app:"] .btn-success {
   --bs-btn-bg: var(--ctp-success);
   --bs-btn-border-color: var(--ctp-success);
   --bs-btn-color: #07131a;
 }
 
-.btn-warning {
+html[data-theme-id^="app:"] .btn-warning {
   --bs-btn-bg: var(--ctp-accent-2);
   --bs-btn-border-color: var(--ctp-accent-2);
   --bs-btn-color: #10101a;
@@ -426,101 +423,66 @@ html[data-theme] .btn.btn-youtube:hover {
   transform: rotate(-45deg);
 }
 
+/* Trim timeline (§5.5, public/src/trimline.js): the ftl-themes .waveform
+   with the trim window as a region, sized for the inspector. */
 .trim-timeline {
   position: relative;
-  height: 6.75rem;
-  border: 1px solid var(--ctp-border);
-  border-radius: var(--ctp-radius);
-  overflow: hidden;
-  background: color-mix(in srgb, var(--ctp-surface-2) 60%, var(--ctp-bg));
-  cursor: crosshair;
 }
-.trim-timeline .trim-waveform {
+.trim-timeline .waveform {
+  --waveform-height: 6.75rem;
+  --waveform-gap: 1px;
+}
+/* Clicking the waveform does nothing (the seek input is only the playhead),
+   so no tint grows toward the pointer; the hover time chip stays, and so
+   does the loading shimmer (the same layer). */
+.trim-timeline .waveform:not(.is-loading)::before {
+  display: none;
+}
+/* No playhead line unless this cue is running. */
+.trim-timeline .waveform:not(.has-playhead) {
+  --waveform-head: transparent;
+}
+/* A trim point outside the zoom window: its edge is disabled (never read
+   back clamped) and not drawn. */
+.trim-timeline .waveform-region > input:disabled {
+  visibility: hidden;
+}
+/* Fade-boundary chips: a second row, under the In/Out chips. */
+.trim-timeline .trim-mk-fade {
+  inset-block-start: 1.35rem;
+}
+/* Trim length: a chip centred at the bottom of the trim window. */
+.trim-timeline .trim-length {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0.55;
-}
-.trim-timeline .trim-shade {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  background: color-mix(in srgb, var(--ctp-bg) 70%, transparent);
-  pointer-events: none;
-}
-.trim-marker {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 5px;
-  background: var(--ctp-accent);
-  transform: translateX(-50%);
-  cursor: ew-resize;
-  touch-action: none;
-  z-index: 2;
-}
-.trim-marker::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 0;
-  height: 0;
-  border-left: 7px solid transparent;
-  border-right: 7px solid transparent;
-  border-top: 10px solid var(--ctp-accent);
-}
-.trim-marker-out {
-  background: var(--ctp-accent-2);
-}
-.trim-marker-out::before {
-  border-top-color: var(--ctp-accent-2);
-}
-.trim-time {
-  position: absolute;
-  bottom: 0.15rem;
-  font-size: 0.7rem;
-  background: color-mix(in srgb, var(--ctp-bg) 75%, transparent);
-  border-radius: 0.25rem;
-  color: var(--ctp-muted);
-  z-index: 3;
-  pointer-events: none;
-}
-.trim-length {
-  position: absolute;
-  top: 0.3rem;
-  right: 0.4rem;
-  font-size: 0.75rem;
-  font-weight: 600;
+  z-index: calc(var(--z-raised, 1) + 2);
+  inset-block-end: 0.2rem;
+  inset-inline-start: calc(var(--at, 0.5) * 100%);
+  translate: -50%;
+  padding: 0 0.35rem;
+  border-radius: var(--radius-sm, 2px);
+  background: color-mix(in srgb, var(--waveform-bg, var(--surface-2)) 80%, transparent);
+  color: var(--text);
+  font: 600 0.7rem/1.4 var(--font, inherit);
   font-variant-numeric: tabular-nums;
-  background: color-mix(in srgb, var(--ctp-bg) 75%, transparent);
-  border: 1px solid var(--ctp-border);
-  border-radius: 0.25rem;
-  padding: 0.05rem 0.4rem;
-  color: var(--ctp-accent);
-  z-index: 3;
+  white-space: nowrap;
   pointer-events: none;
 }
 /* Box-select rectangle shown while Zoom mode is armed and dragging. */
 .trim-zoomsel {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  inset-block: 0;
+  z-index: calc(var(--z-raised, 1) + 3);
   background: color-mix(in srgb, var(--ctp-accent) 18%, transparent);
   border: 1px solid var(--ctp-accent);
   pointer-events: none;
-  z-index: 1;
   display: none;
 }
 .trim-zoomsel.trim-zoomsel-active {
   display: block;
 }
-/* Zoom mode armed: the timeline reads as selectable, with an accent edge and
+/* Zoom mode armed: the waveform reads as selectable, with an accent edge and
    a zoom-in cursor while the box-select is active. */
-.trim-timeline.trim-zoom-active {
+.trim-timeline.trim-zoom-active .waveform {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ctp-accent) 45%, transparent);
   cursor: zoom-in;
 }

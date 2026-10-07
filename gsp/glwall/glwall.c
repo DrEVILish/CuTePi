@@ -38,6 +38,8 @@
 #include <gst/video/video.h>
 #include <math.h>
 #include <poll.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -203,13 +205,40 @@ static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC p_bindimg;
  * locking the system up. Per thread (Linux), and only once per thread. */
 #define WALL_NICE (-10)
 
-static void wall_thread_priority(void) {
+/* Real-time scheduling (default): every wall thread runs SCHED_FIFO 10, so
+ * no decoder or other work can delay the wall by a time slice. Measured on the
+ * Pi 4 (TEST_REPORT "GPU wall: real-time threads"): H.264 1080p60 shown at
+ * 59.6-60.1 in 8 of 8 runs against 56.5-58.9 at nice -10, HEVC 60, and the
+ * web UI still answering within 0.4 s through a 10-minute soak with a
+ * software decoder busy. Priority 10 stays below the kernel's interrupt
+ * threads (FIFO 50), and the kernel's RT throttling (sched_rt_runtime_us)
+ * keeps a runaway thread from locking the system. Unprivileged it needs
+ * RLIMIT_RTPRIO (the unit's LimitRTPRIO); without it, or with
+ * CUTEPI_WALL_RT=nice, the wall falls back to nice -10 (LimitNICE).
+ * CUTEPI_WALL_RT=presenter puts only the presenter on SCHED_FIFO. */
+#define WALL_RT_PRIO 10
+
+static void wall_thread_priority_rt(int presenter) {
   static __thread int done;
   if (done) return;
   done = 1;
+  const char *rt = g_getenv("CUTEPI_WALL_RT");
+  if (!rt || !*rt) rt = "all";
+  if (g_str_equal(rt, "all") || (presenter && g_str_equal(rt, "presenter"))) {
+    struct sched_param sp = { .sched_priority = WALL_RT_PRIO };
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0) {
+      GST_INFO("glwall: thread on SCHED_FIFO %d", WALL_RT_PRIO);
+      return;
+    }
+    g_printerr("glwall: SCHED_FIFO: %s (falling back to nice %d)\n", g_strerror(errno), WALL_NICE);
+  }
+  /* Printed, not a GStreamer debug line: losing the priority silently (an
+   * unprivileged service without LimitNICE) costs the wall refreshes. */
   if (setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), WALL_NICE) != 0)
-    GST_WARNING("glwall: thread priority: %s", g_strerror(errno));
+    g_printerr("glwall: thread nice %d: %s (cutepi.service needs LimitNICE=%d)\n", WALL_NICE, g_strerror(errno), WALL_NICE);
 }
+
+static void wall_thread_priority(void) { wall_thread_priority_rt(0); }
 
 /* ---- ring: dumb buffers on the display card ------------------------------ */
 
@@ -531,7 +560,7 @@ static gpointer wall_thread(gpointer d) {
  * sample (so its buffer stays out of the pool) until the next one has
  * replaced it; its slot is marked on screen so no alloc can hand it out. */
 static gpointer present_thread(gpointer d) {
-  wall_thread_priority();
+  wall_thread_priority_rt(1);
   frame_item *shown = NULL;
   for (;;) {
     frame_item *f = g_async_queue_timeout_pop(W.ready, 100000);

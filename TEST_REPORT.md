@@ -1168,6 +1168,141 @@ burst; the new "Nothing uploaded" wording), not behaviour. Go: every package pas
   would make it instant.
 - **Background refresh traffic (O2):** 4 requests per second per client while playing.
 
+## Performance round, 2026-10-07
+
+Pi 4 Model B Rev 1.5, 1080p60 HDMI, live service as the `cutepi` user (plane wall unless noted).
+
+**Bitstream and decode.** decodebin already feeds `v4l2h264dec` byte-stream, `alignment=au` (via `h264parse`), as the
+decoder requires; it outputs DMA_DRM YU12. Decode as fast as possible (`parsebin ! decoder ! fakesink sync=false`):
+
+| File | `v4l2h264dec` | `avdec_h264` (4 threads) | `v4l2slh265dec` | `avdec_h265` (4 threads) |
+|---|---|---|---|---|
+| `h264_high.mov` (testsrc2 1080p60, 7.4 Mbit/s), governor ondemand / performance | 73.5 / 74.5 | 116.9 / 120.0 | – | – |
+| `hevc_main.mkv` (1080p60), ondemand / performance | – | – | 125.7 / 128.3 | 111.4 / 111.1 |
+| `bbb_sunflower_1080p_30fps` (real footage, 3 Mbit/s) | 75.4 | 106.1 | – | – |
+| the same, re-encoded with x265 ultrafast | – | – | 121.1 | – |
+
+Software H.264 decodes faster than the hardware decoder on four cores; the cost of software decoding is moving the
+frames to the display (system memory), not decoding them. The CPU governor moves results by 1–3 %: not adopted.
+x265 encodes 1080p at 15.3 fps (ultrafast), 13.0 (superfast), 14.8 on real footage.
+
+**Display controller, atomic commits** (`atomic_planes`, a scratch C test, service stopped): one atomic commit per
+vblank carrying, for every layer, a new framebuffer **and** a new `alpha`, full-screen 1920×1080, 5 s each:
+
+| Layers | XRGB8888 | NV12 | NV12 SAND128 (the HEVC decoder's layout, `BROADCOM_SAND128_COL_HEIGHT`) |
+|---|---|---|---|
+| 1 | 60.1 commits/s, p99 16.74 ms | – | 60.0, p99 16.86 |
+| 2 | 60.1, p99 16.80 | 60.1, p99 16.77 | 60.2, p99 16.74 |
+| 4 | 60.1, p99 16.81 | 60.0, p99 16.75 | 60.2, p99 16.74 |
+| 6 / 8 | – | 60.0 / 60.1, p99 16.74 | – |
+
+No commit failed. The 60-commits-a-second ceiling of O1 (a) belongs to `kmssink`'s blocking legacy `SetPlane` and
+the separate alpha-property commits, not to the hardware; and the planes take SAND128 framebuffers, which GStreamer
+cannot describe (O1 (c)). Static buffers: no decoder competed for memory in this test.
+
+**GPU wall threads.** Since the service runs as `cutepi`, the wall's `setpriority(-10)` failed silently
+(EACCES), and H.264 on the GL wall fell to 46.1 / 55.9. `LimitNICE=-10` restores nice -10. H.264 MOV + MKV, 4 runs
+each: nice -10 56.5–58.9 (0 of 8 pass); SCHED_FIFO 10 on every wall thread **59.6–60.1 (8 of 8)**; presenter only
+58.6–58.7. HEVC 59.8–60.1 in every setting with nice or RT. 10-minute soak, RT on all wall threads, H.264 / HEVC /
+ProRes 422 (software) cycling: H.264 59.8–60.2 in 15 of 16 cycles (one 54.3), HEVC 59.9–60.0 in 16 of 16, ProRes
+7–36 (CPU-bound, as before); 48 cycles, no errors, no RT throttling, no thermal throttling (55 °C max); the web UI
+answered 256 polls within 0.39 s. Adopted: SCHED_FIFO on all wall threads is the GL wall's default.
+
+**Soak, plane wall** (`support.py --soak 10`, H.264 High + MPEG-2): 49 cycles, no errors; steady frame interval p99
+16.7 ms in 45 of 49 cycles; the drops were on the first cycles and in three MPEG-2 (software) cycles (worst 17
+repeated refreshes, 44 ms max). Service + WebKit memory 480 → ~545 MB, flat after the first minutes; CMA free ≥ 60
+MB; 50.6 °C max, no throttling.
+
+**Audio.** ALSA `default` on the HDMI card does not mix: a second stream gets "Device or resource busy", and the
+card's `dmix` device cannot produce its format ("requested or auto-format is not available"). Concurrent sound needs
+a mixer in CuTePi.
+
+## Simultaneous cues on the wall, 2026-10-07
+
+Live service on the test Pi (plane wall), driven through the HTTP API; planes read from
+`/sys/kernel/debug/dri/1/state` (no `/dev/dri` access), sound from `/proc/asound/card0/pcm0p/sub0`.
+
+| Check | Result |
+|---|---|
+| Layer order: cue 1.5 (SMPTE still) fired, cue 10 (blue still, Stop others off, Bottom), cue 15 (video, Stop others off, Under 1.5) | Three overlay planes: blue zpos 1, video zpos 2, SMPTE zpos 3 (fbcon 0). Active Cues: 1.5 L3, 15 L2 (transport), 10 L1. **Pass.** |
+| Two cues with sound (bbb clip, then a tone with Stop others off) | Both listed as Playing; HDMI substream RUNNING once, owned by a service thread; no "busy"/open errors. Audible mix not measured (no ALSA loopback on this Pi; `TestVoicesShareTheAudioDevice` covers both inputs feeding the bus). |
+| Active Cues Fade out on cue 4 | "stop cue 4 alone (fade 1000 ms)"; its plane gone after the fade; the tone kept running. **Pass.** |
+| Stop with two sound cues | Both end; the bus releases the HDMI device within 3 s (substream `closed`). **Pass.** |
+| Found and fixed | The audio bus mixer's `force-live` (construct-only) was set after construction and refused (GLib warning in the log); now set at construction. |
+| Found and fixed (dev server browser check) | An image cue with a blank display duration could not be saved from the inspector (400, `cueDuration` ""); the Stop others checkbox was squashed by the flex row; both fixed. |
+| Found and fixed | Inspector-saved cues had opacity 0 in the DB (the column was not loaded, so 0 was shown and written back); a one-time repair sets them to 100. The test sheet had three. |
+
+The sheet was restored afterwards (cues 10 and 15 back to Stop others on / Top; the tone cue and file removed).
+
+## Web UI responsiveness, 2026-10-07
+
+**Live test Pi, 7-cue sheet, from the dev server over the LAN** (ping 0.26 ms, so these are server time): `GET /` 42 ms,
+`/api/cuesheet` 17 ms, `/api/nowplaying` 13.5 ms, `/api/cue/inspector` 6.4 ms. Most of it was SQLite reading the one
+long clip's waveform (343 KB).
+
+**Show-sized sheet** (`routes/sheet_bench_test.go`: 80 video cues over 10 clips, each with a ~360 KB waveform, a video cue
+selected, database on the SD card), Pi 4, per request:
+
+| Request | Before | After | Response before → after |
+|---|---|---|---|
+| Row click (`POST /api/cue/:pos`, returns the sheet) | 698 ms | 25 ms | 145 KB |
+| Sheet (`GET /api/cuesheet`) | 693 ms | 25 ms | 145 KB |
+| Now Playing (`GET /api/nowplaying`) | 674 ms | 5.8 ms | 0.8 KB |
+| Inspector (`GET /api/cue/inspector`) | 39 ms | 3.8 ms | 407 KB → 48 KB |
+| Inspector save (`PUT`) | 40 ms | 3.9 ms | 407 KB → 48 KB |
+| Media pool (`GET /mediapool`) | 34 ms | 1.4 ms | 14 KB |
+| Full page (`GET /`) | 1478 ms | 42 ms | 636 KB → 280 KB |
+
+A row click used to cost each connected client a further sheet, Now Playing and inspector render (about 1.4 s of server
+time per client). Now the click's own response counts as the new sheet, so the sync after it fetches only Now Playing
+and the inspector.
+
+Causes and fixes:
+1. **Waveforms in `mediapool` rows.** Columns stored after a large TEXT value are read through its overflow pages (measured
+   in isolation: 0.10 ms vs 4.8 ms per 10-row scan), so every sheet, Now Playing and pool read pulled every clip's whole
+   waveform even without selecting it. Peaks moved to their own table `media_waveform` (migrated at startup).
+2. **Waveform inside the inspector HTML** (360 KB, attribute-escaped on every render, `JSON.parse`d on every redraw while
+   dragging). Now `GET /api/media/:filename/peaks?v=<stored time>`, cached for good, parsed once per clip.
+3. **Three sheet reads per render** (handler, GO bar, selection index): now one.
+4. **The sheet fetched twice after a click.** Renders carry `data-version`; the refresher counts a sheet received as an
+   action's response as seen.
+5. **Inspector re-probing a missing file** with ffprobe on every render (~250 ms each, separate from the inspector's
+   39 ms above; the probe fails, so nothing was stored and it repeated). Skipped when the file is missing.
+6. **CSS/JS served `no-store`** (~700 KB per page load). Stamped URLs are now `immutable`; the stamp covers the binary and
+   every static file.
+
+**Browser check (dev server, Playwright):** a row click now makes one POST (the sheet), one inspector and one Now Playing
+fetch; before, the sheet was fetched twice (the sync raced the POST's response) and the inspector three times. A clip's
+peaks are fetched once and reused when it is selected again. On a second page load the stamped CSS/JS come from the browser cache: the server log shows each requested once across
+two loads (Chromium's resource timing still lists ~375 B per file); `dropzone.js` was linked without the stamp and was
+fetched every time, now stamped. No
+console errors. **Test Pi, live, 7-cue sheet:** `GET /` 42 → 21 ms, `/api/cuesheet` 17 → 7 ms, `/api/nowplaying`
+13.5 → 3.6 ms. The waveform migration moved the one stored waveform (343 KB) intact; a backup of the database from before
+it is `/root/ctp.db.pre-waveform-move-2026-10-07`.
+
+Not changed: SQLite `synchronous` (a selection write costs ~0.3 ms on the SD card); the remaining sheet render cost is
+mostly template execution (~15 ms for 80 rows).
+
+## Row click vs arrow keys, 2026-10-07
+
+Dev server, Playwright, 20-cue sheet, median of 12, from the input to the row highlighted:
+
+| | Request sent | Row highlighted |
+|---|---|---|
+| Click, before (`hx-trigger="click[!justEdited()] delay:250ms"`) | 253 ms | 270 ms |
+| Click, after (no delay) | 2 ms | 34 ms |
+| Arrow key | 1 ms | 13–17 ms |
+
+The server answers both in 2–4 ms. The remaining ~20 ms between click and arrow is in the browser: the click's response
+completes later and the sheet swap under the pointer takes ~12 ms.
+
+The delay existed so a double-click's first click could not re-render the sheet over the editor the double-click opens.
+Now the select goes at once, and ui.js skips a row-select response's sheet swap (and sheet refreshes) while an inline
+editor is open or was just asked for. Double-click checks (PreWait cell, open the editor, type, Enter): 0 ms, 120 ms and
+250 ms between the clicks on an unselected row, and on the selected row: the editor opened, the value saved, the row ended
+selected, in every case; a single click still selects; no console errors. **Control:** with the swap guard disabled, the
+0 ms double-click lost its editor, so the test does exercise the race.
+
 ## Open findings (not fixed; need a decision)
 
 ### O1 — Frame rate: 1080p60 plays at 60 fps; fades, two layers and HEVC do not (major)

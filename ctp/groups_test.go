@@ -45,13 +45,13 @@ func TestCueGroupsCRUDAndMembership(t *testing.T) {
 	}
 
 	// Assign g-a and g-b to the inner group; g-c to the outer group.
-	if err := SetCueGroup(itoa(positions["g-a.mp4"]), inner); err != nil {
+	if err := SetCueGroup(strconv.Itoa(positions["g-a.mp4"]), inner); err != nil {
 		t.Fatalf("SetCueGroup a: %v", err)
 	}
-	if err := SetCueGroup(itoa(positions["g-b.mp4"]), inner); err != nil {
+	if err := SetCueGroup(strconv.Itoa(positions["g-b.mp4"]), inner); err != nil {
 		t.Fatalf("SetCueGroup b: %v", err)
 	}
-	if err := SetCueGroup(itoa(positions["g-c.mp4"]), outer); err != nil {
+	if err := SetCueGroup(strconv.Itoa(positions["g-c.mp4"]), outer); err != nil {
 		t.Fatalf("SetCueGroup c: %v", err)
 	}
 
@@ -138,10 +138,10 @@ func TestCueGroupsRenderFlatOrder(t *testing.T) {
 		t.Fatalf("AddCue 2: %v", err)
 	}
 	p2, _ := lastCuePos()
-	if err := SetCueGroup(itoa(p1), group); err != nil {
+	if err := SetCueGroup(strconv.Itoa(p1), group); err != nil {
 		t.Fatalf("SetCueGroup 1: %v", err)
 	}
-	if err := SetCueGroup(itoa(p2), group); err != nil {
+	if err := SetCueGroup(strconv.Itoa(p2), group); err != nil {
 		t.Fatalf("SetCueGroup 2: %v", err)
 	}
 
@@ -160,10 +160,6 @@ func TestCueGroupsRenderFlatOrder(t *testing.T) {
 	if members[1] != members[0]+1 {
 		t.Fatalf("group members not contiguous: %+v", members)
 	}
-}
-
-func itoa(i int) string {
-	return strconv.Itoa(i)
 }
 
 // TestGroupMembershipStaysContiguous is the runnable check for the
@@ -214,21 +210,13 @@ func TestGroupMembershipStaysContiguous(t *testing.T) {
 		return m
 	}
 
-	if err := SetCueGroup(itoa(posByTitle()[titles[0]]), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(posByTitle()[titles[0]]), gid); err != nil {
 		t.Fatalf("SetCueGroup A: %v", err)
 	}
-	if err := SetCueGroup(itoa(posByTitle()[titles[1]]), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(posByTitle()[titles[1]]), gid); err != nil {
 		t.Fatalf("SetCueGroup B: %v", err)
 	}
 	// Sheet: A(gid), B(gid), C, D top-level.
-
-	// Move the top-level cue up into the group's span: it joins.
-	if err := MoveCueUp(itoa(posByTitle()[titles[2]])); err != nil {
-		t.Fatalf("MoveCueUp: %v", err)
-	}
-	if p := parentByTitle()[titles[2]]; p != gid {
-		t.Errorf("cue moved between members: parent = %d, want %d", p, gid)
-	}
 
 	// Insert at the sheet head (before the group's run): stays top-level.
 	if err := AddCue("contig.mp4", "1"); err != nil {
@@ -253,7 +241,7 @@ func TestGroupMembershipStaysContiguous(t *testing.T) {
 	if len(gidSlots) < 2 {
 		t.Fatalf("need 2+ group members for the mid-insert check, have %d", len(gidSlots))
 	}
-	if err := AddCue("contig.mp4", itoa(gidSlots[1])); err != nil {
+	if err := AddCue("contig.mp4", strconv.Itoa(gidSlots[1])); err != nil {
 		t.Fatalf("AddCue mid-group: %v", err)
 	}
 	if p := parentByTitle()["contig.mp4 (6)"]; p != gid {
@@ -265,7 +253,7 @@ func TestGroupMembershipStaysContiguous(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	if err := SetCueGroup(itoa(posByTitle()[titles[3]]), gid2); err != nil {
+	if err := SetCueGroup(strconv.Itoa(posByTitle()[titles[3]]), gid2); err != nil {
 		t.Fatalf("SetCueGroup D: %v", err)
 	}
 	sheet, err = GetCuesheet()
@@ -347,7 +335,7 @@ func TestFlattenSheetCollapseHidesMembers(t *testing.T) {
 	}
 	sheet, _ := GetCuesheet()
 	for _, c := range sheet.Cues {
-		if err := SetCueGroup(itoa(c.CuePos), gid); err != nil {
+		if err := SetCueGroup(strconv.Itoa(c.CuePos), gid); err != nil {
 			t.Fatalf("SetCueGroup: %v", err)
 		}
 	}
@@ -429,20 +417,20 @@ func TestSheetDropBetweenGroupsStaysTopLevel(t *testing.T) {
 		titles = append(titles, c.Title)
 	}
 	// titles[0..1] -> A, titles[2] -> B, titles[3] stays for the gap drop.
-	if err := SetCueGroup(itoa(posOf(titles[0])), ga); err != nil {
+	if err := SetCueGroup(strconv.Itoa(posOf(titles[0])), ga); err != nil {
 		t.Fatalf("SetCueGroup A1: %v", err)
 	}
-	if err := SetCueGroup(itoa(posOf(titles[1])), ga); err != nil {
+	if err := SetCueGroup(strconv.Itoa(posOf(titles[1])), ga); err != nil {
 		t.Fatalf("SetCueGroup A2: %v", err)
 	}
-	if err := SetCueGroup(itoa(posOf(titles[2])), gb); err != nil {
+	if err := SetCueGroup(strconv.Itoa(posOf(titles[2])), gb); err != nil {
 		t.Fatalf("SetCueGroup B: %v", err)
 	}
 	tpos := posOf(titles[3])
 	if err := SheetDrop([]int{tpos}, 0, "group", gb, false, true, false, nil, 0); err != nil {
 		t.Fatalf("SheetDrop between: %v", err)
 	}
-	cue, err := GetCue(itoa(tpos))
+	cue, err := GetCue(strconv.Itoa(tpos))
 	if err != nil {
 		t.Fatalf("GetCue: %v", err)
 	}
@@ -453,7 +441,7 @@ func TestSheetDropBetweenGroupsStaysTopLevel(t *testing.T) {
 	if err := SheetDrop([]int{tpos}, 0, "group", gb, true, false, false, nil, 0); err != nil {
 		t.Fatalf("SheetDrop join: %v", err)
 	}
-	cue, _ = GetCue(itoa(tpos))
+	cue, _ = GetCue(strconv.Itoa(tpos))
 	if cue.Parent != gb {
 		t.Fatalf("joined cue parent = %d, want %d", cue.Parent, gb)
 	}
@@ -492,7 +480,7 @@ func TestSheetModelStoredMembership(t *testing.T) {
 			second = cue.CuePos
 		}
 	}
-	if err := SetCueGroup(itoa(first), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(first), gid); err != nil {
 		t.Fatal(err)
 	}
 	// Gap drop before the group's only member lands in its span and joins.
@@ -523,7 +511,7 @@ func TestHealSheetRepairsDanglingParents(t *testing.T) {
 	if err := HealSheet(); err != nil {
 		t.Fatalf("HealSheet: %v", err)
 	}
-	cue, err := GetCue(itoa(pos))
+	cue, err := GetCue(strconv.Itoa(pos))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,10 +545,10 @@ func TestAddCuePositionedPlacement(t *testing.T) {
 			bPos = cue.CuePos
 		}
 	}
-	if err := SetCueGroup(itoa(aPos), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(aPos), gid); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetCueGroup(itoa(bPos), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(bPos), gid); err != nil {
 		t.Fatal(err)
 	}
 	// Insert before the run head (first member): lands above the header,
@@ -574,10 +562,10 @@ func TestAddCuePositionedPlacement(t *testing.T) {
 			break
 		}
 	}
-	if err := AddCue("pp-head.mp4", itoa(headPos)); err != nil {
+	if err := AddCue("pp-head.mp4", strconv.Itoa(headPos)); err != nil {
 		t.Fatalf("AddCue at head: %v", err)
 	}
-	cue, _ := GetCue(itoa(headPos))
+	cue, _ := GetCue(strconv.Itoa(headPos))
 	_ = cue
 	sheet, _ = GetCuesheet()
 	var found *Cue
@@ -608,7 +596,7 @@ func TestAddCuePositionedPlacement(t *testing.T) {
 			}
 		}
 	}
-	if err := AddCue("pp-mid.mp4", itoa(secondPos)); err != nil {
+	if err := AddCue("pp-mid.mp4", strconv.Itoa(secondPos)); err != nil {
 		t.Fatalf("AddCue mid-span: %v", err)
 	}
 	sheet, _ = GetCuesheet()

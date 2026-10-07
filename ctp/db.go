@@ -47,7 +47,10 @@ func InitDB() error {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS mediapool (
 			media_id INTEGER PRIMARY KEY NOT NULL,
-			filename TEXT UNIQUE NOT NULL,
+			filename TEXT UNIQUE,
+			source_kind TEXT NOT NULL DEFAULT 'file',
+			endpoint_url TEXT NOT NULL DEFAULT '',
+			endpoint_title TEXT NOT NULL DEFAULT '',
 			mimetype TEXT,
 			size INTEGER,
 			duration REAL,
@@ -72,6 +75,9 @@ func InitDB() error {
 		{"missing", "BOOLEAN NOT NULL DEFAULT 0"},
 		{"media_meta", "TEXT NOT NULL DEFAULT ''"}, // JSON MediaInfo for the inspector's Media tab
 		{"loudness_gain", "REAL NOT NULL DEFAULT 0"},
+		{"source_kind", "TEXT NOT NULL DEFAULT 'file'"},
+		{"endpoint_url", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoint_title", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, nc := range mpNewCols {
 		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE mediapool ADD COLUMN %s %s;`, nc.name, nc.ddl))
@@ -79,10 +85,63 @@ func InitDB() error {
 			return fmt.Errorf("ctp: adding %s column: %w", nc.name, err)
 		}
 	}
+	// File-backed entries historically required a filename. Endpoint sources
+	// have no file path, so rebuild that table once to make filename nullable.
+	// Keep the referenced mediapool table name stable for cuesheet's FK.
+	var filenameNotNull int
+	if err := db.Get(&filenameNotNull, `SELECT "notnull" FROM pragma_table_info('mediapool') WHERE name = 'filename'`); err != nil {
+		return fmt.Errorf("ctp: checking mediapool filename constraint: %w", err)
+	}
+	if filenameNotNull != 0 {
+		if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+			return fmt.Errorf("ctp: disabling foreign keys for mediapool migration: %w", err)
+		}
+		tx, err := db.Beginx()
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`CREATE TABLE mediapool_new (
+			media_id INTEGER PRIMARY KEY NOT NULL, filename TEXT UNIQUE,
+			source_kind TEXT NOT NULL DEFAULT 'file', endpoint_url TEXT NOT NULL DEFAULT '', endpoint_title TEXT NOT NULL DEFAULT '',
+			mimetype TEXT, size INTEGER, duration REAL, resolution TEXT,
+			thumbnail_pending BOOLEAN NOT NULL DEFAULT 1, waveform TEXT NOT NULL DEFAULT '',
+			waveform_pending BOOLEAN NOT NULL DEFAULT 0, missing BOOLEAN NOT NULL DEFAULT 0,
+			loudness_gain REAL NOT NULL DEFAULT 0, media_meta TEXT NOT NULL DEFAULT '',
+			date_added DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
+		if err == nil {
+			_, err = tx.Exec(`INSERT INTO mediapool_new (media_id, filename, source_kind, endpoint_url, endpoint_title, mimetype,
+				size, duration, resolution, thumbnail_pending, waveform, waveform_pending, missing,
+				loudness_gain, media_meta, date_added)
+				SELECT media_id, filename, source_kind, endpoint_url, endpoint_title, mimetype, size, duration, resolution,
+				thumbnail_pending, waveform, waveform_pending, missing, loudness_gain, media_meta, date_added
+				FROM mediapool`)
+		}
+		if err == nil {
+			_, err = tx.Exec(`DROP TABLE mediapool`)
+		}
+		if err == nil {
+			_, err = tx.Exec(`ALTER TABLE mediapool_new RENAME TO mediapool`)
+		}
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+		_, fkErr := db.Exec(`PRAGMA foreign_keys = ON`)
+		if err != nil {
+			return fmt.Errorf("ctp: making mediapool filename nullable: %w", err)
+		}
+		if fkErr != nil {
+			return fmt.Errorf("ctp: restoring foreign keys after mediapool migration: %w", fkErr)
+		}
+	}
 	// Rows existing before the waveform column existed hold NULL; backfill to
 	// the empty string so SELECTs scan cleanly into Go strings.
 	if _, err = db.Exec(`UPDATE mediapool SET waveform = '' WHERE waveform IS NULL;`); err != nil {
 		return fmt.Errorf("ctp: backfilling waveform column: %w", err)
+	}
+	if err := moveWaveforms(db); err != nil {
+		return err
 	}
 
 	// Migration: the codec and media_title columns were write-only (populated
@@ -101,47 +160,7 @@ func InitDB() error {
 		}
 	}
 
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS cuesheet (
-			cue_id INTEGER PRIMARY KEY NOT NULL,
-			cuePos INTEGER UNIQUE,
-			cueNum TEXT UNIQUE,
-			media_id INTEGER NOT NULL,
-			title TEXT UNIQUE NOT NULL,
-			posStart INTEGER NOT NULL DEFAULT 0,
-			posEnd INTEGER NOT NULL DEFAULT 0,
-			preWait INTEGER NOT NULL DEFAULT 0,
-			cueDuration INTEGER NOT NULL DEFAULT 0,
-			postWait INTEGER NOT NULL DEFAULT 0,
-			hold INTEGER NOT NULL DEFAULT 0,
-			loop INTEGER NOT NULL DEFAULT 0,
-			loop_count INTEGER NOT NULL DEFAULT 0,
-			color TEXT NOT NULL DEFAULT '',
-			parent INTEGER NOT NULL DEFAULT 0,
-			fadeOut INTEGER NOT NULL DEFAULT 0,
-			fadeAction TEXT NOT NULL DEFAULT 'peers',
-			autoContinue INTEGER NOT NULL DEFAULT 0,
-			volume REAL NOT NULL DEFAULT 0, -- per-cue master gain in dB; 0 = 0dB
-			fadeIn INTEGER NOT NULL DEFAULT 0,
-			rate REAL NOT NULL DEFAULT 1,
-			balance REAL NOT NULL DEFAULT 0,
-			mute INTEGER NOT NULL DEFAULT 0,
-	last_result INTEGER NOT NULL DEFAULT 0, -- 0 never, 1 ok, 2 error
-	last_played_at INTEGER NOT NULL DEFAULT 0, -- unix ms
-		fade_curve TEXT NOT NULL DEFAULT 'linear', -- linear|smooth|log|exp
-		fit_mode TEXT NOT NULL DEFAULT 'fit', -- fit|stretch frame fitting
-		rotation INTEGER NOT NULL DEFAULT 0, -- 0|90|180|270 clockwise degrees
-		flip TEXT NOT NULL DEFAULT 'none', -- none|h|v mirror
-		schedule_enabled INTEGER NOT NULL DEFAULT 0, -- boolean: whether scheduling is enabled
-	schedule_days INTEGER NOT NULL DEFAULT 0,    -- bitmask: bit0=Mon, bit1=Tue, ..., bit6=Sun
-	schedule_time_ms INTEGER NOT NULL DEFAULT 0, -- time of day in milliseconds since 00:00:00
-	sheet_index REAL NOT NULL DEFAULT 0, -- visual+playback order (§4)
-			FOREIGN KEY (media_id)
-				REFERENCES mediapool (media_id)
-					ON UPDATE CASCADE
-					ON DELETE CASCADE
-		);
-	`)
+	_, err = db.Exec(fmt.Sprintf(cuesheetDDL, "cuesheet"))
 	if err != nil {
 		return fmt.Errorf("ctp: creating cuesheet table: %w", err)
 	}
@@ -161,48 +180,8 @@ func InitDB() error {
 
 	// Migration: add newer cuesheet columns if they don't exist (for DBs
 	// created before these columns were added)
-	newCols := []struct{ name, ddl string }{
-		{"preWait", "INTEGER NOT NULL DEFAULT 0"},
-		{"cueDuration", "INTEGER NOT NULL DEFAULT 0"},
-		{"postWait", "INTEGER NOT NULL DEFAULT 0"},
-		{"hold", "INTEGER NOT NULL DEFAULT 0"},
-		{"loop", "INTEGER NOT NULL DEFAULT 0"},
-		{"loop_count", "INTEGER NOT NULL DEFAULT 0"},
-		{"color", "TEXT NOT NULL DEFAULT ''"},
-		{"parent", "INTEGER NOT NULL DEFAULT 0"},
-		{"fadeOut", "INTEGER NOT NULL DEFAULT 0"},
-		{"fadeAction", "TEXT NOT NULL DEFAULT 'peers'"},
-		{"autoContinue", "INTEGER NOT NULL DEFAULT 0"},
-		{"volume", "REAL NOT NULL DEFAULT 0"},
-		{"fadeIn", "INTEGER NOT NULL DEFAULT 0"},
-		{"rate", "REAL NOT NULL DEFAULT 1"},
-		{"balance", "REAL NOT NULL DEFAULT 0"},
-		{"mute", "INTEGER NOT NULL DEFAULT 0"},
-		{"last_result", "INTEGER NOT NULL DEFAULT 0"},
-		{"last_played_at", "INTEGER NOT NULL DEFAULT 0"},
-		{"fade_curve", "TEXT NOT NULL DEFAULT 'linear'"},
-		{"fit_mode", "TEXT NOT NULL DEFAULT 'fit'"},
-		{"rotation", "INTEGER NOT NULL DEFAULT 0"},
-		{"flip", "TEXT NOT NULL DEFAULT 'none'"},
-		{"schedule_enabled", "INTEGER NOT NULL DEFAULT 0"},
-		{"schedule_days", "INTEGER NOT NULL DEFAULT 0"},
-		{"schedule_time_ms", "INTEGER NOT NULL DEFAULT 0"},
-		{"sheet_index", "REAL NOT NULL DEFAULT 0"},
-		{"opacity", "REAL NOT NULL DEFAULT 100"},
-		{"geom_x", "TEXT NOT NULL DEFAULT ''"},
-		{"geom_y", "TEXT NOT NULL DEFAULT ''"},
-		{"geom_w", "TEXT NOT NULL DEFAULT ''"},
-		{"geom_h", "TEXT NOT NULL DEFAULT ''"},
-		{"crop_l", "TEXT NOT NULL DEFAULT ''"},
-		{"crop_r", "TEXT NOT NULL DEFAULT ''"},
-		{"crop_t", "TEXT NOT NULL DEFAULT ''"},
-		{"crop_b", "TEXT NOT NULL DEFAULT ''"},
-	}
-	for _, nc := range newCols {
-		_, err = db.Exec(fmt.Sprintf(`ALTER TABLE cuesheet ADD COLUMN %s %s;`, nc.name, nc.ddl))
-		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("ctp: adding %s column: %w", nc.name, err)
-		}
+	if err := addCuesheetColumns(db, "cuesheet"); err != nil {
+		return err
 	}
 
 	// Rationalize a legacy cuesheet table whose volume column was created with
@@ -226,6 +205,9 @@ func InitDB() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("ctp: creating state table: %w", err)
+	}
+	if err := repairZeroOpacity(db); err != nil {
+		return err
 	}
 
 	// Cue groups: visual folders holding cues (cuesheet.parent = group_id).
@@ -291,31 +273,11 @@ func CloseDB() {
 	}
 }
 
-// migrateLegacyCuesheetDefault rebuilds a legacy cuesheet table whose volume
-// column default drifted from linear gain (1.0) to the current dB default (0).
-// SQLite has no ALTER ... DEFAULT, so the table is recreated with the code's
-// current DDL and all rows copied over. It is a no-op when the default is
-// already 0 (fresh DBs). The mediapool FK is preserved; rebuilds that would
-// orphan nothing are safe, and a failure aborts the migration (rolled back there
-// is a transaction for the DDL runs as a single Exec).
-func migrateLegacyCuesheetDefault(d *sqlx.DB) error {
-	var staleDefault string
-	err := d.Get(&staleDefault, `SELECT dflt_value FROM pragma_table_info('cuesheet') WHERE name='volume'`)
-	if err != nil || staleDefault == "0" {
-		return err
-	}
-	// Older legacy tables predate loop_count; the rebuild below SELECTs it,
-	// so backfill the column first if it is missing (idempotent: InitDB's
-	// generic add-column pass already did this for most DBs).
-	for _, col := range []string{"loop_count INTEGER NOT NULL DEFAULT 0", "fadeIn INTEGER NOT NULL DEFAULT 0", "rate REAL NOT NULL DEFAULT 1", "balance REAL NOT NULL DEFAULT 0", "mute INTEGER NOT NULL DEFAULT 0", "fit_mode TEXT NOT NULL DEFAULT 'fit'", "rotation INTEGER NOT NULL DEFAULT 0", "flip TEXT NOT NULL DEFAULT 'none'"} {
-		if _, err := d.Exec(`ALTER TABLE cuesheet ADD COLUMN ` + col); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("ctp: adding column before legacy rebuild: %w", err)
-		}
-	}
-	_, err = d.Exec(`
-		PRAGMA foreign_keys = OFF;
-		BEGIN;
-		CREATE TABLE cuesheet_new (
+// cuesheetDDL creates the cuesheet table (%s: its name). Fresh databases
+// and the legacy rebuild below use the same definition, then the same
+// cuesheetAddedCols, so a rebuilt table has every column a fresh one has.
+const cuesheetDDL = `
+		CREATE TABLE IF NOT EXISTS %s (
 			cue_id INTEGER PRIMARY KEY NOT NULL,
 			cuePos INTEGER UNIQUE,
 			cueNum TEXT UNIQUE,
@@ -334,41 +296,177 @@ func migrateLegacyCuesheetDefault(d *sqlx.DB) error {
 			fadeOut INTEGER NOT NULL DEFAULT 0,
 			fadeAction TEXT NOT NULL DEFAULT 'peers',
 			autoContinue INTEGER NOT NULL DEFAULT 0,
-			volume REAL NOT NULL DEFAULT 0,
+			volume REAL NOT NULL DEFAULT 0, -- per-cue master gain in dB; 0 = 0dB
 			fadeIn INTEGER NOT NULL DEFAULT 0,
 			rate REAL NOT NULL DEFAULT 1,
 			balance REAL NOT NULL DEFAULT 0,
 			mute INTEGER NOT NULL DEFAULT 0,
-			last_result INTEGER NOT NULL DEFAULT 0,
-			last_played_at INTEGER NOT NULL DEFAULT 0,
-			fade_curve TEXT NOT NULL DEFAULT 'linear',
-			fit_mode TEXT NOT NULL DEFAULT 'fit',
-			rotation INTEGER NOT NULL DEFAULT 0,
-			flip TEXT NOT NULL DEFAULT 'none',
-			schedule_enabled INTEGER NOT NULL DEFAULT 0,
-			schedule_days INTEGER NOT NULL DEFAULT 0,
-			schedule_time_ms INTEGER NOT NULL DEFAULT 0,
-			sheet_index REAL NOT NULL DEFAULT 0,
-			FOREIGN KEY (media_id) REFERENCES mediapool (media_id)
-				ON UPDATE CASCADE ON DELETE CASCADE
-		);
-		INSERT INTO cuesheet_new
-			(cue_id, cuePos, cueNum, media_id, title, posStart, posEnd,
-			 preWait, cueDuration, postWait, hold, loop, loop_count, color,
-			 parent, fadeOut, fadeAction, autoContinue, volume, fadeIn, rate, balance, mute,
-			 fit_mode, rotation, flip)
-		SELECT cue_id, cuePos, cueNum, media_id, title, posStart, posEnd,
-			 preWait, cueDuration, postWait, hold, loop, loop_count, color,
-			 parent, fadeOut, fadeAction, autoContinue, volume, fadeIn, rate, balance, mute,
-			 fit_mode, rotation, flip
-		FROM cuesheet;
-		DROP TABLE cuesheet;
-		ALTER TABLE cuesheet_new RENAME TO cuesheet;
-		COMMIT;
-		PRAGMA foreign_keys = ON;
-	`)
+	last_result INTEGER NOT NULL DEFAULT 0, -- 0 never, 1 ok, 2 error
+	last_played_at INTEGER NOT NULL DEFAULT 0, -- unix ms
+		fade_curve TEXT NOT NULL DEFAULT 'linear', -- linear|smooth|log|exp
+		fit_mode TEXT NOT NULL DEFAULT 'fit', -- fit|stretch frame fitting
+		rotation INTEGER NOT NULL DEFAULT 0, -- 0|90|180|270 clockwise degrees
+		flip TEXT NOT NULL DEFAULT 'none', -- none|h|v mirror
+		schedule_enabled INTEGER NOT NULL DEFAULT 0, -- boolean: whether scheduling is enabled
+	schedule_days INTEGER NOT NULL DEFAULT 0,    -- bitmask: bit0=Mon, bit1=Tue, ..., bit6=Sun
+	schedule_time_ms INTEGER NOT NULL DEFAULT 0, -- time of day in milliseconds since 00:00:00
+	sheet_index REAL NOT NULL DEFAULT 0, -- visual+playback order (§4)
+			FOREIGN KEY (media_id)
+				REFERENCES mediapool (media_id)
+					ON UPDATE CASCADE
+					ON DELETE CASCADE
+		);`
+
+// cuesheetAddedCols are the cuesheet columns added after the original
+// table: added to older databases on startup, and to a rebuilt table.
+var cuesheetAddedCols = []struct{ name, ddl string }{
+	{"preWait", "INTEGER NOT NULL DEFAULT 0"},
+	{"cueDuration", "INTEGER NOT NULL DEFAULT 0"},
+	{"postWait", "INTEGER NOT NULL DEFAULT 0"},
+	{"hold", "INTEGER NOT NULL DEFAULT 0"},
+	{"loop", "INTEGER NOT NULL DEFAULT 0"},
+	{"loop_count", "INTEGER NOT NULL DEFAULT 0"},
+	{"color", "TEXT NOT NULL DEFAULT ''"},
+	{"parent", "INTEGER NOT NULL DEFAULT 0"},
+	{"fadeOut", "INTEGER NOT NULL DEFAULT 0"},
+	{"fadeAction", "TEXT NOT NULL DEFAULT 'peers'"},
+	{"autoContinue", "INTEGER NOT NULL DEFAULT 0"},
+	{"volume", "REAL NOT NULL DEFAULT 0"},
+	{"fadeIn", "INTEGER NOT NULL DEFAULT 0"},
+	{"rate", "REAL NOT NULL DEFAULT 1"},
+	{"balance", "REAL NOT NULL DEFAULT 0"},
+	{"mute", "INTEGER NOT NULL DEFAULT 0"},
+	{"last_result", "INTEGER NOT NULL DEFAULT 0"},
+	{"last_played_at", "INTEGER NOT NULL DEFAULT 0"},
+	{"fade_curve", "TEXT NOT NULL DEFAULT 'linear'"},
+	{"fit_mode", "TEXT NOT NULL DEFAULT 'fit'"},
+	{"rotation", "INTEGER NOT NULL DEFAULT 0"},
+	{"flip", "TEXT NOT NULL DEFAULT 'none'"},
+	{"schedule_enabled", "INTEGER NOT NULL DEFAULT 0"},
+	{"schedule_days", "INTEGER NOT NULL DEFAULT 0"},
+	{"schedule_time_ms", "INTEGER NOT NULL DEFAULT 0"},
+	{"sheet_index", "REAL NOT NULL DEFAULT 0"},
+	{"opacity", "REAL NOT NULL DEFAULT 100"},
+	{"geom_x", "TEXT NOT NULL DEFAULT ''"},
+	{"geom_y", "TEXT NOT NULL DEFAULT ''"},
+	{"geom_w", "TEXT NOT NULL DEFAULT ''"},
+	{"geom_h", "TEXT NOT NULL DEFAULT ''"},
+	{"crop_l", "TEXT NOT NULL DEFAULT ''"},
+	{"crop_r", "TEXT NOT NULL DEFAULT ''"},
+	{"crop_t", "TEXT NOT NULL DEFAULT ''"},
+	{"crop_b", "TEXT NOT NULL DEFAULT ''"},
+	{"stop_others", "INTEGER NOT NULL DEFAULT 1"}, // fire stops the running cues (§6.1.2)
+	{"layer", "TEXT NOT NULL DEFAULT 'top'"},      // top|bottom|under when it keeps them
+	{"layer_under", "INTEGER NOT NULL DEFAULT 0"}, // under: the cue_id to go beneath
+}
+
+// addCuesheetColumns adds every cuesheetAddedCols column that table lacks.
+func addCuesheetColumns(d sqlx.Execer, table string) error {
+	for _, nc := range cuesheetAddedCols {
+		_, err := d.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s;`, table, nc.name, nc.ddl))
+		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("ctp: adding %s column: %w", nc.name, err)
+		}
+	}
+	return nil
+}
+
+// moveWaveforms keeps waveforms in their own table. A long clip's peaks are
+// hundreds of KB; stored in mediapool, every column after them in the row
+// (media_meta, missing, loudness_gain) was read through the overflow pages,
+// so every sheet render read every clip's whole waveform (80 cues over 10
+// long clips: 714 ms per render). The mediapool column stays, empty, for
+// older binaries. Moves any left there (a database from before 2026-10-07).
+func moveWaveforms(d *sqlx.DB) error {
+	if _, err := d.Exec(`CREATE TABLE IF NOT EXISTS media_waveform (
+		media_id INTEGER PRIMARY KEY NOT NULL REFERENCES mediapool(media_id) ON DELETE CASCADE,
+		peaks    TEXT NOT NULL,
+		updated  INTEGER NOT NULL DEFAULT 0 -- unix ms: the inspector's cache stamp
+	)`); err != nil {
+		return fmt.Errorf("ctp: creating media_waveform: %w", err)
+	}
+	tx, err := d.Beginx()
 	if err != nil {
-		return fmt.Errorf("ctp: rebuilding legacy cuesheet table: %w", err)
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO media_waveform (media_id, peaks, updated)
+		SELECT media_id, waveform, CAST(strftime('%s','now') AS INTEGER) * 1000 FROM mediapool WHERE waveform <> ''`); err != nil {
+		return fmt.Errorf("ctp: moving waveforms: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE mediapool SET waveform = '' WHERE waveform <> ''`); err != nil {
+		return fmt.Errorf("ctp: moving waveforms: %w", err)
+	}
+	return tx.Commit()
+}
+
+// repairZeroOpacity runs once per database. Until 2026-10-07 cues were
+// loaded without their opacity, so the inspector showed 0 and wrote 0 back
+// on every save; playback reads 0 as opaque, so nothing looked wrong. Now the
+// inspector shows the stored value, so those cues are set to 100 (the
+// picture does not change).
+func repairZeroOpacity(d *sqlx.DB) error {
+	const key = "repair_zero_opacity"
+	var done int
+	if err := d.Get(&done, `SELECT COUNT(*) FROM state WHERE key = ?`, key); err != nil || done > 0 {
+		return err
+	}
+	if _, err := d.Exec(`UPDATE cuesheet SET opacity = 100 WHERE opacity = 0`); err != nil {
+		return fmt.Errorf("ctp: repairing cue opacity: %w", err)
+	}
+	_, err := d.Exec(`INSERT INTO state (key, value) VALUES (?, '1')`, key)
+	return err
+}
+
+// migrateLegacyCuesheetDefault rebuilds a legacy cuesheet table whose volume
+// column default drifted from linear gain (1.0) to the current dB default (0).
+// SQLite has no ALTER ... DEFAULT, so the table is recreated from the
+// current definition (cuesheetDDL plus cuesheetAddedCols) and every column
+// the old and new tables share is copied over: no cue field is lost
+// (schedules, order, geometry, fades, results), whatever the old table's
+// age. It runs in one transaction, so a failure leaves the old table as it
+// was. A no-op when the default is already 0 (fresh DBs).
+func migrateLegacyCuesheetDefault(d *sqlx.DB) error {
+	var staleDefault string
+	err := d.Get(&staleDefault, `SELECT dflt_value FROM pragma_table_info('cuesheet') WHERE name='volume'`)
+	if err != nil || staleDefault == "0" {
+		return err
+	}
+	// Foreign keys off for the swap (DROP TABLE would cascade-delete
+	// nothing here, but a rename under enforcement can fail). The pragma is
+	// a no-op inside a transaction, so it brackets it.
+	if _, err := d.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("ctp: legacy cuesheet rebuild: %w", err)
+	}
+	defer d.Exec(`PRAGMA foreign_keys = ON`)
+	tx, err := d.Beginx()
+	if err != nil {
+		return fmt.Errorf("ctp: legacy cuesheet rebuild: %w", err)
+	}
+	defer tx.Rollback() // no-op after Commit
+	if _, err := tx.Exec(fmt.Sprintf(cuesheetDDL, "cuesheet_new")); err != nil {
+		return fmt.Errorf("ctp: legacy cuesheet rebuild: creating table: %w", err)
+	}
+	if err := addCuesheetColumns(tx, "cuesheet_new"); err != nil {
+		return err
+	}
+	var cols []string
+	if err := tx.Select(&cols, `SELECT o.name FROM pragma_table_info('cuesheet') o
+		JOIN pragma_table_info('cuesheet_new') n ON n.name = o.name ORDER BY o.cid`); err != nil {
+		return fmt.Errorf("ctp: legacy cuesheet rebuild: reading columns: %w", err)
+	}
+	list := `"` + strings.Join(cols, `", "`) + `"`
+	for _, q := range []string{
+		fmt.Sprintf(`INSERT INTO cuesheet_new (%s) SELECT %s FROM cuesheet`, list, list),
+		`DROP TABLE cuesheet`,
+		`ALTER TABLE cuesheet_new RENAME TO cuesheet`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("ctp: legacy cuesheet rebuild: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("ctp: legacy cuesheet rebuild: %w", err)
 	}
 	return nil
 }

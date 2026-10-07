@@ -80,7 +80,7 @@ func TestCueNavigation(t *testing.T) {
 		t.Fatalf("expected SelectedCuePos=3 after second NextCue, got %d", got)
 	}
 
-	// Already at the last cue - NextCue must not advance past cuesheetLength.
+	// Already at the last cue - NextCue must not advance past the last cue.
 	if err := NextCue(); err != nil {
 		t.Fatalf("NextCue: %v", err)
 	}
@@ -88,11 +88,11 @@ func TestCueNavigation(t *testing.T) {
 		t.Fatalf("expected SelectedCuePos to stay at 3, got %d", got)
 	}
 
-	if err := PrevCue(); err != nil {
-		t.Fatalf("PrevCue: %v", err)
+	if err := SelectStep(-1); err != nil {
+		t.Fatalf("SelectStep(-1): %v", err)
 	}
 	if got, _ := SelectedCuePos(); got != 2 {
-		t.Fatalf("expected SelectedCuePos=2 after PrevCue, got %d", got)
+		t.Fatalf("expected SelectedCuePos=2 after SelectStep(-1), got %d", got)
 	}
 
 	if err := SetCue("1"); err != nil {
@@ -105,10 +105,10 @@ func TestCueNavigation(t *testing.T) {
 	if CuesheetVersion() <= version {
 		t.Fatalf("cue selection change did not advance the sync version")
 	}
-	if err := PrevCue(); err != nil {
-		t.Fatalf("PrevCue: %v", err)
+	if err := SelectStep(-1); err != nil {
+		t.Fatalf("SelectStep(-1): %v", err)
 	}
-	// Regression test: PrevCue used to have an off-by-one that blocked
+	// Regression test: stepping back used to have an off-by-one that blocked
 	// navigating down to cue 1.
 	if got, _ := SelectedCuePos(); got != 1 {
 		t.Fatalf("expected SelectedCuePos to stay at 1 (can't go below 1), got %d", got)
@@ -354,16 +354,31 @@ func TestThumbnailPendingWorkflow(t *testing.T) {
 		t.Fatalf("expected thumb-1.mp4 to no longer be pending after thumbnail + waveform are done")
 	}
 
-	// Stored peaks round-trip back through the pool.
+	// Stored peaks round-trip from their own table; the pool listing leaves
+	// them out (they can be hundreds of KB per clip).
+	analysed, err := AnalysedWaveforms()
+	if err != nil {
+		t.Fatalf("AnalysedWaveforms: %v", err)
+	}
+	found := false
+	for _, m := range analysed {
+		if m.Filename == "thumb-1.mp4" {
+			found = true
+			if m.Waveform != `[0.1,0.2,0.3]` {
+				t.Fatalf("stored waveform = %q, want %q", m.Waveform, `[0.1,0.2,0.3]`)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("stored waveform not listed")
+	}
 	pool, err = GetMediapool()
 	if err != nil {
 		t.Fatalf("GetMediapool: %v", err)
 	}
 	for _, m := range pool.Medias {
-		if m.Filename == "thumb-1.mp4" {
-			if m.Waveform != `[0.1,0.2,0.3]` {
-				t.Fatalf("stored waveform = %q, want %q", m.Waveform, `[0.1,0.2,0.3]`)
-			}
+		if m.Waveform != "" {
+			t.Fatalf("the pool listing carries %q's waveform", m.Filename)
 		}
 	}
 
@@ -554,81 +569,6 @@ func TestParseTimeRoundTrip(t *testing.T) {
 				t.Errorf("round-trip mismatch: %q -> %dms -> %q -> %dms", in, ms, out, ms2)
 			}
 		})
-	}
-}
-
-// Move cue tests
-func TestMoveCueUpDown(t *testing.T) {
-	if err := ClearCueSheet(); err != nil {
-		t.Fatalf("ClearCueSheet: %v", err)
-	}
-	mustRegisterMedia(t, "move-a.mp4")
-	mustRegisterMedia(t, "move-b.mp4")
-	mustRegisterMedia(t, "move-c.mp4")
-
-	// Add three cues at positions 1, 2, 3
-	if err := AddCue("move-a.mp4", ""); err != nil {
-		t.Fatalf("AddCue a: %v", err)
-	}
-	if err := AddCue("move-b.mp4", ""); err != nil {
-		t.Fatalf("AddCue b: %v", err)
-	}
-	if err := AddCue("move-c.mp4", ""); err != nil {
-		t.Fatalf("AddCue c: %v", err)
-	}
-
-	// Initial order: a, b, c at positions 1, 2, 3
-	sheet, _ := GetCuesheet()
-	if sheet.Cues[0].CuePos != 1 || sheet.Cues[1].CuePos != 2 || sheet.Cues[2].CuePos != 3 {
-		t.Fatalf("initial order wrong: %+v", sheet.Cues)
-	}
-
-	// Move c (pos 3) up -> visual order a, c, b (cuePos is identity now).
-	if err := MoveCueUp("3"); err != nil {
-		t.Fatalf("MoveCueUp: %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[1].Media.Filename != "move-c.mp4" || sheet.Cues[2].Media.Filename != "move-b.mp4" {
-		t.Fatalf("expected visual order a,c,b: %+v", sheet.Cues)
-	}
-
-	// Move a (pos 1) up -> should stay at 1 (already at top)
-	if err := MoveCueUp("1"); err != nil {
-		t.Fatalf("MoveCueUp(1): %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[0].CuePos != 1 {
-		t.Fatalf("MoveCueUp(1) should not move: %+v", sheet.Cues)
-	}
-
-	// Move b (pos 3) down -> should stay at 3 (already at bottom)
-	if err := MoveCueDown("3"); err != nil {
-		t.Fatalf("MoveCueDown(3): %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[2].CuePos != 3 {
-		t.Fatalf("MoveCueDown(3) should not move: %+v", sheet.Cues)
-	}
-
-	// Move b (pos 2) down -> should go to pos 3, c to 2
-	if err := MoveCueDown("2"); err != nil {
-		t.Fatalf("MoveCueDown(2): %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[1].Media.Filename != "move-c.mp4" || sheet.Cues[2].Media.Filename != "move-b.mp4" {
-		t.Fatalf("expected visual order a,c,b: %+v", sheet.Cues)
-	}
-
-	// Move c (pos 3) up twice -> should go to pos 1
-	if err := MoveCueUp("3"); err != nil {
-		t.Fatalf("MoveCueUp(3) again: %v", err)
-	}
-	if err := MoveCueUp("2"); err != nil {
-		t.Fatalf("MoveCueUp(2) again: %v", err)
-	}
-	sheet, _ = GetCuesheet()
-	if sheet.Cues[0].Media.Filename != "move-c.mp4" {
-		t.Fatalf("expected c at pos 1 after two MoveCueUp: %+v", sheet.Cues)
 	}
 }
 
@@ -825,12 +765,6 @@ func TestCueOrderAndSelectionStayConsistentAfterChanges(t *testing.T) {
 	if err := SetCue("3"); err != nil {
 		t.Fatalf("SetCue: %v", err)
 	}
-	if err := MoveCueUp("3"); err != nil {
-		t.Fatalf("MoveCueUp: %v", err)
-	}
-	if selected, _ := SelectedCuePos(); selected != 2 {
-		t.Fatalf("selected cue after move up = %d, want 2", selected)
-	}
 	if err := RemoveCue("1"); err != nil {
 		t.Fatalf("RemoveCue: %v", err)
 	}
@@ -841,9 +775,8 @@ func TestCueOrderAndSelectionStayConsistentAfterChanges(t *testing.T) {
 	if len(sheet.Cues) != 2 || sheet.Cues[0].CuePos != 1 || sheet.Cues[1].CuePos != 2 {
 		t.Fatalf("cue positions after delete = %+v, want contiguous 1..2", sheet.Cues)
 	}
-	// Selection follows its cue: it was cue b (cuePos 2, row-sticky after
-	// the move), which reindexes 2->2 — not 1. (The old code subtracted 1
-	// on top of the reindex map and landed on cue c.)
+	// Selection follows its cue: cue c (cuePos 3) reindexes 3->2 — not 1.
+	// (The old code subtracted 1 on top of the reindex map.)
 	if selected, _ := SelectedCuePos(); selected != 2 {
 		t.Fatalf("selected cue after deleting earlier cue = %d, want 2", selected)
 	}

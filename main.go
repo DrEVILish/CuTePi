@@ -45,6 +45,15 @@ func prepareTmpDir() {
 }
 
 func main() {
+	// `cutepi --console graphics|text`: the systemd unit's root steps around
+	// the unprivileged service (ExecStartPre/ExecStopPost). Only this
+	// console ioctl needs root; the server itself runs as the cutepi user.
+	if len(os.Args) == 3 && os.Args[1] == "--console" && (os.Args[2] == "graphics" || os.Args[2] == "text") {
+		if err := gsp.SetConsoleMode(os.Args[2] == "graphics"); err != nil {
+			log.Fatalf("CuTePi: console %s mode: %v", os.Args[2], err)
+		}
+		return
+	}
 	// A child spawned by /api/restart must not bind the port until the
 	// parent has exited and released it. Wait up to 20s for that.
 	if os.Getenv(routes.RestartEnv) != "" {
@@ -59,7 +68,14 @@ func main() {
 	// Load configuration before anything that depends on it (DB path, media
 	// path, etc). ctp.InitDB must run after this, not via package init(),
 	// so a config-file-specified DB path is actually honored.
-	config.LoadConfig()
+	routes.Version = version
+	log.Printf("CuTePi %s starting", version)
+
+	// A malformed config.json is recovered from its last good copy, or
+	// stops the start: never run on a half-read configuration.
+	if err := config.LoadConfig(); err != nil {
+		log.Fatalf("CuTePi: %v", err)
+	}
 	prepareTmpDir()
 	releaseConsole := gsp.ClaimWallConsole()
 	gsp.OpenWall()
@@ -79,9 +95,17 @@ func main() {
 	if err := ctp.HealSheet(); err != nil {
 		log.Printf("CuTePi: sheet heal: %v", err)
 	}
+	// Live-page sources no cue uses any more (deleted cues, overwritten shows).
+	if err := ctp.PruneEndpoints(); err != nil {
+		log.Printf("CuTePi: pruning live-page sources: %v", err)
+	}
 
 	go worker.RunThumbnailWorker(2 * time.Second)
 	go routes.RunScheduler()
+	// Live-page asset cache (§12.14): preloads live cues' pages while the
+	// wall is idle; drops the cached assets and source rows of removed cues
+	// (also the ones left from before a restart).
+	go routes.RunLiveCacheKeeper()
 	// Panic holding image kept armed on the wall, so a panic cuts to it at
 	// once (§12.9).
 	go routes.RunPanicStandby()
@@ -91,17 +115,9 @@ func main() {
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)
-	// Cross-site guard (CSRF + DNS rebinding): runs before auth so a hostile
-	// page never gets a Basic-auth prompt or a response to read.
-	r.Use(routes.SameOrigin())
-	// Optional operator password (config.json auth_password / Settings).
-	// Applies to every route group below, including the WebSocket handshake.
-	r.Use(routes.AuthMiddleware())
-	// Client cache policy: no-store everywhere except images.
-	r.Use(routes.CachePolicy())
-	// Cap request bodies: one giant POST must not fill the disk or OOM the
-	// in-memory .CTP parse.
-	r.Use(routes.LimitBody())
+	// Cross-site guard, operator password, cache policy and body caps, in
+	// that order (routes.UseMiddleware).
+	routes.UseMiddleware(r)
 
 	// Single template function map (routes.TemplateFuncs): server renders and
 	// tests parse the same templates, so the map must be identical in both.
@@ -151,7 +167,7 @@ func main() {
 	}()
 
 	printNetworkInfo()
-	log.Printf("CuTePi: listening on %s", address)
+	log.Printf("CuTePi %s: listening on %s", version, address)
 	// A bind failure (port already in use - e.g. the restart handover losing
 	// the race, or a second instance) must NOT look like a clean exit: the
 	// old `r.Run(address)` ignoring the error exited 0 and systemd restarted

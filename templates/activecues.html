@@ -1,0 +1,50 @@
+{{ define "activecues.html" }}
+
+<!-- Active Cues (§6.1.2): every running cue in stack order, top first.
+     Stop cuts that cue alone; Fade out fades it over the ESC fade time. -->
+<div id="activecues" class="d-flex flex-column h-100" data-count="{{ len .Cues }}">
+  <div class="row is-items-center is-justify-between mb-m">
+    <h5 class="mb-0">Active Cues</h5>
+    <span class="text-muted small">{{ len .Cues }} running</span>
+  </div>
+  {{ if .Cues }}
+  <ol class="active-cues-list" aria-label="Running cues, top layer first">
+    {{ range .Cues }}
+    <li class="active-cue{{ if .Focus }} is-focus{{ end }}"{{ if .Color }} style="border-left-color: {{ .Color }}"{{ end }}
+      data-cue-pos="{{ .CuePos }}"{{ if not .Live }} data-position="{{ .Position }}" data-duration="{{ .Duration }}"{{ end }}>
+      <div class="active-cue-head row is-items-center is-gap-xs">
+        {{ if .Num }}<span class="go-num">{{ .Num }}</span>{{ end }}
+        <span class="active-cue-title" title="{{ .Name }}">{{ .Name }}</span>
+        {{ if .Layer }}<span class="badge text-bg-secondary ms-auto" title="Display layer, 1 = bottom">L{{ .Layer }}</span>{{ end }}
+      </div>
+      <div class="active-cue-state small text-muted" data-shape>
+        {{ if .Live }}Live{{ else if .Held }}Holding{{ else if .Paused }}Paused{{ else }}Playing{{ end }}{{ if .Focus }} · transport{{ end }}
+      </div>
+      {{ if gt .Duration 0.0 }}
+      <div class="active-cue-time row is-items-center is-gap-xs small">
+        <div class="active-cue-bar flex-grow-1" aria-hidden="true"><span style="width: {{ .Pct }}%"></span></div>
+        <span class="text-nowrap">{{ .Elapsed }}{{ if .Remaining }} / -{{ .Remaining }}{{ end }}</span>
+      </div>
+      {{ end }}
+      {{ if .CuePos }}
+      <div class="row is-gap-xs btn-group-sm mt-1">
+        <button type="button" class="btn btn-secondary" hx-post="/api/activecues/{{ .CuePos }}/fade"
+          hx-target="#activecues" hx-swap="outerHTML"
+          title="Fade this cue out over the ESC fade time ({{ $.EscFadeMs }} ms)" aria-label="Fade out cue {{ .Num }}">
+          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-volume-mute"/></svg>&nbsp;Fade out
+        </button>
+        <button type="button" class="btn btn-danger" hx-post="/api/activecues/{{ .CuePos }}/stop"
+          hx-target="#activecues" hx-swap="outerHTML"
+          title="Stop this cue now; the others carry on" aria-label="Stop cue {{ .Num }}">
+          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-stop"/></svg>&nbsp;Stop
+        </button>
+      </div>
+      {{ end }}
+    </li>
+    {{ end }}
+  </ol>
+  {{ else }}
+  <p class="text-muted small">No cues running.</p>
+  {{ end }}
+</div>
+{{ end }}

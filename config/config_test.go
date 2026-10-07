@@ -238,7 +238,9 @@ func TestLoadConfigCreatesFileOnFirstRun(t *testing.T) {
 		t.Fatalf("expected no config file before LoadConfig, stat err = %v", err)
 	}
 
-	LoadConfig()
+	if err := LoadConfig(); err != nil {
+		t.Fatalf("first-run LoadConfig: %v", err)
+	}
 
 	if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
 		t.Fatalf("expected LoadConfig to create the config file on first run: %v", err)
@@ -283,5 +285,107 @@ func TestSaveConfigAtomic(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("config.json mode %o, want 600", perm)
+	}
+}
+
+// A malformed config.json is never half-applied: with a last good copy the
+// service recovers from it (the broken file kept aside); without one it
+// refuses to start and leaves the file as it is.
+func TestLoadConfigMalformed(t *testing.T) {
+	t.Cleanup(func() { useTestDir(testDir) })
+	t.Setenv("PORT", "")
+	for _, bad := range []string{`{"port": 4242, "loop": tru`, `{"port": 4242} trailing`} {
+		dir := t.TempDir()
+		useTestDir(dir)
+		path := filepath.Join(dir, "config.json")
+
+		// No last good copy: an error, the file untouched, nothing applied.
+		SetPort(1111)
+		os.Remove(lastGoodPath(path))
+		if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := LoadConfig(); err == nil {
+			t.Fatalf("%q: LoadConfig succeeded without a last good copy", bad)
+		}
+		if got, _ := os.ReadFile(path); string(got) != bad {
+			t.Fatalf("%q: broken file changed to %q", bad, got)
+		}
+		if Port() != 1111 {
+			t.Fatalf("%q: port = %d after a failed load, want the old 1111", bad, Port())
+		}
+
+		// With a last good copy: recovered, the broken file moved aside.
+		if err := os.WriteFile(lastGoodPath(path), []byte(`{"port": 2222}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := LoadConfig(); err != nil {
+			t.Fatalf("%q: recovery failed: %v", bad, err)
+		}
+		if Port() != 2222 {
+			t.Fatalf("%q: recovered port = %d, want 2222", bad, Port())
+		}
+		if got, _ := os.ReadFile(path); !strings.Contains(string(got), "2222") {
+			t.Fatalf("%q: config.json not restored: %q", bad, got)
+		}
+		broken, _ := filepath.Glob(path + ".broken-*")
+		if len(broken) != 1 {
+			t.Fatalf("%q: broken copies = %v, want one", bad, broken)
+		}
+		if got, _ := os.ReadFile(broken[0]); string(got) != bad {
+			t.Fatalf("%q: broken copy holds %q", bad, got)
+		}
+	}
+}
+
+// A good load and every save refresh the last good copy.
+func TestLastGoodCopyFollowsSaves(t *testing.T) {
+	t.Cleanup(func() { useTestDir(testDir) })
+	dir := t.TempDir()
+	useTestDir(dir)
+	path := filepath.Join(dir, "config.json")
+	SetPort(3333)
+	if got, err := os.ReadFile(lastGoodPath(path)); err != nil || !strings.Contains(string(got), "3333") {
+		t.Fatalf("last good after save = %q (%v)", got, err)
+	}
+	if st, err := os.Stat(lastGoodPath(path)); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("last good copy mode = %v (%v), want 0600 (it holds the password)", st.Mode().Perm(), err)
+	}
+}
+
+// Only a missing file is a first run: an unreadable one is an error, never
+// replaced by defaults.
+func TestLoadConfigUnreadableIsAnError(t *testing.T) {
+	t.Cleanup(func() { useTestDir(testDir) })
+	dir := t.TempDir()
+	useTestDir(dir)
+	if err := os.Mkdir(filepath.Join(dir, "config.json"), 0o700); err != nil { // reads fail
+		t.Fatal(err)
+	}
+	if err := LoadConfig(); err == nil {
+		t.Fatal("LoadConfig succeeded on an unreadable config file")
+	}
+}
+
+// Data paths in config.json are informational: the environment/defaults
+// decide where the data lives, so a stored old location cannot pin it.
+func TestLoadConfigIgnoresStoredPaths(t *testing.T) {
+	t.Cleanup(func() { useTestDir(testDir) })
+	dir := t.TempDir()
+	useTestDir(dir)
+	stored := `{"port": 4444, "working_dir": "/root/cutepi", "db": {"location": "/root/cutepi/config/ctp.db"},
+		"media": {"location": "/root/cutepi/media"}, "thumbnails": {"location": "/root/cutepi/thumbnails"}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(stored), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PORT", "")
+	if err := LoadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if Port() != 4444 {
+		t.Fatalf("port = %d, want the stored 4444", Port())
+	}
+	if MediaLocation() != dir || DbLocation() != filepath.Join(dir, "ctp.db") {
+		t.Fatalf("paths = media %q db %q; want the test dir's, not /root/cutepi", MediaLocation(), DbLocation())
 	}
 }
