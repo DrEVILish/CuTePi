@@ -893,6 +893,8 @@ Space (not in an editable field) → plays the selected cue; on a group selectio
 WebSocket hub (`/api/ws`) is the **only** channel: while playing, the pipeline ticker pushes one sync per displayed second over the socket.
 No polling anywhere — every widget (nowplaying, cuesheet, clocks) renders
 from socket pushes. The topbar shows the socket state as a status dot.
+- **The browser never acts ahead of the server.** Every change shown (selection, transport state, edits) comes from the
+  server's reply; nothing is predicted or applied optimistically. Speed comes from fast replies and fewer requests.
 - A sync is a signal only: each widget asks its status endpoint (`/api/cuesheet/status?version=`,
   `/api/nowplaying/status?version=`) and fetches the partial only when its version moved.
 - Every cuesheet render carries its version (`data-version` on `#cuesheet`, read before the sheet, so the stamp is never
