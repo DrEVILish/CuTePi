@@ -807,7 +807,8 @@ Any number of cues can run at once, each on its own display layer, stacked; the 
 - **Slideshows** (§6.4): each slide replaces the last; members' Stop others and Layer do not apply inside one.
 - **QLab** (§12.8): `/runningCues` lists every running cue, top first, and `isRunning`/`isPaused`/elapsed are per
   cue. `/cue/N/stop` (fading over the cue's fade-stop time), `hardStop` and `panic` stop cue N alone while other
-  cues run; with N the only cue they act as before. Pause/resume of a cue act on the transport (every cue).
+  cues run; with N the only cue they act as before. `pause`/`resume`/`togglePause` on cue N act on the transport
+  (every running cue) when N is the focus, and do nothing for another running cue.
 - **Sound.** Every cue's sound goes into one mixer (`interaudiosink` per cue → `interaudiosrc` → `audiomixer` →
   the configured sink), so running cues are heard together at their own volumes. The HDMI device takes one stream
   only (TEST_REPORT "Performance round, 2026-10-07": ALSA `dmix` cannot produce its format), so this is also what
