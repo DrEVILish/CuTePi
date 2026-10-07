@@ -1234,6 +1234,46 @@ Live service on the test Pi (plane wall), driven through the HTTP API; planes re
 
 The sheet was restored afterwards (cues 10 and 15 back to Stop others on / Top; the tone cue and file removed).
 
+## Web UI responsiveness, 2026-10-07
+
+**Live test Pi, 7-cue sheet, from the dev server over the LAN** (ping 0.26 ms, so these are server time): `GET /` 42 ms,
+`/api/cuesheet` 17 ms, `/api/nowplaying` 13.5 ms, `/api/cue/inspector` 6.4 ms. Most of it was SQLite reading the one
+long clip's waveform (343 KB).
+
+**Show-sized sheet** (`routes/sheet_bench_test.go`: 80 video cues over 10 clips, each with a ~360 KB waveform, a video cue
+selected, database on the SD card), Pi 4, per request:
+
+| Request | Before | After | Response before → after |
+|---|---|---|---|
+| Row click (`POST /api/cue/:pos`, returns the sheet) | 698 ms | 25 ms | 145 KB |
+| Sheet (`GET /api/cuesheet`) | 693 ms | 25 ms | 145 KB |
+| Now Playing (`GET /api/nowplaying`) | 674 ms | 5.8 ms | 0.8 KB |
+| Inspector (`GET /api/cue/inspector`) | 39 ms | 3.8 ms | 407 KB → 48 KB |
+| Inspector save (`PUT`) | 40 ms | 3.9 ms | 407 KB → 48 KB |
+| Media pool (`GET /mediapool`) | 34 ms | 1.4 ms | 14 KB |
+| Full page (`GET /`) | 1478 ms | 42 ms | 636 KB → 280 KB |
+
+A row click used to cost each connected client a further sheet, Now Playing and inspector render (about 1.4 s of server
+time per client). Now the click's own response counts as the new sheet, so the sync after it fetches only Now Playing
+and the inspector.
+
+Causes and fixes:
+1. **Waveforms in `mediapool` rows.** Columns stored after a large TEXT value are read through its overflow pages (measured
+   in isolation: 0.10 ms vs 4.8 ms per 10-row scan), so every sheet, Now Playing and pool read pulled every clip's whole
+   waveform even without selecting it. Peaks moved to their own table `media_waveform` (migrated at startup).
+2. **Waveform inside the inspector HTML** (360 KB, attribute-escaped on every render, `JSON.parse`d on every redraw while
+   dragging). Now `GET /api/media/:filename/peaks?v=<stored time>`, cached for good, parsed once per clip.
+3. **Three sheet reads per render** (handler, GO bar, selection index): now one.
+4. **The sheet fetched twice after a click.** Renders carry `data-version`; the refresher counts a sheet received as an
+   action's response as seen.
+5. **Inspector re-probing a missing file** with ffprobe on every render (~250 ms each; the probe fails, so nothing was
+   stored and it repeated). Skipped when the file is missing.
+6. **CSS/JS served `no-store`** (~700 KB per page load). Stamped URLs are now `immutable`; the stamp covers the binary and
+   every static file.
+
+Not changed: SQLite `synchronous` (a selection write costs ~0.3 ms on the SD card); the remaining sheet render cost is
+mostly template execution (~15 ms for 80 rows).
+
 ## Open findings (not fixed; need a decision)
 
 ### O1 — Frame rate: 1080p60 plays at 60 fps; fades, two layers and HEVC do not (major)

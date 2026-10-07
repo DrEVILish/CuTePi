@@ -119,13 +119,17 @@ Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
 
 - `mediapool`: `media_id`, `filename` (unique), `mimetype`, `size`,
   `duration` (float sec), `resolution`, `thumbnail_pending`, `waveform`
-  (JSON peaks), `waveform_pending`, `missing` (source absent from disk),
+  (kept empty: peaks live in `media_waveform`), `waveform_pending`, `missing` (source absent from disk),
   `loudness_gain` (EBU R128), `media_meta` (ffprobe JSON for the Media tab),
   `date_added`. Live endpoint entries will need a source kind and endpoint URL
   (with file-only fields nullable or in a separate endpoint table); they must
   not be represented as fake filenames. `codec` and `media_title` were removed by migration
   (write-only, read by nothing) — codec detail lives in `media_meta`.
   Sort newest-first (`date_added DESC, media_id DESC`).
+- `media_waveform`: `media_id` (deleted with its media row), `peaks` (JSON), `updated` (unix ms). Kept apart because a
+  long clip's peaks are hundreds of KB: inside `mediapool`, every column after them was read through SQLite's overflow
+  pages, so every sheet render read every clip's whole waveform (80 cues over 10 long clips: 0.7 s per render). Bulk
+  reads (sheet, pool) never load peaks; the inspector links them (Cue Inspector, Time tab).
 - `cuesheet`: `cue_id`, order `cuePos` (unique, stable identity — never
   reindexed); `cueNum` (TEXT label); `media_id` FK → mediapool
   (ON DELETE CASCADE); `title`; `preWait`, `cueDuration`, `postWait`, trim
@@ -270,7 +274,8 @@ One row, left to right:
 - Built and behaved like the Media Pool pane: shared resizer/collapse chrome
   (collapse = fully hidden, one form spanning all tabs so any change saves instantly (htmx `change delay:200ms`).
 - Tabs (static strip in `index.html`; audio panes are omitted for image cues:
-  - **Time** — waveform trim timeline (canvas of JSON peaks, draggable In/Out markers; **only dragging a handle changes trim**; clicks elsewhere are inert),
+  - **Time** — waveform trim timeline (canvas of JSON peaks from `GET /api/media/:filename/peaks?v=<stored time>`, cached
+    by the browser for good and kept parsed across inspector re-renders; the inspector HTML carries only the link; draggable In/Out markers; **only dragging a handle changes trim**; clicks elsewhere are inert),
     Trim In/Out fields, Pre-Wait, Post-Wait, Loop + loop-count, Hold-last-frame, Auto-continue, fade-stop scope/time, playback-rate slider with 1× reset.
     Renders even where duration is unknown (timeline duration-gated). The timeline shades the shared audio+video
     fade-in/out envelope over the trim window (same curve the engine ramps).
@@ -884,6 +889,13 @@ Space (not in an editable field) → plays the selected cue; on a group selectio
 WebSocket hub (`/api/ws`) is the **only** channel: while playing, the pipeline ticker pushes one sync per displayed second over the socket.
 No polling anywhere — every widget (nowplaying, cuesheet, clocks) renders
 from socket pushes. The topbar shows the socket state as a status dot.
+- A sync is a signal only: each widget asks its status endpoint (`/api/cuesheet/status?version=`,
+  `/api/nowplaying/status?version=`) and fetches the partial only when its version moved.
+- Every cuesheet render carries its version (`data-version` on `#cuesheet`, read before the sheet). A sheet that arrived
+  as an action's response (row click, GO, edit, delete) therefore counts as seen: the sync for that same change does not
+  fetch it again.
+- One read of the sheet per render: the GO bar and Now Playing derive the selection walk from the sheet the handler
+  already loaded (`ctp.SheetUnits`, `ctp.UnitIndex`).
 
 ### 6.8b Scheduled fire (wall-clock)
 
@@ -943,7 +955,8 @@ moves the generation. Keep them consistent.
 - Optional auth: `AuthMiddleware` (config `auth_password`, editable in Settings) applies to all routes including static assets; browser basic-auth
   prompt; 401 wrong password; 200 once accepted. `GET /api/settings` reports `authEnabled` but never the password.
   Responses never invite shared caching: media is `no-store`, images
-  `private`, and the 401 `no-store`, so a reverse proxy or CDN can't replay
+  `private`, CSS/JS linked with the deployment stamp `private, max-age=31536000, immutable` (the stamp is the newest
+  mtime of the binary and every static file, taken at startup, so each deployment changes the URLs), and the 401 `no-store`, so a reverse proxy or CDN can't replay
   an authenticated response to someone without the password.
 - **Operator password is stored in plain text.** `auth_password` is kept
   unhashed in `config.json` (HTTP Basic needs nothing more, and the operator

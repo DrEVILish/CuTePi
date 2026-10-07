@@ -860,7 +860,7 @@ func TestDeleteCueReturnsRenderedCuesheet(t *testing.T) {
 		t.Fatalf("DELETE /api/cue/1 = %d, want 200: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if !strings.HasPrefix(strings.TrimSpace(body), "<div id=\"cuesheet\">") {
+	if !strings.HasPrefix(strings.TrimSpace(body), "<div id=\"cuesheet\"") {
 		t.Fatalf("expected DELETE /api/cue/1 to return the rendered cuesheet, got:\n%s", body)
 	}
 	if strings.Contains(body, "delroute.mp4") {
@@ -2586,8 +2586,10 @@ func TestScheduleNextEndpoint(t *testing.T) {
 	postForm(t, r, "/api/setting/showmode", "showmode", "")
 }
 
-// The client caches nothing except images: static assets get no-store,
-// image paths get a short private cache; pool files under /media never.
+// The client caches nothing except images and stamped CSS/JS: unstamped
+// static assets get no-store, image paths a short private cache, CSS/JS
+// linked with the deployment stamp are kept for good; pool files under
+// /media never.
 func TestCachePolicy(t *testing.T) {
 	r := gin.New()
 	r.Use(CachePolicy())
@@ -2596,6 +2598,14 @@ func TestCachePolicy(t *testing.T) {
 	w := get(t, r, "/src/ui.js")
 	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("GET /src/ui.js Cache-Control = %q, want no-store", cc)
+	}
+	for _, p := range []string{"/src/ui.js?v=" + AssetStamp(), "/css/index.css?v=x"} {
+		if cc := get(t, r, p).Header().Get("Cache-Control"); cc != "private, max-age=31536000, immutable" {
+			t.Fatalf("GET %s Cache-Control = %q, want the immutable stamp cache", p, cc)
+		}
+	}
+	if cc := get(t, r, "/media/x.mp4?v=1").Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("a stamp must not make pool media cacheable: %q", cc)
 	}
 	w = get(t, r, "/img/cutepi-logo.svg")
 	if cc := w.Header().Get("Cache-Control"); cc != "private, max-age=3600" {

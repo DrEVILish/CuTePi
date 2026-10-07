@@ -179,3 +179,31 @@ func TestRepairZeroOpacityOnce(t *testing.T) {
 		t.Fatalf("the repair ran twice: opacity %v (%v)", again, err)
 	}
 }
+
+// Waveforms left in mediapool by an older binary move to media_waveform, and
+// go with their media row.
+func TestMoveWaveforms(t *testing.T) {
+	d := sqlx.MustConnect("sqlite3", ":memory:?_foreign_keys=on")
+	mustExec(t, d, `CREATE TABLE mediapool (media_id INTEGER PRIMARY KEY NOT NULL, waveform TEXT NOT NULL DEFAULT '')`)
+	mustExec(t, d, `INSERT INTO mediapool (media_id, waveform) VALUES (1, '[0.5]'), (2, '')`)
+	for i := 0; i < 2; i++ { // idempotent
+		if err := moveWaveforms(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var peaks []string
+	if err := d.Select(&peaks, `SELECT peaks FROM media_waveform ORDER BY media_id`); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	d.Get(&left, `SELECT COUNT(*) FROM mediapool WHERE waveform <> ''`)
+	if len(peaks) != 1 || peaks[0] != "[0.5]" || left != 0 {
+		t.Fatalf("moved %v, %d left in mediapool", peaks, left)
+	}
+	mustExec(t, d, `DELETE FROM mediapool WHERE media_id = 1`)
+	var n int
+	d.Get(&n, `SELECT COUNT(*) FROM media_waveform`)
+	if n != 0 {
+		t.Fatalf("waveform outlived its media row")
+	}
+}

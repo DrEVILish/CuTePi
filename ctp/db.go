@@ -140,6 +140,9 @@ func InitDB() error {
 	if _, err = db.Exec(`UPDATE mediapool SET waveform = '' WHERE waveform IS NULL;`); err != nil {
 		return fmt.Errorf("ctp: backfilling waveform column: %w", err)
 	}
+	if err := moveWaveforms(db); err != nil {
+		return err
+	}
 
 	// Migration: the codec and media_title columns were write-only (populated
 	// by RegisterMedia, read by nothing - no handler, template, export or JS
@@ -366,6 +369,35 @@ func addCuesheetColumns(d sqlx.Execer, table string) error {
 		}
 	}
 	return nil
+}
+
+// moveWaveforms keeps waveforms in their own table. A long clip's peaks are
+// hundreds of KB; stored in mediapool, every column after them in the row
+// (media_meta, missing, loudness_gain) was read through the overflow pages,
+// so every sheet render read every clip's whole waveform (80 cues over 10
+// long clips: 714 ms per render). The mediapool column stays, empty, for
+// older binaries. Moves any left there (a database from before 2026-10-07).
+func moveWaveforms(d *sqlx.DB) error {
+	if _, err := d.Exec(`CREATE TABLE IF NOT EXISTS media_waveform (
+		media_id INTEGER PRIMARY KEY NOT NULL REFERENCES mediapool(media_id) ON DELETE CASCADE,
+		peaks    TEXT NOT NULL,
+		updated  INTEGER NOT NULL DEFAULT 0 -- unix ms: the inspector's cache stamp
+	)`); err != nil {
+		return fmt.Errorf("ctp: creating media_waveform: %w", err)
+	}
+	tx, err := d.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO media_waveform (media_id, peaks, updated)
+		SELECT media_id, waveform, CAST(strftime('%s','now') AS INTEGER) * 1000 FROM mediapool WHERE waveform <> ''`); err != nil {
+		return fmt.Errorf("ctp: moving waveforms: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE mediapool SET waveform = '' WHERE waveform <> ''`); err != nil {
+		return fmt.Errorf("ctp: moving waveforms: %w", err)
+	}
+	return tx.Commit()
 }
 
 // repairZeroOpacity runs once per database. Until 2026-10-07 cues were

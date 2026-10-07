@@ -162,7 +162,7 @@
               data-pos-start="{{ .Cue.PosStart }}"
               data-pos-end="{{ .Cue.PosEnd }}"
               data-duration="{{ $dur }}"
-              data-wave="{{ .Cue.Waveform }}"
+              {{ if .Cue.WaveformVersion }}data-wave-url="/api/media/{{ urlPath .Cue.Filename }}/peaks?v={{ .Cue.WaveformVersion }}"{{ end }}
               title="Drag the In/Out markers to adjust the trim window">
               <canvas class="trim-waveform" id="trim-waveform" width="800" height="120"></canvas>
               <div class="trim-shade" id="trim-shade-before" aria-hidden="true" style="left:0;width:0%"></div>
@@ -544,6 +544,33 @@
         wavePending = false; // retried on the next repaint
       });
     }
+    // The stored envelope (/api/media/:name/peaks, hundreds of KB for a long
+    // clip) is fetched once per clip and version and kept parsed across
+    // inspector re-renders (this script re-runs with each one), so neither a
+    // re-render nor a redraw while dragging re-reads it. A few clips kept.
+    var peaksStore = window.__ctpPeaks || (window.__ctpPeaks = { order: [], byUrl: {} });
+    function storedPeaks(timeline) {
+      var url = timeline.dataset.waveUrl;
+      if (!url) return [];
+      var hit = peaksStore.byUrl[url];
+      if (Array.isArray(hit)) return hit;
+      if (hit !== "pending") {
+        peaksStore.byUrl[url] = "pending";
+        fetch(url).then(function (r) {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.json();
+        }).then(function (peaks) {
+          peaksStore.byUrl[url] = Array.isArray(peaks) ? peaks : [];
+          peaksStore.order.push(url);
+          while (peaksStore.order.length > 6) delete peaksStore.byUrl[peaksStore.order.shift()];
+          var current = document.getElementById("trim-timeline");
+          if (current && current.dataset.waveUrl === url) drawTarget(current);
+        }).catch(function () {
+          delete peaksStore.byUrl[url]; // retried on the next repaint
+        });
+      }
+      return [];
+    }
     // Max-hold resample to exactly `bins` values: dense arrays compress to
     // ~1 bar per pixel, sparse arrays (upscale) never stretch into slabs.
     function resampleMax(arr, bins) {
@@ -578,12 +605,8 @@
         canvas.height = bh;
       }
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      var peaks = [];
-      try {
-        var raw = timeline.dataset.wave;
-        if (raw) peaks = JSON.parse(raw);
-      } catch (e) { peaks = []; }
-      if (!Array.isArray(peaks) || peaks.length === 0) return;
+      var peaks = storedPeaks(timeline);
+      if (peaks.length === 0) return;
       var style = getComputedStyle(document.documentElement);
       var waveColour = (style.getPropertyValue("--ctp-accent-2") || "#2fd6ff").trim() || "#2fd6ff";
       ctx.fillStyle = waveColour;

@@ -2340,8 +2340,17 @@ document.addEventListener("click", (e) => {
   // redundant full render on load.
   fetch("/api/cuesheet/status?version=0", {headers: {"Accept": "application/json"}})
     .then((r) => r.json()).then((b) => { lastSeen = b.version; }).catch(() => {});
+  // A sheet that arrived some other way (an action's response: a row
+  // click, GO, an edit) carries its version: no need to fetch it again when
+  // the sync for that same change arrives.
+  function domVersion() {
+    const el = document.getElementById("cuesheet");
+    const v = el ? parseInt(el.dataset.version, 10) : NaN;
+    return isNaN(v) ? 0 : v;
+  }
   async function refresh() {
     try {
+      if (domVersion() > lastSeen) lastSeen = domVersion();
       const status = await fetch("/api/cuesheet/status?version=" + lastSeen, {headers: {"Accept": "application/json"}});
       const body = await status.json();
       // Always advance lastSeen to server version to avoid tight loop

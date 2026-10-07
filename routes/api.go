@@ -617,6 +617,25 @@ func Api(rg *gin.RouterGroup) {
 		c.Status(http.StatusOK)
 	})
 
+	// The stored peak envelope of a media file (the trim timeline's base
+	// layer). The inspector links it with ?v= set to when it was stored, so
+	// a browser keeps it until it changes.
+	rg.GET("/media/:filename/peaks", func(c *gin.Context) {
+		peaks, err := ctp.WaveformPeaks(filepath.Base(c.Param("filename")))
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if peaks == "" {
+			c.String(http.StatusNotFound, "no waveform")
+			return
+		}
+		if c.Query("v") != "" {
+			c.Header("Cache-Control", "private, max-age=31536000, immutable")
+		}
+		c.Data(http.StatusOK, "application/json", []byte(peaks))
+	})
+
 	// Peak envelope for exactly one [from,to) window of a media file, at the
 	// requested bucket count. The trim timeline falls back to this when the
 	// stored envelope is too coarse to fill the screen at the current zoom.

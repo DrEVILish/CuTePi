@@ -34,8 +34,9 @@ type Media struct {
 	Duration         float64   `db:"duration"`
 	Resolution       string    `db:"resolution"`
 	ThumbnailPending bool      `db:"thumbnail_pending"`
-	Waveform         string    `db:"waveform"`   // JSON array of amplitude peaks (0..1), "" if unanalysed
-	MediaInfo        string    `db:"media_meta"` // JSON MediaInfo (container/codec detail), "" on old imports
+	Waveform         string    `db:"waveform"`         // JSON array of amplitude peaks (0..1), "" if unanalysed (media_waveform; AnalysedWaveforms and WaveformPeaks only)
+	WaveformVersion  int64     `db:"waveform_version"` // GetCue: when the stored peaks last changed (unix ms), 0 if none
+	MediaInfo        string    `db:"media_meta"`       // JSON MediaInfo (container/codec detail), "" on old imports
 	WaveformPending  bool      `db:"waveform_pending"`
 	Missing          bool      `db:"missing"` // source file absent from disk (startup scan)
 	DateAdded        time.Time `db:"date_added"`
@@ -218,8 +219,9 @@ func GetCue(cuePos string) (cue Cue, err error) {
 		SELECT ` + cueColumns + `, COALESCE(mediapool.filename, '') AS filename,
 			mediapool.source_kind, mediapool.endpoint_url, mediapool.endpoint_title,
 			mediapool.mimetype, mediapool.size, mediapool.duration, mediapool.resolution,
-			mediapool.thumbnail_pending, mediapool.waveform, mediapool.media_meta,
-			mediapool.waveform_pending, mediapool.missing, mediapool.date_added, mediapool.loudness_gain
+			mediapool.thumbnail_pending, mediapool.media_meta,
+			mediapool.waveform_pending, mediapool.missing, mediapool.date_added, mediapool.loudness_gain,
+			COALESCE((SELECT updated FROM media_waveform w WHERE w.media_id = cuesheet.media_id AND w.peaks <> ''), 0) AS waveform_version
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
 		WHERE cuePos = :cuePos
@@ -912,7 +914,13 @@ func SelectUnits() ([]SelectUnit, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows := FlattenSheet(&cs)
+	return SheetUnits(&cs), nil
+}
+
+// SheetUnits is SelectUnits for a sheet the caller already loaded (a render
+// reads the sheet once, not once per helper).
+func SheetUnits(cs *Cuesheet) []SelectUnit {
+	rows := FlattenSheet(cs)
 	units := make([]SelectUnit, 0, len(rows))
 	for _, r := range rows {
 		if r.Group != nil {
@@ -921,7 +929,7 @@ func SelectUnits() ([]SelectUnit, error) {
 		}
 		units = append(units, SelectUnit{CuePos: r.Cue.CuePos})
 	}
-	return units, nil
+	return units
 }
 
 // SelectionStepAt returns the current selection expressed on SelectUnits'
@@ -931,6 +939,12 @@ func SelectUnitIndex() (int, error) {
 	if err != nil {
 		return -1, err
 	}
+	return UnitIndex(units), nil
+}
+
+// UnitIndex is the current selection's index in units (-1 when nothing in
+// them is selected).
+func UnitIndex(units []SelectUnit) int {
 	var selCue, selGroup int
 	var val string
 	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?;`, stateKeySelectedCue); err == nil {
@@ -945,13 +959,13 @@ func SelectUnitIndex() (int, error) {
 	}
 	for i, u := range units {
 		if selGroup != 0 && u.GroupID == selGroup {
-			return i, nil
+			return i
 		}
 		if selGroup == 0 && u.CuePos == selCue {
-			return i, nil
+			return i
 		}
 	}
-	return -1, nil
+	return -1
 }
 
 // ExtendSelection grows the anchor+set selection to cover every VISIBLE unit
@@ -1165,12 +1179,15 @@ func NextCuePos(endingPos int) (int, error) {
 
 func GetCuesheet() (cuesheet Cuesheet, err error) {
 	var cues []Cue
+	// No waveform: a long clip's peaks are hundreds of KB, and every render
+	// of the sheet, Now Playing and the selection read the whole sheet.
+	// Only the inspector shows one (GetCue).
 
 	query := `
 		SELECT ` + cueColumns + `, COALESCE(mediapool.filename, '') AS filename,
 			mediapool.source_kind, mediapool.endpoint_url, mediapool.endpoint_title,
 			mediapool.mimetype, mediapool.size, mediapool.duration, mediapool.resolution,
-			mediapool.thumbnail_pending, mediapool.waveform, mediapool.media_meta,
+			mediapool.thumbnail_pending, mediapool.media_meta,
 			mediapool.waveform_pending, mediapool.missing, mediapool.date_added, mediapool.loudness_gain
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
@@ -1215,7 +1232,7 @@ func GetMediapool() (pool Mediapool, err error) {
 	// with an identical date_added, which would otherwise leave their
 	// relative order (newest-first, per spec) unspecified.
 	query := `SELECT media_id, COALESCE(filename,'') AS filename, source_kind, endpoint_url, endpoint_title,
-		mimetype, size, duration, resolution, thumbnail_pending, waveform, media_meta,
+		mimetype, size, duration, resolution, thumbnail_pending, media_meta,
 		waveform_pending, missing, date_added, loudness_gain FROM mediapool
 		WHERE source_kind = 'file' ORDER BY date_added DESC, media_id DESC`
 	err = db.Select(&medias, query)
@@ -1224,6 +1241,26 @@ func GetMediapool() (pool Mediapool, err error) {
 		return Mediapool{}, err
 	}
 	return Mediapool{medias}, nil
+}
+
+// AnalysedWaveforms lists the media files with a stored waveform, with it
+// (GetMediapool leaves waveforms out).
+func AnalysedWaveforms() (medias []Media, err error) {
+	err = db.Select(&medias, `SELECT m.media_id, m.filename, m.duration, w.peaks AS waveform
+		FROM mediapool m JOIN media_waveform w ON w.media_id = m.media_id
+		WHERE m.source_kind = 'file' AND w.peaks <> ''`)
+	return medias, err
+}
+
+// WaveformPeaks is a media file's stored peaks (JSON), "" if none.
+func WaveformPeaks(filename string) (string, error) {
+	var peaks string
+	err := db.Get(&peaks, `SELECT w.peaks FROM media_waveform w JOIN mediapool m ON m.media_id = w.media_id
+		WHERE m.filename = ?`, filename)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return peaks, err
 }
 
 // AddEndpoint stores a live HTTP(S) page source. Live pages are not pool
@@ -3085,7 +3122,12 @@ func StoreLoudnessGain(mediaID int, gain float64) error {
 // StoreWaveform persists the computed amplitude peaks (JSON) for a media
 // file and clears its waveform-pending flag.
 func StoreWaveform(mediaID int, peaksJSON string) (err error) {
-	_, err = db.Exec(`UPDATE mediapool SET waveform = ?, waveform_pending = 0 WHERE media_id = ?;`, peaksJSON, mediaID)
+	_, err = db.Exec(`INSERT INTO media_waveform (media_id, peaks, updated) VALUES (?, ?, ?)
+		ON CONFLICT(media_id) DO UPDATE SET peaks = excluded.peaks, updated = excluded.updated`,
+		mediaID, peaksJSON, time.Now().UnixMilli())
+	if err == nil {
+		_, err = db.Exec(`UPDATE mediapool SET waveform_pending = 0 WHERE media_id = ?;`, mediaID)
+	}
 	if err != nil {
 		log.Printf("Error storing waveform: %v", err)
 		return err

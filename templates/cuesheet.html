@@ -1,6 +1,6 @@
 {{ define "cuesheet.html" }}
 
-<div id="cuesheet">
+<div id="cuesheet" data-version="{{ .Version }}">
   <!-- Keyboard trigger plumbing: the global keydown handler fires these
        custom events; each div maps one key to its endpoint. -->
   <div id="ArrowDown" hx-trigger="ArrowDown" hx-post="/api/cue/next" hx-target="#cuesheet" hx-swap="outerHTML"></div>

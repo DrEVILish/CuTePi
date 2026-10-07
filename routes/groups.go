@@ -33,12 +33,9 @@ type GoBar struct {
 // computeGoBar derives the strip from the shared selection walk, so the
 // preview can never disagree with what Space/GO actually fires.
 func computeGoBar(sheet *ctp.Cuesheet) GoBar {
-	units, err := ctp.SelectUnits()
-	if err != nil {
-		return GoBar{}
-	}
-	idx, err := ctp.SelectUnitIndex()
-	if err != nil || idx < 0 || idx >= len(units) {
+	units := ctp.SheetUnits(sheet)
+	idx := ctp.UnitIndex(units)
+	if idx < 0 || idx >= len(units) {
 		return GoBar{}
 	}
 	describe := func(u ctp.SelectUnit) (string, string) {

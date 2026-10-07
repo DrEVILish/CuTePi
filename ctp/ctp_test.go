@@ -354,16 +354,31 @@ func TestThumbnailPendingWorkflow(t *testing.T) {
 		t.Fatalf("expected thumb-1.mp4 to no longer be pending after thumbnail + waveform are done")
 	}
 
-	// Stored peaks round-trip back through the pool.
+	// Stored peaks round-trip from their own table; the pool listing leaves
+	// them out (they can be hundreds of KB per clip).
+	analysed, err := AnalysedWaveforms()
+	if err != nil {
+		t.Fatalf("AnalysedWaveforms: %v", err)
+	}
+	found := false
+	for _, m := range analysed {
+		if m.Filename == "thumb-1.mp4" {
+			found = true
+			if m.Waveform != `[0.1,0.2,0.3]` {
+				t.Fatalf("stored waveform = %q, want %q", m.Waveform, `[0.1,0.2,0.3]`)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("stored waveform not listed")
+	}
 	pool, err = GetMediapool()
 	if err != nil {
 		t.Fatalf("GetMediapool: %v", err)
 	}
 	for _, m := range pool.Medias {
-		if m.Filename == "thumb-1.mp4" {
-			if m.Waveform != `[0.1,0.2,0.3]` {
-				t.Fatalf("stored waveform = %q, want %q", m.Waveform, `[0.1,0.2,0.3]`)
-			}
+		if m.Waveform != "" {
+			t.Fatalf("the pool listing carries %q's waveform", m.Filename)
 		}
 	}
 

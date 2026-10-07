@@ -17,7 +17,9 @@ var imageExts = map[string]bool{
 }
 
 // CachePolicy: everything is served with no-store so the client never
-// caches stale UI or data — except images (pool thumbnails, logos,
+// caches stale UI or data — except CSS/JS linked with the deployment stamp
+// (?v=AssetStamp, kept for good: the URL changes with each deployment) and
+// images (pool thumbnails, logos,
 // placeholders), which get a short private cache. Registered globally so
 // HTML, CSS, JS, API and media responses all follow it.
 //
@@ -39,9 +41,16 @@ func CachePolicy() gin.HandlerFunc {
 			}
 			return imageExts[strings.ToLower(path[dot:])]
 		}
-		if cacheable(p) {
+		// CSS and JS linked with the deployment stamp (?v=AssetStamp) never
+		// change under that URL: kept for good, so a page load or a reload
+		// fetches none of them again (about 700 KB).
+		stamped := c.Query("v") != "" && (strings.HasPrefix(p, "/css/") || strings.HasPrefix(p, "/src/") || strings.HasPrefix(p, "/ftl/"))
+		switch {
+		case stamped:
+			c.Header("Cache-Control", "private, max-age=31536000, immutable")
+		case cacheable(p):
 			c.Header("Cache-Control", "private, max-age=3600")
-		} else {
+		default:
 			c.Header("Cache-Control", "no-store")
 		}
 		c.Next()
