@@ -80,6 +80,7 @@ body.upload-body {
 /* Console readout headers: pane + column titles set as tracked uppercase
    micro-labels in the muted tone — structure, not decoration. */
 #mediapool h5,
+#activecues h5,
 #cuesheet thead th,
 .inspector-header h6 {
   text-transform: uppercase;

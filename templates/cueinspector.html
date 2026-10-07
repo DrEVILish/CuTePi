@@ -73,11 +73,12 @@
                 autocomplete="off" spellcheck="false" title="The page shown on the wall (http or https). A change reloads it if this cue is live.">
             </div>
             <div class="row is-items-center is-gap-xs">
-<input type="hidden" name="stop_others_shown" value="1">
-              <input class="form-check-input" type="checkbox" id="insp-stopothers-live" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}
-                title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
-              <label class="small" for="insp-stopothers-live">Stop others</label>
-                            <label class="insp-field-label" for="insp-live-fadeaction">Fade-stop others</label>
+              <input type="hidden" name="stop_others_shown" value="1">
+              <span class="form-check form-switch mb-0 flex-shrink-0" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
+                <input class="form-check-input" type="checkbox" role="switch" id="insp-stopothers-live" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}>
+                <label class="form-check-label small" for="insp-stopothers-live">Stop others</label>
+              </span>
+              <label class="insp-field-label" for="insp-live-fadeaction">Fade-stop others</label>
               <select id="insp-live-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                 <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                 <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
@@ -208,11 +209,12 @@
                   <label class="small" for="insp-hold">Hold last frame</label>
                 </div>
                 <div class="row is-items-center is-gap-xs">
-<input type="hidden" name="stop_others_shown" value="1">
-                  <input class="form-check-input" type="checkbox" id="insp-stopothers" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}
-                    title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
-                  <label class="small" for="insp-stopothers">Stop others</label>
-                                    <input class="form-check-input" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
+                  <input type="hidden" name="stop_others_shown" value="1">
+                  <span class="form-check form-switch mb-0 flex-shrink-0" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
+                    <input class="form-check-input" type="checkbox" role="switch" id="insp-stopothers" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}>
+                    <label class="form-check-label small" for="insp-stopothers">Stop others</label>
+                  </span>
+                  <input class="form-check-input flex-shrink-0" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
                   <label class="small" for="insp-fadestop">Fade-stop others</label>
                   <select id="insp-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                     <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
@@ -261,11 +263,12 @@
               </div>
             </div>
             <div class="row is-items-center is-gap-xs">
-<input type="hidden" name="stop_others_shown" value="1">
-              <input class="form-check-input" type="checkbox" id="insp-stopothers-img" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}
-                title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
-              <label class="small" for="insp-stopothers-img">Stop others</label>
-                            <label class="insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
+              <input type="hidden" name="stop_others_shown" value="1">
+              <span class="form-check form-switch mb-0 flex-shrink-0" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
+                <input class="form-check-input" type="checkbox" role="switch" id="insp-stopothers-img" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}>
+                <label class="form-check-label small" for="insp-stopothers-img">Stop others</label>
+              </span>
+              <label class="insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
               <select id="insp-img-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                 <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                 <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>

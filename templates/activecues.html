@@ -18,9 +18,9 @@
         {{ if .Layer }}<span class="badge text-bg-secondary ms-auto" title="Display layer, 1 = bottom">L{{ .Layer }}</span>{{ end }}
       </div>
       <div class="active-cue-state small text-muted" data-shape>
-        {{ if .Live }}Live{{ else if .Held }}Held on last frame{{ else if .Paused }}Paused{{ else }}Playing{{ end }}{{ if .Focus }} · transport{{ end }}
+        {{ if .Live }}Live{{ else if .Held }}Holding{{ else if .Paused }}Paused{{ else }}Playing{{ end }}{{ if .Focus }} · transport{{ end }}
       </div>
-      {{ if not .Live }}
+      {{ if gt .Duration 0.0 }}
       <div class="active-cue-time row is-items-center is-gap-xs small">
         <div class="active-cue-bar flex-grow-1" aria-hidden="true"><span style="width: {{ .Pct }}%"></span></div>
         <span class="text-nowrap">{{ .Elapsed }}{{ if .Remaining }} / -{{ .Remaining }}{{ end }}</span>
