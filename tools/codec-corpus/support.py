@@ -68,7 +68,36 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe  # noqa: E402  (decoder used, hardware or software)
 
+USAGE = """usage: support.py [ROOT] [options]
+
+Plays every test file under ROOT/{video,image,audio} (default
+/root/cutepi-testmedia/support) as a cue through the running service and
+measures, from the kernel's DRM trace (plane wall) or the GPU wall's own
+counters, the frames and fade steps that reached the screen.
+
+  --only a,b        only files whose name contains one of these
+  --readme FILE     write the results table into FILE's codec-support section
+  --section NAME    README marker suffix (e.g. gl)
+  --json FILE       write the raw results
+  --base URL        service URL (default http://127.0.0.1)
+  --db PATH         the service's ctp.db (default: from cutepi.service's
+                    WORKING_DIR, else /var/lib/cutepi/config/ctp.db)
+  --soak MIN        soak test instead: cycle the selected files (use --only)
+                    for MIN minutes (play, steady, fade out, stop), recording
+                    per-cycle frame rate and frame intervals, the service's
+                    memory, CMA, temperature and throttling; --json for the
+                    per-cycle records
+  -h, --help        this text
+
+Frame intervals (plane wall): the time between consecutive new frames on the
+cue's plane, in ms, as p50/p95/p99/p99.9/max over the steady window, and the
+refreshes that repeated a frame. A 60 fps average with an occasional 100 ms
+stall shows up here, not in the average."""
+
 ARGS = sys.argv[1:]
+if "-h" in ARGS or "--help" in ARGS:
+    print(USAGE)
+    sys.exit(0)
 ROOT = ARGS[0] if ARGS and not ARGS[0].startswith("--") else "/root/cutepi-testmedia/support"
 def opt(name, default=None):
     return ARGS[ARGS.index(name) + 1] if name in ARGS else default
@@ -77,7 +106,20 @@ SECTION = opt("--section", "")   # README marker suffix, e.g. "gl" -> <!-- codec
 JSON_OUT = opt("--json")
 ONLY = [o for o in (opt("--only") or "").split(",") if o]  # comma-separated name substrings
 BASE = opt("--base", "http://127.0.0.1")
-DB = opt("--db", "/root/cutepi/config/ctp.db")
+def service_db():
+    """The running service's DB: WORKING_DIR from cutepi.service, else the default data dir."""
+    try:
+        env = subprocess.run(["systemctl", "show", "-p", "Environment", "cutepi"], capture_output=True, text=True).stdout
+        m = re.search(r"WORKING_DIR=(\S+)", env)
+        if m:
+            return os.path.join(m.group(1), "config", "ctp.db")
+    except OSError:
+        pass
+    return "/var/lib/cutepi/config/ctp.db"
+
+
+DB = opt("--db") or service_db()
+SOAK_MIN = float(opt("--soak", "0") or 0)
 T = "/sys/kernel/tracing"
 FADE_S = 1.0
 STEADY_S = 4.0
@@ -263,6 +305,26 @@ def rate(times, lo, hi):
     return sum(1 for t in times if lo <= t < hi) / (hi - lo)
 
 
+def pct(vals, q):
+    """q-th percentile (0..100) by nearest rank."""
+    if not vals:
+        return None
+    v = sorted(vals)
+    return v[min(len(v) - 1, max(0, int(round(q / 100 * len(v) + 0.5)) - 1))]
+
+
+def intervals(times, lo, hi, period):
+    """Frame-interval statistics in [lo, hi): ms between consecutive new frames
+    (p50/p95/p99/p99.9/max) and refreshes that repeated a frame."""
+    ts = sorted(t for t in times if lo <= t < hi)
+    if len(ts) < 3:
+        return None
+    d = [(b - a) * 1000 for a, b in zip(ts, ts[1:])]
+    repeats = sum(max(0, int(round(x / (period * 1000))) - 1) for x in d)
+    return {"p50": round(pct(d, 50), 2), "p95": round(pct(d, 95), 2), "p99": round(pct(d, 99), 2),
+            "p99_9": round(pct(d, 99.9), 2), "max": round(max(d), 2), "frames": len(ts), "repeats": repeats}
+
+
 # ---- what the file is, what the plane shows ---------------------------------
 
 def source_info(path):
@@ -439,7 +501,9 @@ def audio_running():
 
 # ---- one file ---------------------------------------------------------------
 
-def run(path, mdl):
+def run(path, mdl, keep=False):
+    """Test one file. keep (soak): reuse the file and cue if already in the
+    service, and leave them there afterwards."""
     name = os.path.basename(path)
     kind = os.path.basename(os.path.dirname(path))
     stem, ext = os.path.splitext(name)
@@ -458,14 +522,17 @@ def run(path, mdl):
         src_fps = float(m.group(1))
     if animated:
         res["source_fps"] = round(src_fps, 2) if src_fps else None
-    st_, body = upload(path)
-    if st_ != 200:
-        res["error"] = "import refused: " + (body.strip().splitlines() or [""])[-1][:140]
-        res["status"] = mdl + " - unsupported"
-        return res
+    pos = cue_pos(name) if keep else None
+    if not pos:
+        st_, body = upload(path)
+        if st_ != 200:
+            res["error"] = "import refused: " + (body.strip().splitlines() or [""])[-1][:140]
+            res["status"] = mdl + " - unsupported"
+            return res
     try:
-        call("POST", "/api/cue/add/" + urllib.parse.quote(name))
-        pos = cue_pos(name)
+        if not pos:
+            call("POST", "/api/cue/add/" + urllib.parse.quote(name))
+            pos = cue_pos(name)
         if not pos:
             raise RuntimeError("cue not created")
         call("PUT", "/api/cue/%d/edit/fadeIn" % pos, form={"val": "1s"})
@@ -563,6 +630,7 @@ def run(path, mdl):
             steps = props.get(plane, []) if plane is not None else []
             win = {"fade_in": (t_first, t_first + FADE_S), "steady": (t_first + FADE_S + 0.3, t_read - 0.02),
                    "fade_out": (t_fo + 0.05, t_fo + FADE_S - 0.05)}
+            res["steady_intervals_ms"] = intervals(times, *win["steady"], period)
             for w, (lo, hi) in win.items():
                 fps = window_fps(times, lo, hi, period, phase)
                 res[w + "_fps"] = round(fps, 1) if fps is not None else None
@@ -606,10 +674,78 @@ def run(path, mdl):
     finally:
         call("POST", "/api/stop")
         time.sleep(0.3)
-        pos = cue_pos(name)
-        if pos:
-            call("DELETE", "/api/cue/%d" % pos)
-        call("DELETE", "/api/media/" + urllib.parse.quote(name))
+        if not keep:
+            pos = cue_pos(name)
+            if pos:
+                call("DELETE", "/api/cue/%d" % pos)
+            call("DELETE", "/api/media/" + urllib.parse.quote(name))
+
+
+# ---- soak -------------------------------------------------------------------
+
+def service_stats():
+    """The service's resident memory (with WebKit's helpers), CMA free,
+    SoC temperature and throttle flags."""
+    rss = 0
+    for comm in ("cutepi", "WPEWebProcess", "WPENetworkProce"):
+        for pid in subprocess.run(["pgrep", "-x", comm], capture_output=True, text=True).stdout.split():
+            try:
+                for line in open("/proc/%s/status" % pid):
+                    if line.startswith("VmRSS:"):
+                        rss += int(line.split()[1])
+            except OSError:
+                pass
+    mem = dict(l.split(":", 1) for l in open("/proc/meminfo"))
+    cma = int(mem.get("CmaFree", "0 kB").split()[0])
+    temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+    thr = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True).stdout.strip().split("=")[-1]
+    return {"rss_mb": round(rss / 1024, 1), "cma_free_mb": round(cma / 1024, 1), "temp_c": temp, "throttled": thr}
+
+
+def soak(files, mdl):
+    end = time.monotonic() + SOAK_MIN * 60
+    cycles, cycle = [], 0
+    base = service_stats()
+    print("soak %.0f min over %d file(s); start %s" % (SOAK_MIN, len(files), base), file=sys.stderr, flush=True)
+    try:
+        while time.monotonic() < end:
+            for path in files:
+                cycle += 1
+                try:
+                    r = run(path, mdl, keep=True)
+                except Exception as e:
+                    r = {"file": os.path.basename(path), "error": "test error: %s" % e}
+                r.update(cycle=cycle, t_min=round((SOAK_MIN * 60 - (end - time.monotonic())) / 60, 2), **service_stats())
+                cycles.append(r)
+                iv = r.get("steady_intervals_ms") or {}
+                print("cycle %d %s: steady %s fps, p99 %s ms, max %s, repeats %s, rss %s MB, cma free %s MB, %s C, throttled %s%s" % (
+                    cycle, r["file"], r.get("steady_fps"), iv.get("p99"), iv.get("max"), iv.get("repeats"),
+                    r["rss_mb"], r["cma_free_mb"], r["temp_c"], r["throttled"],
+                    " ERROR " + r["error"] if r.get("error") else ""), file=sys.stderr, flush=True)
+                if time.monotonic() >= end:
+                    break
+    finally:
+        for path in files:
+            name = os.path.basename(path)
+            pos = cue_pos(name)
+            if pos:
+                call("DELETE", "/api/cue/%d" % pos)
+            call("DELETE", "/api/media/" + urllib.parse.quote(name))
+    ok = [c for c in cycles if not c.get("error")]
+    allv = [c["steady_intervals_ms"] for c in ok if c.get("steady_intervals_ms")]
+    summary = {
+        "cycles": len(cycles), "errors": len(cycles) - len(ok),
+        "steady_fps_min": min((c["steady_fps"] for c in ok if c.get("steady_fps") is not None), default=None),
+        "p99_ms_worst": max((v["p99"] for v in allv), default=None),
+        "max_interval_ms": max((v["max"] for v in allv), default=None),
+        "repeats_total": sum(v["repeats"] for v in allv),
+        "rss_mb": (base["rss_mb"], cycles[-1]["rss_mb"] if cycles else None),
+        "cma_free_mb_min": min((c["cma_free_mb"] for c in cycles), default=None),
+        "temp_c_max": max((c["temp_c"] for c in cycles), default=None),
+        "throttled_seen": sorted({c["throttled"] for c in cycles}),
+    }
+    print("soak summary: " + json.dumps(summary))
+    return cycles, summary
 
 
 # ---- README table -----------------------------------------------------------
@@ -632,6 +768,10 @@ def fmt_row(r):
             f(r.get("fade_out_fps")), f(r.get("fade_out_steps")))
         if r.get("source_fps"):
             meas = "animated, %s fps file; " % f(r["source_fps"]) + meas
+        iv = r.get("steady_intervals_ms")
+        if iv:
+            meas += "; frame interval p99 %s ms, p99.9 %s, max %s (%d repeated refreshes)" % (
+                f(iv["p99"]), f(iv["p99_9"]), f(iv["max"]), iv["repeats"])
     if r.get("plane_format") and not r.get("error"):
         meas += "; alpha: plane %s, blend %s" % (r["plane_format"], r["blend_mode"])
     status = "**Supported**" if r["status"] == "Supported" else r["status"]
@@ -693,6 +833,12 @@ def main():
         call("POST", "/api/settings", json.dumps({"escFadeMs": int(FADE_S * 1000)}).encode(), {"Content-Type": "application/json"})
         if not GL:
             probes_on()
+        if SOAK_MIN > 0:
+            results, summary = soak(files, mdl)
+            if JSON_OUT:
+                with open(JSON_OUT, "w") as f:
+                    json.dump({"summary": summary, "cycles": results}, f, indent=1)
+            return
         for path in files:
             try:
                 r = run(path, mdl)
