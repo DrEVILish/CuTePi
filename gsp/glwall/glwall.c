@@ -205,13 +205,17 @@ static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC p_bindimg;
  * locking the system up. Per thread (Linux), and only once per thread. */
 #define WALL_NICE (-10)
 
-/* Real-time scheduling, opt-in for measurement (CUTEPI_WALL_RT): "presenter"
- * puts only the presenter thread (fence wait, SetPlane) on SCHED_FIFO,
- * "all" every wall thread. Priority 10 stays below the kernel's interrupt
- * threads (FIFO 50); the kernel's RT throttling (sched_rt_runtime_us) keeps
- * a runaway thread from locking the system. Needs RLIMIT_RTPRIO (the unit's
- * LimitRTPRIO), as the nice level needs RLIMIT_NICE (LimitNICE) when the
- * service runs unprivileged. */
+/* Real-time scheduling (default): every wall thread runs SCHED_FIFO 10, so
+ * no decoder or other work can delay the wall by a time slice. Measured on the
+ * Pi 4 (TEST_REPORT "GPU wall: real-time threads"): H.264 1080p60 shown at
+ * 59.6-60.1 in 8 of 8 runs against 56.5-58.9 at nice -10, HEVC 60, and the
+ * web UI still answering within 0.4 s through a 10-minute soak with a
+ * software decoder busy. Priority 10 stays below the kernel's interrupt
+ * threads (FIFO 50), and the kernel's RT throttling (sched_rt_runtime_us)
+ * keeps a runaway thread from locking the system. Unprivileged it needs
+ * RLIMIT_RTPRIO (the unit's LimitRTPRIO); without it, or with
+ * CUTEPI_WALL_RT=nice, the wall falls back to nice -10 (LimitNICE).
+ * CUTEPI_WALL_RT=presenter puts only the presenter on SCHED_FIFO. */
 #define WALL_RT_PRIO 10
 
 static void wall_thread_priority_rt(int presenter) {
@@ -219,7 +223,8 @@ static void wall_thread_priority_rt(int presenter) {
   if (done) return;
   done = 1;
   const char *rt = g_getenv("CUTEPI_WALL_RT");
-  if (rt && (g_str_equal(rt, "all") || (presenter && g_str_equal(rt, "presenter")))) {
+  if (!rt || !*rt) rt = "all";
+  if (g_str_equal(rt, "all") || (presenter && g_str_equal(rt, "presenter"))) {
     struct sched_param sp = { .sched_priority = WALL_RT_PRIO };
     if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0) {
       GST_INFO("glwall: thread on SCHED_FIFO %d", WALL_RT_PRIO);

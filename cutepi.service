@@ -24,9 +24,9 @@ SupplementaryGroups=video render audio
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
-# The GPU wall raises its threads to nice -10 (and, opt-in with
-# CUTEPI_WALL_RT, the presenter to SCHED_FIFO 10) so software decoders cannot
-# starve it. Unprivileged, that needs these resource limits.
+# The GPU wall runs its threads on SCHED_FIFO 10 (CUTEPI_WALL_RT=nice: nice
+# -10 instead) so decoders cannot delay it. Unprivileged, that needs these
+# resource limits.
 LimitNICE=-10
 LimitRTPRIO=10
 

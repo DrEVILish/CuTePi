@@ -662,7 +662,11 @@ wall pipeline (always running)                                    ▼
   and no TFU copies traced; the same `DirectDmabufExternal` route as HEVC); the decoder simply has no spare capacity
   for the extra memory traffic. `v4l2h264dec` cannot output the tiled NC12 layout the hardware offers (GStreamer has
   no mapping for it). With the wall's threads ahead of the decoders H.264 High reached 57.8–58.4 shown (and steps):
-  level with the plane wall's 58.4 steady (whose fades step 30 times a second). Neither path reaches 59: the decoder
+  level with the plane wall's 58.4 steady (whose fades step 30 times a second). **Corrected 2026-10-07:** with every
+  wall thread on SCHED_FIFO 10 (now the default, `CUTEPI_WALL_RT`), H.264 1080p60 shows 59.6–60.1 in 8 of 8 runs and
+  59.8–60.2 through a 10-minute soak, so the remaining shortfall below was scheduling delay, not the decoder's memory
+  bandwidth (TEST_REPORT "Performance round, 2026-10-07"). The analysis that follows is kept for its measurements.
+  Neither path reaches 59: the decoder
   itself manages 63–66 fps on these clips with any display running. Closed options: switching the hidden console
   plane off (decoder 63.5 → 66.1 fps, but H.264 shown 56.5–57.6, no gain), and RGBA (AB24) from the decoder so the GPU
   samples a tiled copy (`v4l2h264dec` will not preroll with it). Left: the firmware's `h264_freq` (an overclock, the

@@ -1168,6 +1168,55 @@ burst; the new "Nothing uploaded" wording), not behaviour. Go: every package pas
   would make it instant.
 - **Background refresh traffic (O2):** 4 requests per second per client while playing.
 
+## Performance round, 2026-10-07
+
+Pi 4 Model B Rev 1.5, 1080p60 HDMI, live service as the `cutepi` user (plane wall unless noted).
+
+**Bitstream and decode.** decodebin already feeds `v4l2h264dec` byte-stream, `alignment=au` (via `h264parse`), as the
+decoder requires; it outputs DMA_DRM YU12. Decode as fast as possible (`parsebin ! decoder ! fakesink sync=false`):
+
+| File | `v4l2h264dec` | `avdec_h264` (4 threads) | `v4l2slh265dec` | `avdec_h265` (4 threads) |
+|---|---|---|---|---|
+| `h264_high.mov` (testsrc2 1080p60, 7.4 Mbit/s), governor ondemand / performance | 73.5 / 74.5 | 116.9 / 120.0 | – | – |
+| `hevc_main.mkv` (1080p60), ondemand / performance | – | – | 125.7 / 128.3 | 111.4 / 111.1 |
+| `bbb_sunflower_1080p_30fps` (real footage, 3 Mbit/s) | 75.4 | 106.1 | – | – |
+| the same, re-encoded with x265 ultrafast | – | – | 121.1 | – |
+
+Software H.264 decodes faster than the hardware decoder on four cores; the cost of software decoding is moving the
+frames to the display (system memory), not decoding them. The CPU governor moves results by 1–3 %: not adopted.
+x265 encodes 1080p at 15.3 fps (ultrafast), 13.0 (superfast), 14.8 on real footage.
+
+**Display controller, atomic commits** (`atomic_planes`, a scratch C test, service stopped): one atomic commit per
+vblank carrying, for every layer, a new framebuffer **and** a new `alpha`, full-screen 1920×1080, 5 s each:
+
+| Layers | XRGB8888 | NV12 | NV12 SAND128 (the HEVC decoder's layout, `BROADCOM_SAND128_COL_HEIGHT`) |
+|---|---|---|---|
+| 1 | 60.1 commits/s, p99 16.74 ms | – | 60.0, p99 16.86 |
+| 2 | 60.1, p99 16.80 | 60.1, p99 16.77 | 60.2, p99 16.74 |
+| 4 | 60.1, p99 16.81 | 60.0, p99 16.75 | 60.2, p99 16.74 |
+| 6 / 8 | – | 60.0 / 60.1, p99 16.74 | – |
+
+No commit failed. The 60-commits-a-second ceiling of O1 (a) belongs to `kmssink`'s blocking legacy `SetPlane` and
+the separate alpha-property commits, not to the hardware; and the planes take SAND128 framebuffers, which GStreamer
+cannot describe (O1 (c)). Static buffers: no decoder competed for memory in this test.
+
+**GPU wall threads.** Since the service runs as `cutepi`, the wall's `setpriority(-10)` failed silently
+(EACCES), and H.264 on the GL wall fell to 46.1 / 55.9. `LimitNICE=-10` restores nice -10. H.264 MOV + MKV, 4 runs
+each: nice -10 56.5–58.9 (0 of 8 pass); SCHED_FIFO 10 on every wall thread **59.6–60.1 (8 of 8)**; presenter only
+58.6–58.7. HEVC 59.8–60.1 in every setting with nice or RT. 10-minute soak, RT on all wall threads, H.264 / HEVC /
+ProRes 422 (software) cycling: H.264 59.8–60.2 in 15 of 16 cycles (one 54.3), HEVC 59.9–60.0 in 16 of 16, ProRes
+7–36 (CPU-bound, as before); 48 cycles, no errors, no RT throttling, no thermal throttling (55 °C max); the web UI
+answered 256 polls within 0.39 s. Adopted: SCHED_FIFO on all wall threads is the GL wall's default.
+
+**Soak, plane wall** (`support.py --soak 10`, H.264 High + MPEG-2): 49 cycles, no errors; steady frame interval p99
+16.7 ms in 45 of 49 cycles; the drops were on the first cycles and in three MPEG-2 (software) cycles (worst 17
+repeated refreshes, 44 ms max). Service + WebKit memory 480 → ~545 MB, flat after the first minutes; CMA free ≥ 60
+MB; 50.6 °C max, no throttling.
+
+**Audio.** ALSA `default` on the HDMI card does not mix: a second stream gets "Device or resource busy", and the
+card's `dmix` device cannot produce its format ("requested or auto-format is not available"). Concurrent sound needs
+a mixer in CuTePi.
+
 ## Open findings (not fixed; need a decision)
 
 ### O1 — Frame rate: 1080p60 plays at 60 fps; fades, two layers and HEVC do not (major)
