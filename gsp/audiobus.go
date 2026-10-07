@@ -75,15 +75,18 @@ func busStartLocked() error {
 	if config.Audio().Device != "" {
 		factory = "alsasink"
 	}
-	names := []string{"audiomixer", "audioconvert", "audioresample", "capsfilter", factory}
-	els, err := gst.NewElementMany(names...)
+	// Live mixing: inputs are live (interaudiosrc), an input with nothing to
+	// say is silence, never a stall. force-live is construct-only.
+	mix, err := gst.NewElementWithProperties("audiomixer", map[string]interface{}{"force-live": true})
 	if err != nil {
 		return err
 	}
-	mix, caps, sink := els[0], els[3], els[4]
-	// Live mixing: inputs are live (interaudiosrc), an input with nothing to
-	// say is silence, never a stall.
-	mix.Set("force-live", true)
+	rest, err := gst.NewElementMany("audioconvert", "audioresample", "capsfilter", factory)
+	if err != nil {
+		return err
+	}
+	els := append([]*gst.Element{mix}, rest...)
+	caps, sink := els[3], els[4]
 	mix.Set("ignore-inactive-pads", true)
 	mix.Set("latency", uint64(20*time.Millisecond))
 	if c := audioBusCaps(); c != "" {
