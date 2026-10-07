@@ -291,13 +291,6 @@ func GroupSubtreeCues(groupID int) ([]int, error) {
 	return positions, nil
 }
 
-// ReparentCue is the legacy single-cue membership setter (context menu /
-// older clients): place the cue at the end of the target group's span.
-// Membership in the sequence model is positional, so "join" = move.
-func ReparentCue(newPos int, parentGroupID int) error {
-	return SheetDrop([]int{newPos}, 0, "group", parentGroupID, true, false, false, nil, 0)
-}
-
 // SetCueGroup assigns cue at cuePos to group (0 = top level) — the join
 // gesture; the cue lands after the group's span end.
 func SetCueGroup(cuePos string, groupID int) error {

@@ -319,7 +319,7 @@ func TestSwapKeepsHandlesOnActivePipeline(t *testing.T) {
 	}
 	assertHandlesCurrent()
 	for i := 0; i < 5; i++ {
-		if err := Load("swap.wav"); err != nil {
+		if err := LoadWithOpts("swap.wav", DirectOpts("swap.wav", 0)); err != nil {
 			t.Fatalf("swap %d: %v", i, err)
 		}
 	}

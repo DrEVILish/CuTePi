@@ -347,12 +347,6 @@ func (w *KMSWall) setAlpha(p *kmsPlane, a float64) error {
 	return w.set(p, "alpha", uint64(a*65535+0.5))
 }
 
-// planeState reads back a plane's properties (tests and diagnostics).
-func (w *KMSWall) planeState(p *kmsPlane) map[string]uint64 {
-	_, v, _ := objectProps(w.fd, p.id, drmObjectPlane)
-	return v
-}
-
 // rotationBits maps cue rotation/mirror onto the plane's rotation property.
 // ok=false for 90/270, which the display controller cannot rotate.
 func rotationBits(deg int, flip string) (bits uint64, ok bool) {

@@ -6,33 +6,8 @@
 // the trigger here is a native drag event, not an hx-trigger; htmx.process
 // is called on inserted nodes so their hx-* attributes still work.
 (function () {
-  function replaceById(id, html) {
-    const current = document.getElementById(id);
-    if (!current) return;
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = html.trim();
-    const replacement = wrapper.firstElementChild;
-    if (!replacement || replacement.id !== id) {
-      console.error("CuTePi: unexpected partial response for #" + id);
-      return;
-    }
-    current.replaceWith(replacement);
-    if (window.htmx) {
-      htmx.process(replacement);
-    }
-  }
-
-  // Server refusals are plain text (htmx requests), an error page (reason in
-  // its <pre>) or, for a name clash, JSON with an "error" field.
-  function uploadErrorText(status, text) {
-    try {
-      const j = JSON.parse(text);
-      if (j && j.error) return j.error;
-    } catch (err) { /* not JSON */ }
-    const body = (text || "").trim();
-    if (body && !body.startsWith("<")) return body.replace(/\s+/g, " ").slice(0, 300);
-    const doc = new DOMParser().parseFromString(body, "text/html");
-    return (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim().slice(0, 300) || ("server returned " + status);
+  function clearJoinMarks(root) {
+    root.querySelectorAll(".cue-group-header.dnd-join, .cue-group-header.dnd-join-first").forEach((h) => h.classList.remove("dnd-join", "dnd-join-first"));
   }
 
   // Pool drag-and-drop upload (§5.7): free-space check first, then an XHR
@@ -40,8 +15,8 @@
   async function uploadFiles(files) {
     if (!files || files.length === 0) return;
     files = Array.from(files);
-    if (window.cutepiCheckSpace && !(await window.cutepiCheckSpace(files))) return;
-    const choice = window.cutepiUploadChoice ? await window.cutepiUploadChoice(files) : { go: true, onConflict: "" };
+    if (!(await cutepiCheckSpace(files))) return;
+    const choice = await cutepiUploadChoice(files);
     if (!choice.go) return;
     const formData = new FormData();
     if (choice.onConflict) formData.append("onConflict", choice.onConflict);
@@ -49,19 +24,17 @@
       formData.append("media", file);
     }
     const label = files.length === 1 ? files[0].name : files.length + " files";
-    const card = window.cutepiProgress ? window.cutepiProgress("Uploading " + label + "…") : null;
+    const card = cutepiProgress("Uploading " + label + "…");
     try {
-      const res = await window.cutepiUpload("/upload", formData, (pct, text) => {
-        if (card) card.set(pct, text);
-      });
+      const res = await cutepiUpload("/upload", formData, (pct, text) => card.set(pct, text));
       if (res.status < 200 || res.status >= 300) {
         throw new Error(uploadErrorText(res.status, res.text));
       }
       replaceById("mediapool", res.text);
-      if (card) card.done(window.cutepiUploadSummary ? window.cutepiUploadSummary(res.result) : "Imported " + label, true);
+      card.done(cutepiUploadSummary(res.result), true);
     } catch (err) {
       console.error("CuTePi: upload failed", err);
-      if (card) card.done("Upload failed: " + err.message, false);
+      card.done("Upload failed: " + err.message, false);
     }
   }
 
@@ -142,7 +115,7 @@
   function clearIntent() {
     pendingIntent = null;
     removeDropIndicator();
-    document.querySelectorAll(".cue-group-header.dnd-join, .cue-group-header.dnd-join-first").forEach((h) => h.classList.remove("dnd-join", "dnd-join-first"));
+    clearJoinMarks(document);
   }
 
 
@@ -211,7 +184,7 @@ function setupCuesheetDropTarget() {
           if (hovered && hovered.dataset.groupId) {
             const hr = hovered.getBoundingClientRect();
             const frac = hr.height > 0 ? (e.clientY - hr.top) / hr.height : 0.5;
-            tbody.querySelectorAll(".cue-group-header.dnd-join, .cue-group-header.dnd-join-first").forEach((h) => h.classList.remove("dnd-join", "dnd-join-first"));
+            clearJoinMarks(tbody);
             if (frac > HEAD_STRIP) {
               const gid = parseInt(hovered.dataset.groupId, 10);
               if (hovered.dataset.groupCollapsed === "true") {
@@ -233,7 +206,7 @@ function setupCuesheetDropTarget() {
             // top-level between the blocks.
           }
         }
-       tbody.querySelectorAll(".cue-group-header.dnd-join, .cue-group-header.dnd-join-first").forEach((h) => h.classList.remove("dnd-join", "dnd-join-first"));
+       clearJoinMarks(tbody);
        // Row bands (§5.4): the line lands in the hovered row's gap and
        // carries that band's membership. Member cue rows indent the line to
        // the member-name level (cue-drop-in) so the jump between "top
@@ -308,7 +281,7 @@ function setupCuesheetDropTarget() {
     document.body.addEventListener("dragend", () => {
       pendingIntent = null;
       removeDropIndicator();
-      document.querySelectorAll(".cue-group-header.dnd-join, .cue-group-header.dnd-join-first").forEach((h) => h.classList.remove("dnd-join", "dnd-join-first"));
+      clearJoinMarks(document);
     });
 
     document.body.addEventListener("drop", (e) => {
@@ -320,7 +293,7 @@ function setupCuesheetDropTarget() {
       const joining = intent.mode === "join-last";
       const joiningFirst = intent.mode === "join-first";
       const intentGroupId = intent.groupId != null ? String(intent.groupId) : "";
-      document.querySelectorAll(".cue-group-header.dnd-join, .cue-group-header.dnd-join-first").forEach((h) => h.classList.remove("dnd-join", "dnd-join-first"));
+      clearJoinMarks(document);
       // Show mode locks the sheet: refuse the drop (dragover highlight is
       // harmless, nothing mutates until drop).
       if (document.body.classList.contains("show-mode")) {

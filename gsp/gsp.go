@@ -616,13 +616,6 @@ func TestShowing() bool {
 	return mgr.testShowing && mgr.pipeline != nil
 }
 
-// Load loads (and starts) playback of filename from the configured media
-// directory, replacing any currently active pipeline. Direct media playback
-// has no cue-specific hold policy but honours the configured loop default.
-func Load(filename string) error {
-	return LoadWithOpts(filename, DirectOpts(filename, 0))
-}
-
 // DirectOpts are the load options for playing filename straight from the
 // media pool (no cue): the configured loop default; a still holds until
 // Stop/Panic; an animated image repeats as the file says (GIF/APNG/WebP
@@ -1225,17 +1218,6 @@ func SetClipLoop(loop bool) {
 	}
 }
 
-// Volume returns the active cue's playback gain in dB (0 = 0dB). With no
-// pipeline loaded there is no cue volume concept, so it reports 0dB.
-func Volume() float64 {
-	mgr.mu.Lock()
-	defer mgr.mu.Unlock()
-	if mgr.pipeline == nil {
-		return 0
-	}
-	return mgr.volume
-}
-
 // FadeAndStop fades the active clip to black over durMs (volume -> 0 and,
 // for video, brightness -> -1) and then tears the pipeline down. It blocks
 // until the fade finishes; a zero or negative duration stops at once.
@@ -1412,11 +1394,6 @@ func animationOf(name string) media.Animation {
 // IsAnimated reports whether filename is an animated image (GIF, APNG, WebP).
 func IsAnimated(filename string) bool { return animationOf(filename).Animated }
 
-// IsStill reports whether filename is a single-frame image. Direct playback
-// (no cue) holds such an image on the wall until Stop/Panic instead of
-// tearing it down on its first frame.
-func IsStill(filename string) bool { return isStillFile(filename) }
-
 func (m *manager) applyGain() {
 	if m.volumeEl != nil {
 		m.volumeEl.Set("volume", m.effectiveGain())
@@ -1501,46 +1478,9 @@ func dbToGain(db float64) float64 {
 	return math.Pow(10, db/20.0)
 }
 
-// SetVolume applies a live per-cue gain (in dB) to the active pipeline's
-// audio branch (0dB = no change). No global master exists; callers persist the
-// value onto the cue. Returns the clamped dB value actually applied.
-func SetVolume(v float64) float64 {
-	if math.IsNaN(v) {
-		mgr.mu.Lock()
-		defer mgr.mu.Unlock()
-		return mgr.volume
-	}
-	v = dbClamp(v)
-	mgr.mu.Lock()
-	mgr.volume = v
-	mgr.applyGain()
-	mgr.mu.Unlock()
-	mgr.bump()
-	return v
-}
-
 // dbClamp clamps a dB value to the Cue Inspector slider's range.
 func dbClamp(v float64) float64 {
 	return math.Max(-60, math.Min(12, v))
-}
-
-func SetMute(mute bool) {
-	mgr.mu.Lock()
-	mgr.mute = mute
-	mgr.applyGain()
-	mgr.mu.Unlock()
-}
-
-func SetBalance(balance float64) {
-	if math.IsNaN(balance) || math.IsInf(balance, 0) {
-		return
-	}
-	mgr.mu.Lock()
-	mgr.balance = math.Max(-1, math.Min(1, balance))
-	if mgr.panEl != nil {
-		mgr.panEl.Set("panorama", float32(mgr.balance))
-	}
-	mgr.mu.Unlock()
 }
 
 func clampRate(rate float64) float64 {

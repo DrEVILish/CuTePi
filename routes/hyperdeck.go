@@ -82,17 +82,6 @@ const (
 
 // --- listener -----------------------------------------------------------------
 
-// ListenHyperdeck runs the HyperDeck TCP listener until it is closed
-// (exported for the test harness). Bind failures log and return.
-func ListenHyperdeck(addr string) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		logs.Printf(logs.RTEDeckErr, "hyperdeck listener: %v", err)
-		return
-	}
-	serveHyperdeck(ln)
-}
-
 // startHyperdeck binds synchronously (so the caller sees bind errors) and
 // serves in the background; closing the returned listener stops it.
 func startHyperdeck(addr string) (io.Closer, error) {

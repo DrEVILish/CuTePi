@@ -48,12 +48,6 @@ func intOrZero(p *int) int {
 	return *p
 }
 
-// splitHhMm parses an "HH:MM" string into hour and minute integers.
-func splitHhMm(v string) (int, int, error) {
-	hh, mm, _, err := splitHhMmSs(v)
-	return hh, mm, err
-}
-
 // splitHhMmSs parses "HH:MM" or "HH:MM:SS" (the time input's step=1 value)
 // into hour, minute and second integers. Seconds default to 0.
 func splitHhMmSs(v string) (int, int, int, error) {
@@ -185,14 +179,11 @@ func restartProcess(grace time.Duration) error {
 }
 
 // systemdUnit returns the name of the systemd unit running this process, or ""
-// when not running under a unit. systemd sets INVOCATION_ID for unit processes
-// and CUTEPI_SERVICE can be used to pin a non-default service name.
+// when not running under a unit (systemd sets INVOCATION_ID for unit
+// processes).
 func systemdUnit() string {
 	if os.Getenv("INVOCATION_ID") == "" {
 		return ""
-	}
-	if s, ok := os.LookupEnv("CUTEPI_SERVICE"); ok && s != "" {
-		return s
 	}
 	return "cutepi"
 }
@@ -406,23 +397,6 @@ func Api(rg *gin.RouterGroup) {
 	// ESC key: see fadeStop.
 	rg.POST("/esc", fadeStop)
 
-	// Fade & stop the active clip over the given duration (ms); no duration
-	// means "stop now". Mirrors the fade-to-black used when a subsequent cue
-	// triggers with its own fadeOut set.
-	rg.POST("/fade", func(c *gin.Context) {
-		durMs := 0
-		if raw := c.PostForm("duration"); raw != "" {
-			ms, perr := strconv.Atoi(raw)
-			if perr != nil || ms < 0 {
-				c.String(http.StatusBadRequest, "invalid duration")
-				return
-			}
-			durMs = ms
-		}
-		gsp.FadeAndStop(durMs)
-		c.Status(http.StatusOK)
-	})
-
 	rg.POST("/test/*pattern", func(c *gin.Context) {
 		// Tests are an Edit-mode tool: Show mode locks the sheet.
 		if ctp.GetShowMode() {
@@ -549,28 +523,6 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		gsp.Play()
-		c.Status(http.StatusOK)
-	})
-
-	// Load from Mediapool (loads the file into the pipeline without
-	// necessarily playing). Referenced by the MediaPool dropdown "Load"
-	// action.
-	rg.POST("/load/:filename", func(c *gin.Context) {
-		filename := c.Param("filename")
-		if ok, merr := ctp.MediaRegistered(filename); merr != nil || !ok {
-			c.String(http.StatusNotFound, "media not found")
-			return
-		}
-		logs.Printf(logs.RTELoad, "Load%s", filename)
-		gain, err := ctp.MediaLoudnessGain(filename)
-		if err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
-			return
-		}
-		if err := gsp.LoadWithOpts(filename, gsp.DirectOpts(filename, gain)); err != nil {
-			respondError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
 		c.Status(http.StatusOK)
 	})
 
@@ -734,15 +686,6 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		c.Status(http.StatusNoContent)
-	})
-
-	// Clear every cue's health result (§12.3) — pre-show reset.
-	rg.POST("/cue/clearresults", func(c *gin.Context) {
-		if err := ctp.ClearCueResults(); err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
-			return
-		}
-		renderCuesheet(c)
 	})
 
 	// Ctrl+A: select every rendered (visible) cue.
@@ -1430,43 +1373,6 @@ func Api(rg *gin.RouterGroup) {
 			return
 		}
 		c.HTML(http.StatusOK, "cueinspector.html", inspectorData())
-	})
-
-	// Bulk reorder: client sends the full ordered list of cuePos values
-	// (as produced by a drag-and-drop). Server reindexes 1..N atomically.
-	// Move cue up
-
-	rg.POST("/cue/:cuePos/move/up", func(c *gin.Context) {
-		cuePos := c.Param("cuePos")
-		logs.Printf(logs.RTEUp, "Move Cue Up%s", cuePos)
-		pos, perr := strconv.Atoi(cuePos)
-		if perr != nil {
-			c.String(http.StatusBadRequest, "invalid cue position")
-			return
-		}
-		err := ctp.MoveSheetCue(pos, -1)
-		if err != nil {
-			respondError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-		renderCuesheet(c)
-	})
-
-	// Move cue down
-	rg.POST("/cue/:cuePos/move/down", func(c *gin.Context) {
-		cuePos := c.Param("cuePos")
-		logs.Printf(logs.RTEDown, "Move Cue Down%s", cuePos)
-		pos, perr := strconv.Atoi(cuePos)
-		if perr != nil {
-			c.String(http.StatusBadRequest, "invalid cue position")
-			return
-		}
-		err := ctp.MoveSheetCue(pos, 1)
-		if err != nil {
-			respondError(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-		renderCuesheet(c)
 	})
 
 	rg.POST("/cue/:cuePos", func(c *gin.Context) {

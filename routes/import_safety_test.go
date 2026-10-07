@@ -143,9 +143,6 @@ func TestStaticNoListingAndMediaNotCached(t *testing.T) {
 
 func TestInputValidationFixes(t *testing.T) {
 	r := setupTestServer(t)
-	if w := post(t, r, "/api/cue/abc/move/up"); w.Code != http.StatusBadRequest {
-		t.Fatalf("move with bad position = %d, want 400", w.Code)
-	}
 	if w := postForm(t, r, "/api/testpattern/nope.png", "on", "1"); w.Code != http.StatusNotFound {
 		t.Fatalf("pinning unknown media = %d, want 404", w.Code)
 	}

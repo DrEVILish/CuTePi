@@ -564,17 +564,6 @@ func geomValue(s string, full, def int) int {
 	return int(math.Round(f))
 }
 
-// ValidGeom reports whether s is a usable geometry value ("", px or %).
-func ValidGeom(s string) bool {
-	s = strings.TrimSpace(strings.ToLower(s))
-	if s == "" {
-		return true
-	}
-	s = strings.TrimSuffix(strings.TrimSuffix(s, "%"), "px")
-	_, err := strconv.ParseFloat(s, 64)
-	return err == nil
-}
-
 // kmsVideoTail names the video output chain for the KMS wall. Hardware
 // decoders hand DMABuf frames straight to the plane (no copy, no
 // conversion); system-memory frames (software decode, stills, test
