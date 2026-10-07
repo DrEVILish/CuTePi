@@ -897,6 +897,7 @@ func Api(rg *gin.RouterGroup) {
 	// producer), keeping the saved channels/rate. "" = default HDMI embedded.
 	rg.POST("/setting/audiodevice", func(c *gin.Context) {
 		a := config.Audio()
+		defer gsp.ResetAudioBus() // the bus picks the new output up
 		if err := config.SetAudio(c.PostForm("device"), a.Channels, a.Rate); err != nil {
 			c.String(http.StatusBadRequest, err.Error())
 			return
@@ -1122,6 +1123,9 @@ func Api(rg *gin.RouterGroup) {
 		}
 		if hasDisplay && fail(config.SetDisplay(body.DisplayResolution, body.DisplayRefresh, body.DisplayUseEDID)) {
 			return
+		}
+		if hasAudio {
+			defer gsp.ResetAudioBus()
 		}
 		if hasAudio && fail(config.SetAudio(body.AudioDevice, body.AudioChannels, body.AudioRate)) {
 			return

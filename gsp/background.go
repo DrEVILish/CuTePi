@@ -131,6 +131,15 @@ func playOneTrack(filename string, linear float64, done <-chan struct{}) (stoppe
 		return false, err
 	}
 	p.Add(pb)
+	// The soundtrack's sound goes into the audio bus, mixed with the cues'.
+	sink, err := audioBusInput(p)
+	if err != nil {
+		return false, err
+	}
+	defer audioBusRelease(p)
+	if err := pb.Set("audio-sink", sink); err != nil {
+		return false, err
+	}
 	if err := pb.Set("uri", uri); err != nil {
 		return false, err
 	}

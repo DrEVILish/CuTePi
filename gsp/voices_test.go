@@ -185,3 +185,31 @@ func TestStackIndex(t *testing.T) {
 		t.Fatalf("insert = %v", got)
 	}
 }
+
+// Two running cues with sound are both heard: each feeds the audio bus (one
+// mixer on the device), where two device sinks could not open at once. When
+// they stop, the bus lets the device go.
+func TestVoicesShareTheAudioDevice(t *testing.T) {
+	voicesFixture(t)
+	a := warmFixture(t, "aa.wav", tinyWav(3))
+	if err := os.WriteFile(filepath.Join(config.MediaLocation(), "ab.wav"), tinyWav(3), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer func(d time.Duration) { busIdle = d }(busIdle)
+	busIdle = 300 * time.Millisecond
+	fire(t, a, LoadOpts{CuePos: 1})
+	fire(t, "ab.wav", LoadOpts{CuePos: 2, KeepOthers: true})
+	if got := running(); len(got) != 2 {
+		t.Fatalf("running = %v, want both cues", got)
+	}
+	waitFor(t, "both cues on the bus", func() bool { return AudioBusInputs() == 2 })
+	Stop()
+	if n := AudioBusInputs(); n != 0 {
+		t.Fatalf("bus inputs after Stop = %d", n)
+	}
+	waitFor(t, "the bus to release the device", func() bool {
+		abus.mu.Lock()
+		defer abus.mu.Unlock()
+		return abus.p == nil
+	})
+}

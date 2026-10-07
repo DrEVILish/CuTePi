@@ -706,6 +706,7 @@ func Stop() {
 	if err := p.SetState(gst.StateNull); err != nil {
 		logs.Printf(logs.GSPStopErr, "gsp: error stopping: %v", err)
 	}
+	audioBusRelease(p) // the device is free while stopped; a resume reattaches
 	if glOpen {
 		glHide(p) // off the wall now; a resume re-attaches after its preroll
 	}
@@ -1152,18 +1153,16 @@ func warmWireAudio(p *gst.Pipeline) (wired, ok bool) {
 	if tail == nil || fake == nil {
 		return false, true
 	}
-	factory := "autoaudiosink"
-	if config.Audio().Device != "" {
-		factory = "alsasink"
-	}
-	sink, err := gst.NewElement(factory)
+	sink, err := audioBusInput(p) // the audio bus, as a cold build
 	if err != nil {
+		logs.PrintfWarn(logs.GSPPipeDebug, "gsp: warm slot audio: %v", err)
 		return false, false
 	}
 	p.AddMany(sink)
 	fail := func() (bool, bool) {
 		sink.SetState(gst.StateNull)
 		p.Remove(sink)
+		audioBusRelease(p)
 		return false, false
 	}
 	src := tail.GetStaticPad("src")
@@ -1174,7 +1173,6 @@ func warmWireAudio(p *gst.Pipeline) (wired, ok bool) {
 	if src.Link(sink.GetStaticPad("sink")) != gst.PadLinkOK {
 		return fail()
 	}
-	applyAudioSink(sink)
 	sink.SyncStateWithParent()
 	p.Remove(fake)
 	fake.SetState(gst.StateNull)
@@ -2023,6 +2021,7 @@ func startPlayback(p *gst.Pipeline) error {
 	mgr.applyGain()
 	mgr.applyBrightness()
 	mgr.mu.Unlock()
+	audioBusReattach(p) // a resume after Stop: back on the bus
 	// Preroll before seeking: no initial audio/frame leaks before the trim or
 	// rate is applied, and slow decoders need no guessed sleep duration.
 	p.SetState(gst.StatePaused)
@@ -2182,6 +2181,7 @@ func liveFrameReady(p *gst.Pipeline) bool {
 func retirePipeline(p *gst.Pipeline) {
 	liveLoaded.Delete(p)
 	p.SetState(gst.StateNull)
+	audioBusRelease(p)
 	dropLayer(p)
 	incomingShown(p)
 	p.GetPipelineBus().Post(gst.NewApplicationMessage(p, gst.NewStructure("retire")))
@@ -2443,13 +2443,12 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		queueName := "video-queue"
 		if isAudio {
 			queueName = "audio-queue"
-			// Audio routing: settings (Display/Audio tab) can park every
-			// cue on a named alsasink device (e.g. the HDMI 2.0 @ 48k
-			// path). The warm slot stays on autoaudiosink — its PAUSED
-			// preroll must never grab a hw device the live cue owns.
+			// Audio routing: every cue's sound goes into the audio bus
+			// (audiobus.go: one mixer on the configured device, so running
+			// cues are heard together, §6.1.2).
 			sink := "autoaudiosink"
-			if audio := config.Audio(); !spec.isTest && !spec.warmSink && audio.Device != "" {
-				sink = "alsasink"
+			if !spec.isTest && !spec.warmSink {
+				sink = "interaudiosink"
 			}
 			if spec.warmSink {
 				// Warm-slot audio prerolls into a fakesink: the real device
@@ -2522,11 +2521,12 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		// prerolls with default plumbing so it can never grab a hw device).
 		if !spec.warmSink && !spec.isTest {
 			if isAudio {
-				applyAudioSink(elements[len(elements)-1])
-				if glOpen {
-					// The wall shows a frame ~115 ms after its time; the
-					// sound waits as long (DESIGN §6.1.1, Audio).
-					glwall.AlignAudio(elements[len(elements)-1])
+				// The bus carries the device, format and the GPU wall's
+				// display delay (audiobus.go).
+				elements[len(elements)-1].Set("name", "cue-audio-sink") // found again on resume
+				if err := audioBusAttach(pipeline, elements[len(elements)-1]); err != nil {
+					failLink(pipeline, self, fmt.Errorf("the audio output: %w", err))
+					return
 				}
 			} else if i := indexOfName(elementNames, "capsfilter"); i >= 0 {
 				setResolutionCaps(elements[i])
@@ -2665,29 +2665,4 @@ func setResolutionCaps(capsEl *gst.Element) {
 	h, _ := strconv.Atoi(strings.SplitN(d.Resolution, "x", 2)[1])
 	capsEl.Set("caps", gst.NewCapsFromString(
 		fmt.Sprintf("video/x-raw,width=%d,height=%d", w, h)))
-}
-
-// applyAudioSink tags the chain's audio sink with the routing settings from
-// the Audio tab: device (alsasink) and, when set, rate/channels caps.
-func applyAudioSink(sink *gst.Element) {
-	a := config.Audio()
-	if a.Device != "" {
-		sink.Set("device", a.Device)
-	}
-	// Constraint format: "2.0" -> 2 channels; rate 0 = as-is.
-	rate, channels := a.Rate, 0
-	if strings.HasPrefix(a.Channels, "2.") {
-		channels = 2
-	}
-	if rate <= 0 && channels <= 0 {
-		return
-	}
-	if rate > 0 && channels > 0 {
-		sink.Set("caps", gst.NewCapsFromString(
-			fmt.Sprintf("audio/x-raw,rate=%d,channels=%d", rate, channels)))
-	} else if rate > 0 {
-		sink.Set("caps", gst.NewCapsFromString(fmt.Sprintf("audio/x-raw,rate=%d", rate)))
-	} else if channels > 0 {
-		sink.Set("caps", gst.NewCapsFromString(fmt.Sprintf("audio/x-raw,channels=%d", channels)))
-	}
 }
