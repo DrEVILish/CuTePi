@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,10 +67,14 @@ func TestInspectorMixOnlyAppliesToItsCue(t *testing.T) {
 	if gsp.ApplyCueMix(2, gsp.CueMix{Volume: -20, Rate: 1}) {
 		t.Fatal("cue 2's mix applied while cue 1 plays")
 	}
-	if v := gsp.Volume(); v != 0 {
+	// SetCueVolume(NaN) reads the playing cue's volume back unchanged.
+	if v, _ := gsp.SetCueVolume(math.NaN()); v != 0 {
 		t.Fatalf("playing cue's volume = %v after another cue's mix, want 0", v)
 	}
-	if !gsp.ApplyCueMix(1, gsp.CueMix{Volume: -12, Rate: 1}) || gsp.Volume() != -12 {
-		t.Fatalf("cue 1's own mix not applied (volume %v)", gsp.Volume())
+	if !gsp.ApplyCueMix(1, gsp.CueMix{Volume: -12, Rate: 1}) {
+		t.Fatal("cue 1's own mix not applied")
+	}
+	if v, _ := gsp.SetCueVolume(math.NaN()); v != -12 {
+		t.Fatalf("cue 1's own mix not applied (volume %v)", v)
 	}
 }

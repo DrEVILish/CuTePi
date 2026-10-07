@@ -9,9 +9,6 @@ Wants=network-online.target
 # point here because the app reads ./templates and ./public relative to cwd.
 WorkingDirectory=/opt/cutepi
 Environment=PORT=80
-# So the UI's Restart button runs `systemctl restart cutepi` under this unit
-# (allowed for the cutepi user by deploy/50-cutepi.rules).
-Environment=CUTEPI_SERVICE=cutepi
 
 # Runs as the unprivileged "cutepi" system user (deploy/install-service-user.sh
 # creates it; its home is /var/lib/cutepi, which also holds WebKit's caches).

@@ -16,20 +16,27 @@ var (
 		// Same-origin only: a page on another site must not be able to open
 		// the push channel with the operator's cached credentials. Clients
 		// that send no Origin (non-browser tools) are allowed.
-		CheckOrigin: sameOrigin,
+		CheckOrigin: SameOrigin,
 	}
 	mu      sync.Mutex
 	clients = make(map[*client]bool)
 )
 
-// sameOrigin reports whether the handshake's Origin (if any) names the
-// request's own Host.
-func sameOrigin(r *http.Request) bool {
-	o := r.Header.Get("Origin")
-	if o == "" {
-		return true
+// SameOrigin reports whether r's Origin (or, lacking one, Referer) names
+// r's own Host. Requests with neither header are not browser-driven and
+// pass. Shared by the upgrader and the HTTP CSRF guard (routes.SameOrigin).
+func SameOrigin(r *http.Request) bool {
+	src := r.Header.Get("Origin")
+	if src == "" {
+		src = r.Header.Get("Referer")
+		if src == "" {
+			return true // not a browser-initiated cross-site request
+		}
 	}
-	u, err := url.Parse(o)
+	if src == "null" {
+		return false // sandboxed iframe / opaque origin
+	}
+	u, err := url.Parse(src)
 	if err != nil || u.Host == "" {
 		return false
 	}

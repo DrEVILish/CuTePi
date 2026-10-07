@@ -45,13 +45,13 @@
       var files = input && input.files ? Array.from(input.files) : [];
       if (!files.length) { say("Choose a .CTP file first.", "text-warning"); return; }
       var btn = form.querySelector('button[type="submit"]');
-      Promise.resolve(window.cutepiCheckSpace ? window.cutepiCheckSpace(files) : true).then(function (ok) {
+      cutepiCheckSpace(files).then(function (ok) {
         if (!ok) { say("Import cancelled — not enough disk space.", "text-warning"); return; }
         if (btn) btn.disabled = true;
         bar.hidden = false;
         bar.value = 0;
         say("Uploading… 0%");
-        return window.cutepiUpload("/api/show/import", new FormData(form), function (pct, text) {
+        return cutepiUpload("/api/show/import", new FormData(form), function (pct, text) {
           if (pct === null) bar.removeAttribute("value"); else bar.value = pct;
           say(text);
         }).then(function (res) {

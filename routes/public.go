@@ -55,7 +55,6 @@ func Public(r *gin.Engine) {
 	// which is the arrangement that library's CONTRACT.md requires.
 	r.StaticFS("/ftl/themes", filesOnly("./third_party/ftl-themes/dist"))
 	r.StaticFS("/ftl/assets", filesOnly("./third_party/ftl-themes/assets"))
-	r.StaticFS("/fonts", filesOnly("./public/fonts"))
 	r.StaticFS("/img", filesOnly("./public/img"))
 	r.StaticFS("/src", filesOnly("./public/src"))
 	r.StaticFS("/thumbnails", filesOnly(config.ThumbnailLocation()))

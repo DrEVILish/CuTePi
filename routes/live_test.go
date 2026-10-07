@@ -153,7 +153,7 @@ func TestScheduledLiveCueIsQueryable(t *testing.T) {
 	if err := ctp.SetCueSchedule(cue.CuePos, true, day, now.Hour()*3600+now.Minute()*60+now.Second()); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := ctp.GetScheduledCues(now)
+	rows, err := ctp.GetScheduledCuesSince(now.Add(-time.Second), now)
 	if err != nil {
 		t.Fatalf("GetScheduledCues: %v", err)
 	}

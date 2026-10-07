@@ -12,9 +12,9 @@ func allCodes() []string {
 	return []string{
 		GSPPauseErr, GSPToggleErr, GSPStopErr, GSPPipeDebug, GSPPipeStopped, GSPPadAdded,
 		RTEPlay, RTEPlayAlias, RTEPause, RTEToggle, RTEFadeOut, RTEPanic,
-		RTEClear, RTEStop, RTETest, RTEDirect, RTELoad,
+		RTEClear, RTEStop, RTETest, RTEDirect,
 		RTEAddCue, RTEDelete, RTEDeleteBusy, RTECueNext, RTECuePrev, RTECuePlay,
-		RTEUp, RTEDown, RTEUse, RTEEdit, RTEUpdate, RTERemove,
+		RTEUse, RTEEdit, RTEUpdate, RTERemove,
 		RTERestart, RTEShutdown, RTEHostRefused,
 		YDLRequest, YDLResolve, YDLDownload, YDLProbe, YDLRegister, YDLRender, YDLFailed,
 		NETListErr,

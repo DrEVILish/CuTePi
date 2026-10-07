@@ -2,6 +2,7 @@ package ctp
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -68,7 +69,7 @@ func TestCollapsedGroupHidesOnlyMembers(t *testing.T) {
 		t.Fatalf("AddCue m: %v", err)
 	}
 	mpos, _ := lastCuePos()
-	if err := SetCueGroup(itoa(mpos), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(mpos), gid); err != nil {
 		t.Fatalf("SetCueGroup: %v", err)
 	}
 	if err := AddCue("cm-t.mp4", ""); err != nil {
@@ -433,14 +434,14 @@ func TestOutlineEnclosesMemberAfterNestedSubgroup(t *testing.T) {
 	}
 	// c1,c2 -> G1; c3 -> Sub; c4 -> G1 again (ordered after the subgroup).
 	for _, p := range []int{1, 2} {
-		if err := SetCueGroup(itoa(p), gid); err != nil {
+		if err := SetCueGroup(strconv.Itoa(p), gid); err != nil {
 			t.Fatalf("SetCueGroup c%d: %v", p, err)
 		}
 	}
-	if err := SetCueGroup(itoa(3), sub); err != nil {
+	if err := SetCueGroup(strconv.Itoa(3), sub); err != nil {
 		t.Fatalf("SetCueGroup c3: %v", err)
 	}
-	if err := SetCueGroup(itoa(4), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(4), gid); err != nil {
 		t.Fatalf("SetCueGroup c4: %v", err)
 	}
 	// Push c4's sheet_index past the Sub header (gap-indexed layout).
@@ -488,10 +489,10 @@ func TestSheetDropDraggedAnchorStaysAtBand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	if err := SetCueGroup(itoa(4), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(4), gid); err != nil {
 		t.Fatalf("join 4: %v", err)
 	}
-	if err := SetCueGroup(itoa(5), gid); err != nil {
+	if err := SetCueGroup(strconv.Itoa(5), gid); err != nil {
 		t.Fatalf("join 5: %v", err)
 	}
 	gidInt := gid
@@ -543,10 +544,10 @@ func TestBulkGroupNewAtNestsInAnchorGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	if err := SetCueGroup(itoa(3), outer); err != nil {
+	if err := SetCueGroup(strconv.Itoa(3), outer); err != nil {
 		t.Fatalf("join 3: %v", err)
 	}
-	if err := SetCueGroup(itoa(4), outer); err != nil {
+	if err := SetCueGroup(strconv.Itoa(4), outer); err != nil {
 		t.Fatalf("join 4: %v", err)
 	}
 	// Select cues 3,4 (inside Outer), right-click 4, Add to New Group.
@@ -604,13 +605,13 @@ func TestFlattenSheetFolderBoxes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateGroup E: %v", err)
 	}
-	if err := SetCueGroup(itoa(2), d); err != nil {
+	if err := SetCueGroup(strconv.Itoa(2), d); err != nil {
 		t.Fatalf("join 2 to D: %v", err)
 	}
-	if err := SetCueGroup(itoa(3), e); err != nil {
+	if err := SetCueGroup(strconv.Itoa(3), e); err != nil {
 		t.Fatalf("join 3 to E: %v", err)
 	}
-	if err := SetCueGroup(itoa(4), e); err != nil {
+	if err := SetCueGroup(strconv.Itoa(4), e); err != nil {
 		t.Fatalf("join 4 to E: %v", err)
 	}
 	cs, _ := GetCuesheet()
@@ -670,12 +671,12 @@ func TestSheetDropGroupBandNestsBlock(t *testing.T) {
 		t.Fatalf("CreateGroup B: %v", err)
 	}
 	for _, p := range []int{1, 2} {
-		if err := SetCueGroup(itoa(p), a); err != nil {
+		if err := SetCueGroup(strconv.Itoa(p), a); err != nil {
 			t.Fatalf("join c%d to A: %v", p, err)
 		}
 	}
 	for _, p := range []int{3, 4} {
-		if err := SetCueGroup(itoa(p), b); err != nil {
+		if err := SetCueGroup(strconv.Itoa(p), b); err != nil {
 			t.Fatalf("join c%d to B: %v", p, err)
 		}
 	}

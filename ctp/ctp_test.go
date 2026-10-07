@@ -80,7 +80,7 @@ func TestCueNavigation(t *testing.T) {
 		t.Fatalf("expected SelectedCuePos=3 after second NextCue, got %d", got)
 	}
 
-	// Already at the last cue - NextCue must not advance past cuesheetLength.
+	// Already at the last cue - NextCue must not advance past the last cue.
 	if err := NextCue(); err != nil {
 		t.Fatalf("NextCue: %v", err)
 	}
@@ -88,11 +88,11 @@ func TestCueNavigation(t *testing.T) {
 		t.Fatalf("expected SelectedCuePos to stay at 3, got %d", got)
 	}
 
-	if err := PrevCue(); err != nil {
-		t.Fatalf("PrevCue: %v", err)
+	if err := SelectStep(-1); err != nil {
+		t.Fatalf("SelectStep(-1): %v", err)
 	}
 	if got, _ := SelectedCuePos(); got != 2 {
-		t.Fatalf("expected SelectedCuePos=2 after PrevCue, got %d", got)
+		t.Fatalf("expected SelectedCuePos=2 after SelectStep(-1), got %d", got)
 	}
 
 	if err := SetCue("1"); err != nil {
@@ -105,10 +105,10 @@ func TestCueNavigation(t *testing.T) {
 	if CuesheetVersion() <= version {
 		t.Fatalf("cue selection change did not advance the sync version")
 	}
-	if err := PrevCue(); err != nil {
-		t.Fatalf("PrevCue: %v", err)
+	if err := SelectStep(-1); err != nil {
+		t.Fatalf("SelectStep(-1): %v", err)
 	}
-	// Regression test: PrevCue used to have an off-by-one that blocked
+	// Regression test: stepping back used to have an off-by-one that blocked
 	// navigating down to cue 1.
 	if got, _ := SelectedCuePos(); got != 1 {
 		t.Fatalf("expected SelectedCuePos to stay at 1 (can't go below 1), got %d", got)
@@ -558,7 +558,7 @@ func TestParseTimeRoundTrip(t *testing.T) {
 }
 
 // Move cue tests
-func TestMoveCueUpDown(t *testing.T) {
+func TestMoveSheetCueUpDown(t *testing.T) {
 	if err := ClearCueSheet(); err != nil {
 		t.Fatalf("ClearCueSheet: %v", err)
 	}
@@ -584,8 +584,8 @@ func TestMoveCueUpDown(t *testing.T) {
 	}
 
 	// Move c (pos 3) up -> visual order a, c, b (cuePos is identity now).
-	if err := MoveCueUp("3"); err != nil {
-		t.Fatalf("MoveCueUp: %v", err)
+	if err := MoveSheetCue(3, -1); err != nil {
+		t.Fatalf("MoveSheetCue up: %v", err)
 	}
 	sheet, _ = GetCuesheet()
 	if sheet.Cues[1].Media.Filename != "move-c.mp4" || sheet.Cues[2].Media.Filename != "move-b.mp4" {
@@ -593,26 +593,26 @@ func TestMoveCueUpDown(t *testing.T) {
 	}
 
 	// Move a (pos 1) up -> should stay at 1 (already at top)
-	if err := MoveCueUp("1"); err != nil {
-		t.Fatalf("MoveCueUp(1): %v", err)
+	if err := MoveSheetCue(1, -1); err != nil {
+		t.Fatalf("MoveSheetCue up(1): %v", err)
 	}
 	sheet, _ = GetCuesheet()
 	if sheet.Cues[0].CuePos != 1 {
-		t.Fatalf("MoveCueUp(1) should not move: %+v", sheet.Cues)
+		t.Fatalf("MoveSheetCue up(1) should not move: %+v", sheet.Cues)
 	}
 
 	// Move b (pos 3) down -> should stay at 3 (already at bottom)
-	if err := MoveCueDown("3"); err != nil {
-		t.Fatalf("MoveCueDown(3): %v", err)
+	if err := MoveSheetCue(3, 1); err != nil {
+		t.Fatalf("MoveSheetCue down(3): %v", err)
 	}
 	sheet, _ = GetCuesheet()
 	if sheet.Cues[2].CuePos != 3 {
-		t.Fatalf("MoveCueDown(3) should not move: %+v", sheet.Cues)
+		t.Fatalf("MoveSheetCue down(3) should not move: %+v", sheet.Cues)
 	}
 
 	// Move b (pos 2) down -> should go to pos 3, c to 2
-	if err := MoveCueDown("2"); err != nil {
-		t.Fatalf("MoveCueDown(2): %v", err)
+	if err := MoveSheetCue(2, 1); err != nil {
+		t.Fatalf("MoveSheetCue down(2): %v", err)
 	}
 	sheet, _ = GetCuesheet()
 	if sheet.Cues[1].Media.Filename != "move-c.mp4" || sheet.Cues[2].Media.Filename != "move-b.mp4" {
@@ -620,15 +620,15 @@ func TestMoveCueUpDown(t *testing.T) {
 	}
 
 	// Move c (pos 3) up twice -> should go to pos 1
-	if err := MoveCueUp("3"); err != nil {
-		t.Fatalf("MoveCueUp(3) again: %v", err)
+	if err := MoveSheetCue(3, -1); err != nil {
+		t.Fatalf("MoveSheetCue up(3) again: %v", err)
 	}
-	if err := MoveCueUp("2"); err != nil {
-		t.Fatalf("MoveCueUp(2) again: %v", err)
+	if err := MoveSheetCue(2, -1); err != nil {
+		t.Fatalf("MoveSheetCue up(2) again: %v", err)
 	}
 	sheet, _ = GetCuesheet()
 	if sheet.Cues[0].Media.Filename != "move-c.mp4" {
-		t.Fatalf("expected c at pos 1 after two MoveCueUp: %+v", sheet.Cues)
+		t.Fatalf("expected c at pos 1 after two moves up: %+v", sheet.Cues)
 	}
 }
 
@@ -825,8 +825,8 @@ func TestCueOrderAndSelectionStayConsistentAfterChanges(t *testing.T) {
 	if err := SetCue("3"); err != nil {
 		t.Fatalf("SetCue: %v", err)
 	}
-	if err := MoveCueUp("3"); err != nil {
-		t.Fatalf("MoveCueUp: %v", err)
+	if err := MoveSheetCue(3, -1); err != nil {
+		t.Fatalf("MoveSheetCue up: %v", err)
 	}
 	if selected, _ := SelectedCuePos(); selected != 2 {
 		t.Fatalf("selected cue after move up = %d, want 2", selected)

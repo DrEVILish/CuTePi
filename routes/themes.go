@@ -136,15 +136,6 @@ var (
 	hexColorRE = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 )
 
-// ThemeNames reports the valid data-theme values.
-func ThemeNames() []string {
-	names := []string{}
-	for _, t := range Themes() {
-		names = append(names, t.Name)
-	}
-	return names
-}
-
 // ThemeMap is the id -> {name, href, scheme, variants, tint} map the
 // pre-paint boot script in header.html uses to pick a stylesheet, variant and
 // tint before the first render, and that ui.js reuses when the picker changes.

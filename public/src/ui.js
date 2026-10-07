@@ -185,6 +185,23 @@ function hideModal(id) {
   if (m) m.hide();
 }
 
+// Swap #id for a rendered partial whose root is #id again and re-process its
+// htmx attributes. Returns the new element, or null when either is missing.
+function replaceById(id, html) {
+  const current = document.getElementById(id);
+  if (!current) return null;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = html.trim();
+  const replacement = wrapper.firstElementChild;
+  if (!replacement || replacement.id !== id) {
+    console.error("CuTePi: unexpected partial response for #" + id);
+    return null;
+  }
+  current.replaceWith(replacement);
+  if (window.htmx) htmx.process(replacement);
+  return replacement;
+}
+
 // --- Upload helpers (§5.7) -------------------------------------------------
 // Every upload path (modal, pool drop, /upload page, show import) checks the
 // batch against the media volume's free space first, and reports live
@@ -209,7 +226,6 @@ function cutepiCheckSpace(files) {
     })
     .catch(() => true);
 }
-window.cutepiCheckSpace = cutepiCheckSpace;
 // Floating progress card for uploads that have no modal of their own (pool
 // drag-and-drop). set(pct, text) updates it; done(text, ok) fades it out.
 function cutepiProgress(label) {
@@ -235,7 +251,6 @@ function cutepiProgress(label) {
     },
   };
 }
-window.cutepiProgress = cutepiProgress;
 // XHR POST with upload progress; onProgress(pct|null, phaseText). Resolves
 // {status, text}. pct null = indeterminate (the server is importing).
 function cutepiUpload(url, formData, onProgress) {
@@ -254,7 +269,19 @@ function cutepiUpload(url, formData, onProgress) {
     xhr.send(formData);
   });
 }
-window.cutepiUpload = cutepiUpload;
+
+// Server refusals are plain text (htmx requests), an error page (reason in
+// its <pre>) or, for a name clash, JSON with an "error" field.
+function uploadErrorText(status, text) {
+  try {
+    const j = JSON.parse(text);
+    if (j && j.error) return j.error;
+  } catch (err) { /* not JSON */ }
+  const body = (text || "").trim();
+  if (body && !body.startsWith("<")) return body.replace(/\s+/g, " ").slice(0, 300);
+  const doc = new DOMParser().parseFromString(body, "text/html");
+  return (doc.querySelector("pre") || doc.body).textContent.replace(/\s+/g, " ").trim().slice(0, 300) || ("server returned " + status);
+}
 
 // Name clashes are settled before any bytes are sent: ask the server which
 // names already exist (or repeat in the batch), then let the operator pick.
@@ -273,7 +300,6 @@ async function cutepiUploadChoice(files) {
   const choice = await askUploadConflict(conflicts);
   return choice ? { go: true, onConflict: choice } : { go: false };
 }
-window.cutepiUploadChoice = cutepiUploadChoice;
 
 function askUploadConflict(names) {
   return new Promise((resolve) => {
@@ -328,7 +354,6 @@ function cutepiUploadSummary(header) {
     return "Upload complete";
   }
 }
-window.cutepiUploadSummary = cutepiUploadSummary;
 
 // One dismissible bootstrap toast per error; the container is created lazily
 // so every page that loads ui.js gets feedback with no markup changes.
@@ -698,17 +723,7 @@ window.addEventListener("keydown", (e) => {
         if (!res.ok) throw new Error("server returned " + res.status);
         return res.text();
       })
-      .then((html) => {
-        const current = document.getElementById("cuesheet");
-        if (!current) return;
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = html.trim();
-        const replacement = wrapper.firstElementChild;
-        if (replacement && replacement.id === "cuesheet") {
-          current.replaceWith(replacement);
-          if (window.htmx) htmx.process(replacement);
-        }
-      })
+      .then((html) => replaceById("cuesheet", html))
       .catch((err) => console.error("CuTePi: delete failed", err));
   }
 }, false);
@@ -940,47 +955,6 @@ filterMedia();
   });
 })();
 
-// Delete is handled outside htmx because the control lives inside a native
-// draggable row. Capture the click before row-selection handlers can consume
-// it, then replace the authoritative cuesheet returned by the server.
-document.addEventListener("click", (e) => {
-  const button = e.target instanceof Element ? e.target.closest("[data-cue-delete]") : null;
-  if (!button) return;
-  // Shift/Ctrl-click is multi-select (§12.4): let the selection handler own
-  // it instead of deleting the cue out from under the operator.
-  if (e.shiftKey || e.ctrlKey || e.metaKey) return;
-  if (!needEditMode()) return;
-  e.preventDefault();
-  e.stopPropagation();
-  button.disabled = true;
-  fetch("/api/cue/" + encodeURIComponent(button.dataset.cueDelete), {method: "DELETE"})
-    .then((res) => {
-      if (!res.ok) throw new Error("server returned " + res.status);
-      return res.text();
-    })
-    .then((html) => {
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = html.trim();
-      const replacement = wrapper.firstElementChild;
-      const current = document.getElementById("cuesheet");
-      if (!replacement || replacement.id !== "cuesheet" || !current) {
-        throw new Error("unexpected cuesheet response");
-      }
-      current.replaceWith(replacement);
-      if (window.htmx) {
-        htmx.process(replacement);
-        if (document.getElementById("cueinspector-body")) {
-          htmx.ajax("GET", "/api/cue/inspector", {target: "#cueinspector-body", swap: "outerHTML"});
-        }
-      }
-    })
-    .catch((err) => {
-      button.disabled = false;
-      console.error("CuTePi: delete cue failed", err);
-      showToast("Delete cue failed: " + err.message);
-    });
-  }, true);
-
 document.addEventListener("dragstart", (e) => {
     const bar = e.target.closest(".cue-progress-bar");
     if (bar) e.preventDefault(); // drag would conflict with the pointer-drag scrub
@@ -1090,18 +1064,6 @@ function patternOptions() {
     }
   }
 
-  // Replace #cuesheet with a rendered partial and re-process its htmx attrs.
-  function replaceCuesheet(html) {
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = html.trim();
-    const replacement = wrapper.firstElementChild;
-    const current = document.getElementById("cuesheet");
-    if (replacement && replacement.id === "cuesheet" && current) {
-      current.replaceWith(replacement);
-      if (window.htmx) htmx.process(replacement);
-    }
-  }
-
   // PUT a new column value and refresh on success.
   function putCol(cuePos, col, val) {
     const params = new URLSearchParams({col, val});
@@ -1150,7 +1112,7 @@ function patternOptions() {
     }).then((res) => {
       if (!res.ok) throw new Error("server returned " + res.status);
       return res.text();
-    }).then((html) => replaceCuesheet(html));
+    }).then((html) => replaceById("cuesheet", html));
   }
 
   document.addEventListener("contextmenu", (e) => {
@@ -1258,7 +1220,7 @@ function patternOptions() {
               return res.text();
             })
             .then((html) => {
-              replaceCuesheet(html);
+              replaceById("cuesheet", html);
             })
             .catch((err) => {
               console.error("CuTePi: bulk delete failed", err);
@@ -1272,7 +1234,7 @@ function patternOptions() {
               return res.text();
             })
             .then((html) => {
-              replaceCuesheet(html);
+              replaceById("cuesheet", html);
             })
             .catch((err) => {
               console.error("CuTePi: cue delete failed", err);
@@ -1299,7 +1261,7 @@ function patternOptions() {
             return res.text();
           })
           .then((html) => {
-            replaceCuesheet(html);
+            replaceById("cuesheet", html);
           })
           .catch((err) => {
             console.error("CuTePi: group create failed", err);
@@ -1377,16 +1339,7 @@ function patternOptions() {
         if (!res.ok) throw new Error("server returned " + res.status);
         return res.text();
       })
-      .then((html) => {
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = html.trim();
-        const replacement = wrapper.firstElementChild;
-        const current = document.getElementById("cuesheet");
-        if (replacement && replacement.id === "cuesheet" && current) {
-          current.replaceWith(replacement);
-          if (window.htmx) htmx.process(replacement);
-        }
-      })
+      .then((html) => replaceById("cuesheet", html))
       .catch((err) => {
         console.error("CuTePi: group action failed", err);
         showToast("Group action failed: " + err.message);
@@ -1605,16 +1558,7 @@ function patternOptions() {
         if (!res.ok) throw new Error("server returned " + res.status);
         return res.text();
       })
-      .then((html) => {
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = html.trim();
-        const replacement = wrapper.firstElementChild;
-        const current = document.getElementById("cuesheet");
-        if (replacement && replacement.id === "cuesheet" && current) {
-          current.replaceWith(replacement);
-          if (window.htmx) htmx.process(replacement);
-        }
-      })
+      .then((html) => replaceById("cuesheet", html))
       .catch((err) => {
         console.error("CuTePi: add cue failed", err);
         showToast("Add cue failed: " + err.message);

@@ -237,8 +237,11 @@ func TestDeckClipOffsets(t *testing.T) {
 
 func TestDeckGreeting(t *testing.T) {
 	addr := freeListenAddr(t)
-	go ListenHyperdeck(addr)
-	time.Sleep(50 * time.Millisecond)
+	deck, err := startHyperdeck(addr)
+	if err != nil {
+		t.Fatalf("listen %s: %v", addr, err)
+	}
+	defer deck.Close()
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("dial %s: %v", addr, err)
@@ -381,8 +384,11 @@ func TestDeckCompanionHandshake(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	addr := freeListenAddr(t)
-	go ListenHyperdeck(addr)
-	time.Sleep(50 * time.Millisecond)
+	deck, err := startHyperdeck(addr)
+	if err != nil {
+		t.Fatalf("listen %s: %v", addr, err)
+	}
+	defer deck.Close()
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -494,7 +500,7 @@ func TestQLabCompanionHandshake(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer ln.Close()
-	go serveOSCListener(ln)
+	go (&oscTCPServer{ln: ln, conns: map[net.Conn]bool{}}).serve()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatalf("dial: %v", err)

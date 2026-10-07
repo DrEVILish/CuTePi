@@ -131,7 +131,11 @@ func TestRemoteSettingsValidation(t *testing.T) {
 func TestDeckSingleClient(t *testing.T) {
 	setupTestDB(t)
 	addr := freeListenAddr(t)
-	go ListenHyperdeck(addr)
+	deck, err := startHyperdeck(addr)
+	if err != nil {
+		t.Fatalf("listen %s: %v", addr, err)
+	}
+	defer deck.Close()
 	// Earlier deck tests' clients hang up asynchronously; wait for the
 	// registry to drain so the limit counts only this test's clients.
 	for i := 0; i < 100; i++ {

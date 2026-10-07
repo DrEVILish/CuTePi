@@ -530,16 +530,6 @@ func SetCueResult(cuePos int, result int) {
 	bumpCuesheetVersion()
 }
 
-// ClearCueResults resets every cue's health state (operator action).
-func ClearCueResults() error {
-	_, err := db.Exec(`UPDATE cuesheet SET last_result = 0, last_played_at = 0`)
-	if err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
 // Panic holding image (§12.9): when set, PANIC loads-and-holds this pool
 // item instead of cutting to black. Empty = off (plain panic).
 const stateKeyPanicHold = "panicHoldImage"
@@ -1161,36 +1151,6 @@ func SelectStep(dir int) (err error) {
 // in sheet order, or 0 (and nil) when endingPos is the last cue.
 func NextCuePos(endingPos int) (int, error) {
 	return nextSheetCue(endingPos, 1)
-}
-
-// PrevCue moves the selection to the previous existing cue position before
-// the currently selected one. It never moves below position 1 (0 = nothing
-// selected, so there is nothing to go "previous" from).
-func PrevCue() (err error) {
-	cur, err := SelectedCuePos()
-	if err != nil {
-		return err
-	}
-	// Visual order (sheet_index), like NextCue above.
-	prev, err := nextSheetCue(cur, -1)
-	if err != nil {
-		log.Printf("Error getting the previous cue position: %v", err)
-		return err
-	}
-	if prev == 0 {
-		return nil
-	}
-	return setSelectedCuePos(prev)
-}
-
-func cuesheetLength() (int, error) {
-	var length int
-	err := db.Get(&length, `SELECT COUNT(*) FROM cuesheet;`)
-	if err != nil {
-		log.Printf("Error getting cuesheet length: %v", err)
-		return 0, err
-	}
-	return length, nil
 }
 
 func GetCuesheet() (cuesheet Cuesheet, err error) {
@@ -2694,19 +2654,6 @@ func NextSchedule(now time.Time) (dueIn time.Duration, num, title string, ok boo
 	return best, num, title, ok
 }
 
-// GetScheduledCues returns every enabled schedule whose day-of-week bit is
-// set and whose time-of-day fell due within the last second — plus cues due
-// within the next 250ms, so the scheduler can preroll audio cues and land
-// them on their exact second instead of the next tick boundary. The 1s
-// trailing window covers one missed scheduler tick plus jitter — anything
-// older is stale, never "due" (enabling Show mode late in the day must not
-// fire the whole day's past cues). Second precision throughout: minute-
-// rounded times can never hit an exact-second sync-fire. The caller owns
-// the result.
-func GetScheduledCues(now time.Time) ([]ScheduleInfo, error) {
-	return GetScheduledCuesSince(now.Add(-time.Second), now)
-}
-
 // GetScheduledCuesSince returns the cues due after from (exclusive, whole
 // seconds) up to now: GetScheduledCues' one-second window, stretched back
 // to from when the scheduler was stalled. The span never crosses midnight:
@@ -2939,23 +2886,6 @@ func RemoveCue(cuePos string) (err error) {
 	}
 	bumpCuesheetVersion()
 	return nil
-}
-
-// MoveCueUp moves the cue at cuePos up by one (swaps with the cue above).
-func MoveCueUp(cuePos string) error {
-	p, perr := strconv.Atoi(cuePos)
-	if perr != nil {
-		return perr
-	}
-	return MoveSheetCue(p, -1)
-}
-
-func MoveCueDown(cuePos string) error {
-	p, perr := strconv.Atoi(cuePos)
-	if perr != nil {
-		return perr
-	}
-	return MoveSheetCue(p, 1)
 }
 
 // RegisterMedia inserts a newly-uploaded file (already saved to the media

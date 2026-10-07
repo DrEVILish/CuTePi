@@ -89,16 +89,6 @@ func ArmPanicHold(file string) {
 	logs.Printf(logs.GSPWarm, "panic image armed: %s (%.0f ms)", file, time.Since(t0).Seconds()*1000)
 }
 
-// PanicHoldArmed reports the armed file ("" when none).
-func PanicHoldArmed() string {
-	standby.mu.Lock()
-	defer standby.mu.Unlock()
-	if standby.p == nil {
-		return ""
-	}
-	return standby.file
-}
-
 // PanicToHold cuts to the armed holding image. False when file isn't armed
 // (or the file changed since): the caller falls back to a cold load.
 func PanicToHold(file string) bool {

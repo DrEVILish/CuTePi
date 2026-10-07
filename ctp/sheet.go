@@ -58,11 +58,6 @@ func loadSheetSequence() ([]SheetItem, error) {
 	return seq, nil
 }
 
-// groupDepth returns a group's nesting depth via its ancestors.
-func groupDepth(groupID int, byID map[int]Group) int {
-	return len(groupAncestors(groupID, byID))
-}
-
 // groupNesting loads every group plus each group's depth in the declared
 // parent_group_id tree. Pure read, shared by gap ownership and rendering.
 func groupNesting() (byID map[int]Group, depths map[int]int, err error) {

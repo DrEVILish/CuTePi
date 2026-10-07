@@ -2,9 +2,8 @@ package routes
 
 import (
 	"net/http"
-	"net/url"
-	"strings"
 
+	"CuTePi/ws"
 	"github.com/gin-gonic/gin"
 )
 
@@ -26,31 +25,11 @@ func SameOrigin() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if !sameOriginRequest(c.Request) {
+		if !ws.SameOrigin(c.Request) {
 			c.String(http.StatusForbidden, "cross-origin request refused")
 			c.Abort()
 			return
 		}
 		c.Next()
 	}
-}
-
-// sameOriginRequest reports whether r's Origin/Referer (when present) names
-// r's own Host. Also used by the WebSocket upgrader's CheckOrigin.
-func sameOriginRequest(r *http.Request) bool {
-	src := r.Header.Get("Origin")
-	if src == "" {
-		src = r.Header.Get("Referer")
-		if src == "" {
-			return true // not a browser-initiated cross-site request
-		}
-	}
-	if src == "null" {
-		return false // sandboxed iframe / opaque origin
-	}
-	u, err := url.Parse(src)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	return strings.EqualFold(u.Host, r.Host)
 }
