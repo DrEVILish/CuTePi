@@ -311,6 +311,12 @@ func LoadConfig() error {
 
 // decodeConfig decodes raw over a copy of base (fields the file leaves out
 // keep base's values). Anything but exactly one JSON object is an error.
+//
+// The data paths (working dir, config file, DB, media, thumbnails) always
+// stay base's: they come from the environment (WORKING_DIR, MEDIA_DIR, ...)
+// or the defaults, never from the file. config.json still records them for
+// reference, but a stored copy must not pin the data to an old location:
+// moving the service to /var/lib/cutepi is then one WORKING_DIR setting.
 func decodeConfig(base Config, raw []byte) (Config, error) {
 	next := base
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -320,6 +326,8 @@ func decodeConfig(base Config, raw []byte) (Config, error) {
 	if dec.More() {
 		return base, errors.New("unexpected data after the JSON object")
 	}
+	next.WorkingDir, next.ConfigFilePath = base.WorkingDir, base.ConfigFilePath
+	next.Db.Location, next.Media.Location, next.Thumbnails.Location = base.Db.Location, base.Media.Location, base.Thumbnails.Location
 	return next, nil
 }
 

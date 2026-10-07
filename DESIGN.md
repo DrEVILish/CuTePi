@@ -917,6 +917,27 @@ moves the generation. Keep them consistent.
   Don't reuse a valuable password here. The Wi-Fi hotspot password is
   stored the same way, and is also visible in the process list while
   `nmcli` runs.
+- **Service user.** CuTePi runs as the unprivileged `cutepi` system user (`cutepi.service`,
+  set up by `deploy/install-service-user.sh`); data lives in `/var/lib/cutepi` (`StateDirectory`,
+  `WORKING_DIR`), which is also the user's home (WebKit's caches). What it needs, and how it gets it:
+  - port 80: `CAP_NET_BIND_SERVICE`, the only capability (`AmbientCapabilities` / `CapabilityBoundingSet`,
+    `NoNewPrivileges=yes`). CuTePi clears its *ambient* set at load (`caps_linux.go`), so the programs it
+    starts get no capabilities: WebKit's bwrap sandbox refuses to run with unexpected ones, and the
+    failed web process took CuTePi down with it.
+  - the display: `video` (DRM master — the first program to open the device holds it, no root needed —
+    framebuffer, hardware decoders, DMA heaps); `render` (WebKit's GPU node); `audio` (ALSA).
+  - the console sharing the HDMI output: graphics mode needs `CAP_SYS_TTY_CONFIG` on a tty getty keeps
+    owner-only, so the unit's root steps `cutepi --console graphics|text` (ExecStartPre/ExecStopPost `+`)
+    set it; the mode stays after the step exits.
+  - Restart, Wi-Fi hotspot and instance rename: `systemctl restart cutepi.service`, `nmcli` and
+    `hostnamectl`, each allowed for the `cutepi` user alone by polkit (`deploy/50-cutepi.rules`).
+  The data paths in `config.json` are informational: the environment and defaults decide them, so a copy
+  stored by an older install cannot pin the data to its old place.
+- **YouTube import fetches any URL yt-dlp accepts** (decided: trusted LAN, operator-triggered, and other
+  sites yt-dlp supports are wanted). The URL is passed after `--`, so it cannot be read as an option, and
+  yt-dlp refuses `file://` URLs.
+- **Plain-text password: decided.** Kept as above (trusted LAN, optional, recoverable from the SD card).
+  A password starting or ending with whitespace is refused rather than silently trimmed.
 - **Cross-site guard** (`SameOrigin`, before auth): state-changing requests
   (anything but GET/HEAD/OPTIONS) whose `Origin`/`Referer` names another
   host get 403 — browsers attach cached Basic credentials to cross-site

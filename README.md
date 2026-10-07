@@ -9,6 +9,18 @@ remote control from Bitfocus Companion (HyperDeck and QLab).
 - **Servers:** [AGENTS.md](AGENTS.md) — the test (Pi 4) and dev machines and how to test on them.
 - **Codec test tools:** [tools/codec-corpus/](tools/codec-corpus/).
 
+## Running as a service
+
+On the Pi, from the checkout in `/opt/cutepi` (binary built there):
+
+```
+sudo deploy/install-service-user.sh
+```
+
+It creates the unprivileged `cutepi` system user, installs the polkit rules (`deploy/50-cutepi.rules`) and the unit
+(`cutepi.service`), copies existing data from `/root/cutepi` into `/var/lib/cutepi` (keeping the original), and
+restarts the service. See DESIGN.md §7 for what the service user is allowed to do and why.
+
 ## Codec support
 
 CuTePi is meant to play **any codec GStreamer can decode**: hardware decoders are fast paths, never the supported

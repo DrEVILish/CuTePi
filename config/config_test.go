@@ -366,3 +366,26 @@ func TestLoadConfigUnreadableIsAnError(t *testing.T) {
 		t.Fatal("LoadConfig succeeded on an unreadable config file")
 	}
 }
+
+// Data paths in config.json are informational: the environment/defaults
+// decide where the data lives, so a stored old location cannot pin it.
+func TestLoadConfigIgnoresStoredPaths(t *testing.T) {
+	t.Cleanup(func() { useTestDir(testDir) })
+	dir := t.TempDir()
+	useTestDir(dir)
+	stored := `{"port": 4444, "working_dir": "/root/cutepi", "db": {"location": "/root/cutepi/config/ctp.db"},
+		"media": {"location": "/root/cutepi/media"}, "thumbnails": {"location": "/root/cutepi/thumbnails"}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(stored), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PORT", "")
+	if err := LoadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if Port() != 4444 {
+		t.Fatalf("port = %d, want the stored 4444", Port())
+	}
+	if MediaLocation() != dir || DbLocation() != filepath.Join(dir, "ctp.db") {
+		t.Fatalf("paths = media %q db %q; want the test dir's, not /root/cutepi", MediaLocation(), DbLocation())
+	}
+}

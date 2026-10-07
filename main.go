@@ -45,6 +45,15 @@ func prepareTmpDir() {
 }
 
 func main() {
+	// `cutepi --console graphics|text`: the systemd unit's root steps around
+	// the unprivileged service (ExecStartPre/ExecStopPost). Only this
+	// console ioctl needs root; the server itself runs as the cutepi user.
+	if len(os.Args) == 3 && os.Args[1] == "--console" && (os.Args[2] == "graphics" || os.Args[2] == "text") {
+		if err := gsp.SetConsoleMode(os.Args[2] == "graphics"); err != nil {
+			log.Fatalf("CuTePi: console %s mode: %v", os.Args[2], err)
+		}
+		return
+	}
 	// A child spawned by /api/restart must not bind the port until the
 	// parent has exited and released it. Wait up to 20s for that.
 	if os.Getenv(routes.RestartEnv) != "" {

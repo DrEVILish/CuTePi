@@ -18,7 +18,8 @@ Environment notes for agents working on this repo.
 ## Test server (`192.168.10.73`)
 
 - Runs on the target hardware, with a 1080p60 HDMI monitor plugged in that handles video and audio.
-- The app runs as the `cutepi` systemd service on port 80. Restart it with `systemctl restart cutepi`.
+- The app runs as the `cutepi` systemd service on port 80, as the unprivileged `cutepi` user (DESIGN §7). Restart it with `systemctl restart cutepi`.
+- Its data is in `/var/lib/cutepi` (DB `/var/lib/cutepi/config/ctp.db`, media, thumbnails, WebKit caches under `.cache/`). `/root/cutepi` is the copy from before the move to the service user (2026-10-07); delete it once the move is confirmed. `deploy/install-service-user.sh` sets the machine up (user, polkit rules, unit); the old unit is kept as `/etc/systemd/system/cutepi.service.pre-user`.
 - Use the real service for testing, not a throwaway instance on a temp directory.
 - There is no browser or Node on this machine, and none may be installed. Keep this machine free of extra applications: no npm, browsers or other tooling beyond what the app itself needs. Test through the HTTP API and measure the results from outside the process (ALSA loopback capture for audio, the DRM plane state for video).
 - Video runs on hardware display planes (`CUTEPI_WALL_SINK=kmssink` in `/etc/systemd/system/cutepi.service.d/playback-env.conf`). Pictures are not in `/dev/fb0`, which only holds the black console layer underneath. To measure video, read the overlay planes' properties through libdrm (`FB_ID` changes per presented frame; also `alpha`, `zpos`, `CRTC_X/Y/W/H` and `rotation`), for example with Python `ctypes`. Poll only the planes in use, at 10 ms or slower: heavy polling takes the modeset lock and costs the video frames.
