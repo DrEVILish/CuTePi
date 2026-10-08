@@ -19,6 +19,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +53,7 @@ var ErrStopped = errors.New("preload stopped")
 // is busy: a preload costs about 1.5 cores for its ~2 s on a Pi 4).
 func Preload(url string, timeout time.Duration, keepGoing func() bool) error {
 	p, err := gst.NewPipelineFromString(
-		"wpevideosrc name=src ! video/x-raw,format=BGRA,width=1920,height=1080,framerate=1/1 ! fakesink sync=true")
+		"wpevideosrc name=src ! " + wpeCaps() + ",width=1920,height=1080,framerate=1/1 ! fakesink sync=true")
 	if err != nil {
 		return err
 	}
@@ -83,6 +84,19 @@ func Preload(url string, timeout time.Duration, keepGoing func() bool) error {
 	return fmt.Errorf("not loaded within %v", timeout)
 }
 
+// wpeCaps is the output wpevideosrc is asked for here: GL memory, as the
+// wall's live pages use (gsp livePageChain). WPE sets up its rendering
+// backend once per process, either on the GPU (EGL) or on the CPU (SHM); a
+// later view asking for the other mode gets no frames ("Multiple EGL displays
+// are not supported") or crashes in WPEBackend-fdo, so every wpevideosrc in
+// the process must ask for the same one.
+func wpeCaps() string {
+	if os.Getenv("CUTEPI_LIVEPAGE_GL") == "0" {
+		return "video/x-raw,format=BGRA"
+	}
+	return "video/x-raw(memory:GLMemory),format=RGBA"
+}
+
 // loaded reports wpevideosrc's "page loaded" (wpe-stats at 100%).
 func loaded(msg *gst.Message) bool {
 	st := msg.GetStructure()
@@ -108,7 +122,7 @@ func Clear(remove, keep []string, timeout time.Duration) ([]string, error) {
 	job.remove_hosts = C.CString(strings.Join(remove, "\n")) // freed with the job
 	job.keep_hosts = C.CString(strings.Join(keep, "\n"))
 	p, err := gst.NewPipelineFromString(
-		"wpevideosrc name=src location=about:blank ! video/x-raw,format=BGRA,width=64,height=64,framerate=1/1 ! fakesink sync=true")
+		"wpevideosrc name=src location=about:blank ! " + wpeCaps() + ",width=64,height=64,framerate=1/1 ! fakesink sync=true")
 	if err != nil {
 		C.cutepi_wk_job_free(job)
 		return nil, err

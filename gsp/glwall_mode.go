@@ -20,10 +20,8 @@ func glWallEnabled() bool { return os.Getenv("CUTEPI_WALL") == "gl" }
 
 // glEnv points GStreamer's GL at EGL on the render node (no window system):
 // the wall's context never touches /dev/dri/card*, which the KMS owner holds.
+// Set on every wall: live pages render through GL too (livePageGL).
 func glEnv() {
-	if !glWallEnabled() {
-		return
-	}
 	for k, v := range map[string]string{"GST_GL_API": "gles2", "GST_GL_PLATFORM": "egl", "GST_GL_WINDOW": "surfaceless"} {
 		if os.Getenv(k) == "" {
 			os.Setenv(k, v)

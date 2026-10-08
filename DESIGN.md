@@ -1367,7 +1367,29 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   at 30). The display commits one frame per
   rendered frame. (That count was taken on the plane, not the picture: until
   2026-10-06 the plane stayed at alpha 0 and the wall showed black. Check
-  live output with the plane's `alpha` as well as its frames.) WebKit's two helper processes stay resident
+  live output with the plane's `alpha` as well as its frames.)
+  *GPU path, 2026-10-08 (h264-pi4 livepage results 23–25):* raw BGRA caps
+  put WPE on its CPU (SHM) path, painting and compositing the whole page on
+  the CPU every frame. `livePageChain` now asks for GL memory: on the KMS
+  wall (display-controller rotation, i.e. not 90/270°) it is followed by
+  `wpedmabuf` (`gsp/scanout`), one GPU blit per frame from WPE's UIF-tiled
+  texture into a ring of four linear CMA buffers the plane scans out (vc4
+  RGB planes cannot scan out UIF, and `gldownload` refuses to export tiled
+  images), and the page renders at the display rate. Elsewhere `gldownload`
+  reads frames back at 15 fps. Frames are bit-identical to `gldownload`'s.
+  Same blue-future TimerPi page, in the service, plane frames counted by a
+  kernel trace: CPU path 15 fps, CuTePi 22% + WebKit 323%; GL +
+  `gldownload` 14.4 fps (gaps to 192 ms), 94% + 193%; GL + `wpedmabuf`
+  **60.00 fps, no gap over 19 ms**, 13.5% + 199%, GPU busy ~100% (WebKit's
+  painting stays on Skia's CPU threads; `WEBKIT_SKIA_ENABLE_CPU_RENDERING=0`
+  moves it to the GPU, 65% CPU but the GPU saturated). With the animation
+  stepped (`steps()`) the page costs 7% + 57%. Every `wpevideosrc` in the
+  process must use the same mode (the cache keeper's pre-load and clear
+  included): WPE picks EGL or SHM once per process, and a later view asking
+  for the other gets no frames or crashes in WPEBackend-fdo. Each Fire
+  still leaves four sockets open in WebKit (both paths; the GL path also one
+  eventfd).
+  WebKit's two helper processes stay resident
   and are reused after Stop; they do not accumulate, and a stopped page
   stops running (0% CPU between fires). *Soak, 2026-10-06:* 30 fire/stop
   cycles of a TimerPi page held WebKit at 300–370 MB RSS with no upward

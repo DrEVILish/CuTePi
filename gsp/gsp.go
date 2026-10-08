@@ -2,6 +2,7 @@ package gsp
 
 import (
 	"CuTePi/gsp/glwall"
+	"CuTePi/gsp/scanout"
 	"errors"
 	"fmt"
 	"math"
@@ -2201,12 +2202,62 @@ func flipMethod(f string) string {
 // file-playback pipeline (filesrc -> decodebin -> auto{audio,video}sink),
 // depending on spec. This replaces the previous buildFilePipeline/
 // buildTestPipeline, which were ~90% duplicated.
-// endpointFPS is the live-page render rate. TimerPi pages are text and
-// countdowns (changing once a second; the overtime pulse twice), and fades
-// run on the display plane, not the page, so 15 fps loses nothing visible.
-// Measured on a Pi 4 at 1080p: each frame is copied into the display plane,
-// costing CuTePi about 54% of a core at 30 fps.
+// endpointFPS is the live-page render rate when its frames are copied into
+// the display plane (CPU path, or GL with a readback): TimerPi pages are text
+// and countdowns (changing once a second; the overtime pulse twice), and
+// fades run on the display plane, not the page, so 15 fps loses nothing
+// visible there. Measured on a Pi 4 at 1080p: each copied frame costs CuTePi
+// about 54% of a core at 30 fps, and a GL readback caps an animated page at
+// 33-50 fps. The zero-copy path renders at the display's refresh rate.
 const endpointFPS = 15
+
+// livePageChain is what follows wpevideosrc. With GL (the default), WPE renders
+// and composites the page on the GPU. On the KMS plane wall, wpedmabuf
+// (gsp/scanout) GPU-copies each frame into a linear buffer the plane scans
+// out, so the page runs at the display rate with no CPU copy: measured on a
+// Pi 4 at 1080p60, an animated page (TimerPi's blue-future background) at 60.0
+// fps, against 33-35 fps through gldownload, which reads every frame back
+// into system memory and is still the path elsewhere (other wall sinks,
+// 90/270° software rotation). Without GL memory WPE falls back to painting and
+// compositing the whole page on the CPU: the same page cost WebKit 340% of a
+// core that way against 198% with GL, for identical frames (h264-pi4 livepage
+// results). CUTEPI_LIVEPAGE_GL=0 forces the CPU path.
+func livePageChain(dw, dh, hz int, zeroCopy bool) ([]*gst.Element, error) {
+	raw := func() ([]*gst.Element, error) {
+		caps, err := gst.NewElement("capsfilter")
+		if err != nil {
+			return nil, err
+		}
+		caps.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=BGRA,width=%d,height=%d,framerate=%d/1,pixel-aspect-ratio=1/1", dw, dh, endpointFPS)))
+		return []*gst.Element{caps}, nil
+	}
+	if os.Getenv("CUTEPI_LIVEPAGE_GL") == "0" {
+		return raw()
+	}
+	glCaps, err := gst.NewElement("capsfilter")
+	if err != nil {
+		logs.Printf(logs.GSPPipeDebug, "gsp: live page: no GStreamer GL (gstreamer1.0-gl), rendering on the CPU")
+		return raw()
+	}
+	if zeroCopy && scanout.Register() {
+		if out, err := gst.NewElement("wpedmabuf"); err == nil {
+			if hz <= 0 {
+				hz = 60
+			}
+			glCaps.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:GLMemory),format=RGBA,width=%d,height=%d,framerate=%d/1,pixel-aspect-ratio=1/1", dw, dh, hz)))
+			return []*gst.Element{glCaps, out}, nil
+		}
+	}
+	down, err2 := gst.NewElement("gldownload")
+	outCaps, err3 := gst.NewElement("capsfilter")
+	if err2 != nil || err3 != nil {
+		logs.Printf(logs.GSPPipeDebug, "gsp: live page: no GStreamer GL (gstreamer1.0-gl), rendering on the CPU")
+		return raw()
+	}
+	glCaps.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:GLMemory),format=RGBA,width=%d,height=%d,framerate=%d/1,pixel-aspect-ratio=1/1", dw, dh, endpointFPS)))
+	outCaps.Set("caps", gst.NewCapsFromString("video/x-raw,format=RGBA"))
+	return []*gst.Element{glCaps, down, outCaps}, nil
+}
 
 func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	pipeline, err := gst.NewPipeline("")
@@ -2278,16 +2329,18 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			return nil, errors.New("live pages need the WPE renderer: install the gstreamer1.0-wpe package")
 		}
 		src.Set("location", spec.endpointURL)
-		dw, dh, _ := DisplayMode()
+		dw, dh, hz := DisplayMode()
 		if dw <= 0 || dh <= 0 {
 			dw, dh = 1920, 1080
 		}
-		caps, err := gst.NewElement("capsfilter")
+		// Zero-copy only where the frames go straight to a plane: the KMS
+		// wall with the rotation done by the display controller.
+		_, hwRotate := rotationBits(spec.opts.Rotation, spec.opts.Flip)
+		chain, err := livePageChain(dw, dh, hz, !glOpen && kmsWall() != nil && hwRotate && !spec.warmSink)
 		if err != nil {
 			return nil, err
 		}
-		caps.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=BGRA,width=%d,height=%d,framerate=%d/1,pixel-aspect-ratio=1/1", dw, dh, endpointFPS)))
-		srcChain = append(srcChain, caps)
+		srcChain = append(srcChain, chain...)
 	} else {
 		src, err = gst.NewElement("filesrc")
 		if err != nil {
