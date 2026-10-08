@@ -105,7 +105,14 @@ var (
 //     jpegdec takes over.
 //   - openjpegdec: fails to negotiate JPEG 2000 output on the Pi ("Failed to
 //     negociate OpenJPEG data", codec corpus); avdec_jpeg2000 decodes it.
-var decoderRankOverrides = []string{"v4l2jpegdec:0", "openjpegdec:0"}
+//
+// and promote one decoder that is faster than the default:
+//   - avdec_vp8 (FFmpeg's VP8) over vp8dec (libvpx, primary): two 1080p60
+//     VP8 layers at once on a Pi 4 run at 6 + 6 fps with libvpx (its threads
+//     spin against each other) and 56 + 56 with FFmpeg's (h264-pi4
+//     OPEN-CODECS.md). WebM with alpha still goes through vp8alphadecodebin,
+//     which ranks above both.
+var decoderRankOverrides = []string{"v4l2jpegdec:0", "openjpegdec:0", "avdec_vp8:257"}
 
 // applyDecoderRanks sets GST_PLUGIN_FEATURE_RANK before gst.Init reads it,
 // appending each override unless the operator's own value already ranks
