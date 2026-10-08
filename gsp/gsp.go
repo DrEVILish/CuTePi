@@ -1,6 +1,7 @@
 package gsp
 
 import (
+	"CuTePi/gsp/av1dec"
 	"CuTePi/gsp/glwall"
 	"CuTePi/gsp/scanout"
 	"errors"
@@ -143,6 +144,10 @@ func gstInit() {
 		applyDecoderRanks()
 		glEnv()
 		gst.Init(nil)
+		// AV1 through dav1d (gsp/av1dec) when libdav1d is installed.
+		if av1dec.Register() {
+			logs.Printf(logs.GSPPipeDebug, "gsp: AV1 decoder: dav1d %s (cutepidav1ddec)", av1dec.Version())
+		}
 		// Bus watches (EOS/error handling in watchAndPlay/watchWarm) only
 		// dispatch on a running GLib main loop — without it a finished cue
 		// never fires its end hook and pipeline errors never surface.
