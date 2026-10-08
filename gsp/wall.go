@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 
+	"CuTePi/gsp/yuvpack"
 	"CuTePi/logs"
 )
 
@@ -638,13 +639,16 @@ func kmsVideoTail(dmabuf bool, opts LoadOpts) []string {
 			names = append(names, videoDownload()...)
 			names = append(names, "capsfilter", "identity")
 		} else {
+			names = append(names, packStage()...)
 			names = append(names, "videoconvert", "videoscale", "capsfilter")
 		}
 		names = append(names, "videocrop", "videoflip", "videoconvert")
 	} else {
 		if !dmabuf {
 			// Converted frames are limited to layouts the display can
-			// allocate (kmsSysmemCaps).
+			// allocate (kmsSysmemCaps). 10-bit and 4:2:2 frames are packed to
+			// I420 first (packStage).
+			names = append(names, packStage()...)
 			names = append(names, "videoconvert", "capsfilter")
 		}
 		// On decoder frames videocrop only attaches crop metadata: the plane
@@ -655,6 +659,17 @@ func kmsVideoTail(dmabuf bool, opts LoadOpts) []string {
 		names = append(names, "capssetter")
 	}
 	return append(names, "kmssink")
+}
+
+// packStage is cutepiyuvpack (gsp/yuvpack) where it registers: 10-bit
+// 4:2:0/4:2:2 and 8-bit 4:2:2 frames become I420 in one NEON pass (1080p
+// 10-bit 4:2:2: 2.35 ms against 20 ms for videoconvert to I420, which
+// otherwise picked RGB for them); every other format passes through.
+func packStage() []string {
+	if yuvpack.Register() {
+		return []string{"cutepiyuvpack"}
+	}
+	return nil
 }
 
 // kmsSysmemCaps are the layouts a software-converted frame may take on its
