@@ -2586,6 +2586,14 @@ document.addEventListener("click", (e) => {
       pctEl.textContent = pct + "%";
       if (msg.speed) spdEl.textContent = msg.speed;
       if (msg.eta) etaEl.textContent = "ETA " + msg.eta;
+    } else if (msg.stage === "encoding") {
+      // Downloads that aren't HEVC are re-encoded on the Pi (about 6x the video's length).
+      var epct = Math.round((msg.pct || 0) * 10) / 10;
+      stageEl.textContent = "Converting " + (msg.from ? msg.from.toUpperCase() + " " : "") + "to HEVC\u2026";
+      bar.style.width = Math.min(100, epct) + "%";
+      pctEl.textContent = epct + "%";
+      spdEl.textContent = "";
+      etaEl.textContent = msg.eta ? "ETA " + msg.eta : "";
     } else if (msg.stage === "processing") {
       stageEl.textContent = "Post-processing\u2026";
     } else if (msg.stage === "importing") {

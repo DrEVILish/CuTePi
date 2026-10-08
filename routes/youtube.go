@@ -80,6 +80,26 @@ func handleYoutubeDownload(c *gin.Context) {
 	dlPath := filepath.Join(tmpDir, filename)
 	logs.Printf(logs.YDLDownload, "stage=complete filename=%q", filename)
 
+	if hevcOnImport() {
+		codec, _ := probeVideoCodec(c.Request.Context(), dlPath)
+		if codec != "" && codec != "hevc" {
+			logs.Printf(logs.YDLDownload, "stage=transcode from=%s to=hevc filename=%q", codec, filename)
+			stage("encoding")
+			eth := &pctThrottle{every: time.Second}
+			out, err := hevcTranscode(c.Request.Context(), dlPath, func(pct float64, eta string) {
+				if eth.allow(pct >= 100) {
+					writeLine(map[string]any{"stage": "encoding", "pct": pct, "eta": eta, "from": codec})
+				}
+			})
+			if err != nil {
+				fail(logs.YDLFailed, fmt.Sprintf("HEVC conversion failed: %v", err))
+				return
+			}
+			dlPath = out
+			filename = filepath.Base(out)
+		}
+	}
+
 	// A download never silently replaces a pool file of the same name (the
 	// upload path asks first; here there is nobody to ask): keep both, and
 	// the operator can rename it from the done dialog.
@@ -174,6 +194,14 @@ var (
 	ytDlpDownloadTimeout = 30 * time.Minute
 )
 
+// ytDlpFormat takes an HEVC video stream (hev1/hvc1) when there is one,
+// else the best video+audio; ytDlpSort ranks within that: at most 1080
+// lines (the display), then the highest frame rate.
+const (
+	ytDlpFormat = "bv*[vcodec^=hev]+ba/bv*[vcodec^=hvc]+ba/b[vcodec^=hev]/b[vcodec^=hvc]/bv*+ba/b"
+	ytDlpSort   = "res:1080,fps"
+)
+
 // downloadWithYtDlp shells out to yt-dlp to fetch url, using yt-dlp's own
 // filename templating, and returns the temp dir holding the download plus
 // the resulting filename (relative to that dir), resolved via --print
@@ -185,10 +213,17 @@ var (
 // streaming handler can mirror yt-dlp's own percentage/speed/ETA.
 func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) (string, string, error) {
 	outputTemplate := "%(title)s.%(ext)s"
-	// The default web client currently returns YouTube's "page needs to be
-	// reloaded" response in the target environment. Android remains the
-	// simplest yt-dlp client that resolves these public videos.
-	extractorArgs := "youtube:player_client=android"
+	// yt-dlp's own client choice. Forcing player_client=android (which
+	// worked around "The page needs to be reloaded" with yt-dlp 2025.04)
+	// now gets only format 18, 360p30 H.264, from YouTube, and nothing at all
+	// with current yt-dlp; current yt-dlp's default clients return the
+	// 1080p60 H.264/VP9/AV1 streams (2026-10-08). Debian trixie's yt-dlp
+	// (2025.04.30) is too old for YouTube: install a current release.
+	// HEVC when the site offers it (it plays on the Pi's hardware decoder,
+	// the one video codec that passes CuTePi's 1080p60-with-fades test);
+	// otherwise the best stream, re-encoded to HEVC after the download
+	// (hevcTranscode). At most the display's 1080 lines, highest frame rate.
+	formatArgs := []string{"-f", ytDlpFormat, "-S", ytDlpSort}
 
 	// Scratch space under the data dir's tmp/ — not inside the media dir,
 	// which is served statically at /media and scanned as the pool.
@@ -202,7 +237,9 @@ func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) 
 
 	ctx, cancel := context.WithTimeout(parent, ytDlpResolveTimeout)
 	defer cancel()
-	printCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", "--", url)
+	printArgs := append([]string{}, formatArgs...)
+	printArgs = append(printArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", "--", url)
+	printCmd := exec.CommandContext(ctx, "yt-dlp", printArgs...)
 	printCmd.Dir = tmpDir
 	// stdout only: anything yt-dlp says on stderr (notices, deprecation
 	// warnings) must not end up in the filename.
@@ -231,7 +268,9 @@ func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) 
 	// \r-updated), so a line-based parser sees live percentages.
 	ctx, cancel = context.WithTimeout(parent, ytDlpDownloadTimeout)
 	defer cancel()
-	dlCmd := exec.CommandContext(ctx, "yt-dlp", "--extractor-args", extractorArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "--newline", "--progress", "-o", outputTemplate, "--", url)
+	dlArgs := append([]string{}, formatArgs...)
+	dlArgs = append(dlArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "--newline", "--progress", "-o", outputTemplate, "--", url)
+	dlCmd := exec.CommandContext(ctx, "yt-dlp", dlArgs...)
 	dlCmd.Dir = tmpDir
 
 	// One line-writer per stream so a partial line in stdout can never be
