@@ -60,13 +60,22 @@ def discover(path):
     return info
 
 
+PROBE_TIMEOUT = 120
+
+
 def decode(path):
     """Decode the whole file as fast as possible; return (seconds, decoders, error)."""
     uri = "file://" + os.path.abspath(path)
     cmd = ["gst-launch-1.0", "playbin", f"uri={uri}",
            "video-sink=fakevideosink sync=false", "audio-sink=fakesink sync=false", "flags=0x3"]
     t = time.monotonic()
-    r = subprocess.run(cmd, capture_output=True, text=True, env=DECODE_ENV, timeout=600)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=DECODE_ENV, timeout=PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # A long file through a slow decoder outside the service (CuTePi's own
+        # decoders, e.g. dav1d, register only in the service): note it, never
+        # abort the playback test for it.
+        return time.monotonic() - t, [], "probe decode timed out after %ds (outside the service)" % PROBE_TIMEOUT
     secs = time.monotonic() - t
     out = r.stdout + r.stderr
     names = set()

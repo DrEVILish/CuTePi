@@ -125,3 +125,6 @@ func GLAudioSync() (displayDelay, cueAudioOffset time.Duration) {
 	}
 	return
 }
+
+// GPUWall reports whether the GPU wall is running (glOpen).
+func GPUWall() bool { return glOpen }

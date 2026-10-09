@@ -76,29 +76,33 @@ func handleYoutubeDownload(c *gin.Context) {
 		fail(logs.YDLFailed, fmt.Sprintf("download failed: %v", err))
 		return
 	}
-	defer os.RemoveAll(tmpDir)
 	dlPath := filepath.Join(tmpDir, filename)
 	logs.Printf(logs.YDLDownload, "stage=complete filename=%q", filename)
 
-	if hevcOnImport() {
+	// A codec that does not play at 1080p60 on this display path is
+	// converted in the background queue (never while anything plays); the
+	// request follows it while connected, the job runs on regardless.
+	if conversionOn() {
 		codec, _ := probeVideoCodec(c.Request.Context(), dlPath)
-		if codec != "" && codec != "hevc" {
-			logs.Printf(logs.YDLDownload, "stage=transcode from=%s to=hevc filename=%q", codec, filename)
-			stage("encoding")
-			eth := &pctThrottle{every: time.Second}
-			out, err := hevcTranscode(c.Request.Context(), dlPath, func(pct float64, eta string) {
-				if eth.allow(pct >= 100) {
-					writeLine(map[string]any{"stage": "encoding", "pct": pct, "eta": eta, "from": codec})
+		if codec != "" && !plays60(codec, gsp.GPUWall()) {
+			logs.Printf(logs.YDLDownload, "stage=queue_convert codec=%s filename=%q", codec, filename)
+			job := queueConversion(tmpDir, dlPath, codec)
+			job.setListener(func(m map[string]any) {
+				if m["error"] != nil {
+					logs.PrintfWarn(logs.YDLFailed, "url=%q error=%v", url, m["error"])
 				}
+				writeLine(m)
 			})
-			if err != nil {
-				fail(logs.YDLFailed, fmt.Sprintf("HEVC conversion failed: %v", err))
-				return
+			writeLine(map[string]any{"stage": "queued", "from": codec, "paused": playbackRunning()})
+			select {
+			case <-job.done:
+			case <-c.Request.Context().Done():
 			}
-			dlPath = out
-			filename = filepath.Base(out)
+			job.setListener(nil)
+			return
 		}
 	}
+	defer os.RemoveAll(tmpDir)
 
 	// A download never silently replaces a pool file of the same name (the
 	// upload path asks first; here there is nobody to ask): keep both, and
@@ -181,7 +185,10 @@ func parseYtDlpLine(line string, th *pctThrottle) map[string]any {
 	if reMerge.MatchString(line) {
 		return map[string]any{"stage": "processing"}
 	}
-	if m := reYtTitle.FindStringSubmatch(line); m != nil && !strings.Contains(line, "Extracting URL") {
+	// "[youtube] <id>: <title>"; current yt-dlp prints only its progress
+	// steps there ("Downloading webpage", "Extracting URL"), never a title.
+	if m := reYtTitle.FindStringSubmatch(line); m != nil && !strings.Contains(line, "Extracting URL") &&
+		!strings.HasPrefix(strings.TrimSpace(m[1]), "Downloading ") {
 		return map[string]any{"stage": "resolved", "title": strings.TrimSpace(m[1])}
 	}
 	return parsePct(line, th)
@@ -194,13 +201,9 @@ var (
 	ytDlpDownloadTimeout = 30 * time.Minute
 )
 
-// ytDlpFormat takes an HEVC video stream (hev1/hvc1) when there is one,
-// else the best video+audio; ytDlpSort ranks within that: at most 1080
-// lines (the display), then the highest frame rate.
-const (
-	ytDlpFormat = "bv*[vcodec^=hev]+ba/bv*[vcodec^=hvc]+ba/b[vcodec^=hev]/b[vcodec^=hvc]/bv*+ba/b"
-	ytDlpSort   = "res:1080,fps"
-)
+// ytDlpSort ranks the site's streams: at most 1080 lines (the display),
+// then the highest frame rate; yt-dlp's own order (quality, codec) after.
+const ytDlpSort = "res:1080,fps"
 
 // downloadWithYtDlp shells out to yt-dlp to fetch url, using yt-dlp's own
 // filename templating, and returns the temp dir holding the download plus
@@ -219,11 +222,15 @@ func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) 
 	// with current yt-dlp; current yt-dlp's default clients return the
 	// 1080p60 H.264/VP9/AV1 streams (2026-10-08). Debian trixie's yt-dlp
 	// (2025.04.30) is too old for YouTube: install a current release.
-	// HEVC when the site offers it (it plays on the Pi's hardware decoder,
-	// the one video codec that passes CuTePi's 1080p60-with-fades test);
-	// otherwise the best stream, re-encoded to HEVC after the download
-	// (hevcTranscode). At most the display's 1080 lines, highest frame rate.
-	formatArgs := []string{"-f", ytDlpFormat, "-S", ytDlpSort}
+	// The site's own format, no re-encode by us when it can be helped: of
+	// the streams at the best height and frame rate on offer (up to the
+	// display's 1080 lines), one in a codec that plays at 60 fps here if
+	// there is one (chooseFormat); otherwise the best stream, converted
+	// afterwards (youtube_convert.go).
+	formatArgs := []string{"-S", ytDlpSort}
+	if id := pickNativeFormat(parent, url); id != "" {
+		formatArgs = append(formatArgs, "-f", id+"+bestaudio/"+id)
+	}
 
 	// Scratch space under the data dir's tmp/ — not inside the media dir,
 	// which is served statically at /media and scanned as the pool.
