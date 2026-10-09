@@ -2586,10 +2586,17 @@ document.addEventListener("click", (e) => {
       pctEl.textContent = pct + "%";
       if (msg.speed) spdEl.textContent = msg.speed;
       if (msg.eta) etaEl.textContent = "ETA " + msg.eta;
+    } else if (msg.stage === "queued") {
+      // The codec does not play at 1080p60 here: converted in the background, never during playback.
+      stageEl.textContent = (msg.from ? msg.from.toUpperCase() + " " : "") +
+        (msg.paused ? "queued for conversion: waiting until playback stops\u2026" : "queued for conversion\u2026");
+    } else if (msg.stage === "encoding" && msg.paused) {
+      stageEl.textContent = "Conversion paused while playback runs\u2026";
     } else if (msg.stage === "encoding") {
-      // Downloads that aren't HEVC are re-encoded on the Pi (about 6x the video's length).
+      // Converted on the Pi (several times the video's length), only while nothing plays.
       var epct = Math.round((msg.pct || 0) * 10) / 10;
-      stageEl.textContent = "Converting " + (msg.from ? msg.from.toUpperCase() + " " : "") + "to HEVC\u2026";
+      stageEl.textContent = "Converting " + (msg.from ? msg.from.toUpperCase() + " " : "") + "to " +
+        (msg.to ? msg.to.toUpperCase() : "a 1080p60 codec") + "\u2026";
       bar.style.width = Math.min(100, epct) + "%";
       pctEl.textContent = epct + "%";
       spdEl.textContent = "";
