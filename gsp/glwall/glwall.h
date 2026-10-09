@@ -57,6 +57,8 @@ void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h, int keep
 /* Every cue pipeline runs on the system clock, like the wall, so the pump's
  * base-time mapping holds (an audio sink would otherwise impose its own). */
 void glwall_use_system_clock(GstElement *pipeline);
+/* glwall_share_gl_display gives e (a pipeline) the process-wide GstGLDisplay. */
+void glwall_share_gl_display(GstElement *e);
 /* glwall_layer_free detaches the layer. The cue pipeline must be in NULL
  * (its appsink has released the pump). */
 void glwall_layer_free(glwall_layer *l);

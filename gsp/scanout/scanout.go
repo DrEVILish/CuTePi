@@ -5,7 +5,7 @@
 package scanout
 
 /*
-#cgo pkg-config: gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 gstreamer-gl-1.0 gstreamer-allocators-1.0 libdrm egl glesv2
+#cgo pkg-config: gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 gstreamer-gl-1.0 gstreamer-allocators-1.0 gstreamer-app-1.0 libdrm egl glesv2
 int scanout_register(void);
 */
 import "C"

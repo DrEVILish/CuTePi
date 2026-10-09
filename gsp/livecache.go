@@ -6,8 +6,8 @@ import (
 	"CuTePi/gsp/webcache"
 )
 
-// Live-page asset cache (DESIGN §12.14): thin wrappers over webcache that
-// make sure GStreamer is up first.
+// Live-page asset cache (DESIGN §12.14): thin wrappers over webcache. The
+// WebKit work runs in a child process (webcache/child.go).
 
 // PageCacheAvailable reports whether live-page caching works on this machine.
 func PageCacheAvailable() bool {
@@ -18,15 +18,15 @@ func PageCacheAvailable() bool {
 // PreloadPage loads url off screen so its assets are cached; it gives up as
 // soon as keepGoing reports false.
 func PreloadPage(url string, keepGoing func() bool) error {
-	gstInit()
-	return webcache.Preload(url, liveFrameWait, keepGoing)
+	gstInit() // the GL environment the child inherits (glEnv)
+	return webcache.PreloadIsolated(url, liveFrameWait, keepGoing)
 }
 
 // ClearPageCaches drops the cached assets of the sites of remove that no
 // host in keep shares (everything when keep is empty).
 func ClearPageCaches(remove, keep []string) ([]string, error) {
 	gstInit()
-	return webcache.Clear(remove, keep, 10*time.Second)
+	return webcache.ClearIsolated(remove, keep, 10*time.Second)
 }
 
 // ErrPreloadStopped is PreloadPage's "stopped because the wall got busy".

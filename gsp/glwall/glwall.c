@@ -619,6 +619,24 @@ static gpointer present_thread(gpointer d) {
 
 int glwall_is_open(void) { return W.open; }
 
+/* One GstGLDisplay for every GL pipeline in the process (the wall, live pages, the WebKit cache keeper), never
+ * freed. Each GL element otherwise creates its own GstGLDisplayEGL on the same EGL display, and finalising one (a
+ * live page stopping, a cache pre-load ending) calls eglTerminate on that display under everything still using
+ * it: with the GPU wall running, WebKit's next frame release (wpe_view_backend_exportable_fdo_egl_dispatch_
+ * release_exported_image) then crashed the service. */
+void glwall_share_gl_display(GstElement *e) {
+  static GstGLDisplay *display;
+  static GMutex lock;
+  g_mutex_lock(&lock);
+  if (!display)
+    display = gst_gl_display_new();
+  GstContext *ctx = gst_context_new(GST_GL_DISPLAY_CONTEXT_TYPE, TRUE);
+  gst_context_set_gl_display(ctx, display);
+  g_mutex_unlock(&lock);
+  gst_element_set_context(e, ctx);
+  gst_context_unref(ctx);
+}
+
 int glwall_open(int drm_fd, uint32_t crtc_id, uint32_t plane_id, int width, int height, int refresh_hz, char **err) {
   *err = NULL;
   if (W.open) return 0;
@@ -642,6 +660,7 @@ int glwall_open(int drm_fd, uint32_t crtc_id, uint32_t plane_id, int width, int 
   W.wall = gst_parse_launch(desc, &gerr);
   g_free(desc);
   if (!W.wall || gerr) { *err = g_strdup_printf("wall pipeline: %s", gerr ? gerr->message : "parse failed"); if (gerr) g_error_free(gerr); ring_destroy(); return -1; }
+  glwall_share_gl_display(W.wall);
   W.mixer = gst_bin_get_by_name(GST_BIN(W.wall), "m");
   W.wout = gst_bin_get_by_name(GST_BIN(W.wall), "wout");
   GstPad *msrc = gst_element_get_static_pad(W.mixer, "src");

@@ -191,3 +191,10 @@ func Stats() (mixed, presented uint64) {
 	C.glwall_stats(&m, &p)
 	return uint64(m), uint64(p)
 }
+
+// ShareGLDisplay gives a pipeline the process-wide GL display (glwall.c):
+// every pipeline with GL elements must use it, or one ending can terminate
+// the EGL display under the others. Call before the pipeline starts.
+func ShareGLDisplay(e interface{ Unsafe() unsafe.Pointer }) {
+	C.glwall_share_gl_display((*C.GstElement)(e.Unsafe()))
+}

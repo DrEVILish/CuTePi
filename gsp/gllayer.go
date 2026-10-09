@@ -134,7 +134,7 @@ func glVideoTail(dmabuf bool, format string, flip, hw bool) []string {
 			names = append([]string{"queue"}, videoDownload()...)
 			names = append(names, "capsfilter", "identity")
 		} else {
-			names = []string{"queue", "videoconvert", "videoscale", "capsfilter"}
+			names = append(append([]string{"queue"}, packStage()...), "videoconvert", "videoscale", "capsfilter")
 		}
 		names = append(names, "videocrop", "videoflip")
 		switch {
@@ -150,7 +150,9 @@ func glVideoTail(dmabuf bool, format string, flip, hw bool) []string {
 	case hasAlphaFormat(format):
 		return []string{"queue", "videoconvert", "capsfilter", "appsink"}
 	default:
-		return []string{"queue", "videoconvert", "capsfilter", "v4l2convert", "capsfilter", "appsink"}
+		// 10-bit and 4:2:2 frames are packed to I420 by NEON first (packStage):
+		// videoconvert then passes them to the ISP untouched.
+		return append(append([]string{"queue"}, packStage()...), "videoconvert", "capsfilter", "v4l2convert", "capsfilter", "appsink")
 	}
 }
 

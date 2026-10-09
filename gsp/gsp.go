@@ -2,6 +2,7 @@ package gsp
 
 import (
 	"CuTePi/gsp/av1dec"
+	"CuTePi/gsp/cfhd"
 	"CuTePi/gsp/glwall"
 	"CuTePi/gsp/scanout"
 	"errors"
@@ -147,6 +148,10 @@ func gstInit() {
 		// AV1 through dav1d (gsp/av1dec) when libdav1d is installed.
 		if av1dec.Register() {
 			logs.Printf(logs.GSPPipeDebug, "gsp: AV1 decoder: dav1d %s (cutepidav1ddec)", av1dec.Version())
+		}
+		// CineForm through the CineForm SDK (gsp/cfhd) when its library is installed.
+		if cfhd.Register() {
+			logs.Printf(logs.GSPPipeDebug, "gsp: CineForm decoder: CineForm SDK (cutepicfhddec)")
 		}
 		// Bus watches (EOS/error handling in watchAndPlay/watchWarm) only
 		// dispatch on a running GLib main loop — without it a finished cue
@@ -2279,6 +2284,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	if glOpen {
 		glwall.UseSystemClock(pipeline) // the wall's clock: the bridge maps running times onto it
 	}
+	glwall.ShareGLDisplay(pipeline) // live pages' GL (glwall.c: one display for the process)
 
 	var src *gst.Element
 	var srcChain []*gst.Element // test patterns: sized to the display, optional mode label
@@ -2336,23 +2342,46 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		// Live page (DESIGN §12.14): WPE renders the page off-screen (no
 		// window, no DRM master) at the display's size. Its raw frames pass
 		// straight through decodebin into the same wall tail as any video.
-		src, err = gst.NewElement("wpevideosrc")
-		if err != nil {
-			return nil, errors.New("live pages need the WPE renderer: install the gstreamer1.0-wpe package")
-		}
-		src.Set("location", spec.endpointURL)
 		dw, dh, hz := DisplayMode()
 		if dw <= 0 || dh <= 0 {
 			dw, dh = 1920, 1080
 		}
-		// Zero-copy only where the frames go straight to a plane: the KMS
-		// wall with the rotation done by the display controller.
-		_, hwRotate := rotationBits(spec.opts.Rotation, spec.opts.Flip)
-		chain, err := livePageChain(dw, dh, hz, !glOpen && kmsWall() != nil && hwRotate && !spec.warmSink)
-		if err != nil {
-			return nil, err
+		if hz <= 0 {
+			hz = 60
 		}
-		srcChain = append(srcChain, chain...)
+		// Zero-copy where the frames need no CPU turn: on the KMS wall the
+		// plane scans wpedmabuf's buffers out; on the GPU wall they take the
+		// DMABuf route into the mixer (glupload imports them).
+		_, hwRotate := rotationBits(spec.opts.Rotation, spec.opts.Flip)
+		zeroCopy := kmsWall() != nil && hwRotate && !spec.warmSink
+		if zeroCopy && os.Getenv("CUTEPI_LIVEPAGE_INPROC") != "1" && gst.Find("wpevideosrc") != nil {
+			// WebKit in a child process (gsp/scanout/remote.c): a view torn
+			// down in the service could crash it.
+			src, err = gst.NewElement("appsrc")
+			if err != nil {
+				return nil, err
+			}
+			src.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=AB24,width=%d,height=%d,framerate=%d/1,pixel-aspect-ratio=1/1", dw, dh, hz)))
+			src.Set("format", gst.FormatTime)
+			src.Set("is-live", true)
+			src.Set("do-timestamp", true)
+			src.Set("max-buffers", uint64(2))
+			src.SetArg("leaky-type", "downstream") // an old frame goes back to the renderer, never blocks it
+			if err := scanout.StartRemote(src, spec.endpointURL, dw, dh, hz, false); err != nil {
+				return nil, fmt.Errorf("live page renderer: %w", err)
+			}
+		} else {
+			src, err = gst.NewElement("wpevideosrc")
+			if err != nil {
+				return nil, errors.New("live pages need the WPE renderer: install the gstreamer1.0-wpe package")
+			}
+			src.Set("location", spec.endpointURL)
+			chain, err := livePageChain(dw, dh, hz, zeroCopy)
+			if err != nil {
+				return nil, err
+			}
+			srcChain = append(srcChain, chain...)
+		}
 	} else {
 		src, err = gst.NewElement("filesrc")
 		if err != nil {

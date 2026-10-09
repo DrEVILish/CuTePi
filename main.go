@@ -17,6 +17,8 @@ import (
 	"CuTePi/config"
 	"CuTePi/ctp"
 	"CuTePi/gsp"
+	"CuTePi/gsp/scanout"
+	"CuTePi/gsp/webcache"
 	"CuTePi/routes"
 	"CuTePi/worker"
 )
@@ -53,6 +55,16 @@ func main() {
 			log.Fatalf("CuTePi: console %s mode: %v", os.Args[2], err)
 		}
 		return
+	}
+	// `cutepi --webcache-…`: the live-page cache keeper's WebKit work, in a
+	// child of the service (gsp/webcache/child.go).
+	if webcache.ChildArg(os.Args[1:]) {
+		os.Exit(webcache.RunChild(os.Args[1:]))
+	}
+	// `cutepi --livepage-render …`: a live page's WebKit renderer, a child of
+	// the service (gsp/scanout/remote.c).
+	if scanout.ChildArg(os.Args[1:]) {
+		os.Exit(scanout.RunChild(os.Args[1:]))
 	}
 	// A child spawned by /api/restart must not bind the port until the
 	// parent has exited and released it. Wait up to 20s for that.

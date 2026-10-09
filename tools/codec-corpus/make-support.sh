@@ -87,6 +87,37 @@ alpha qtrle       "mov mkv" "-c:v qtrle -pix_fmt argb"
 alpha png         "mov mkv" "-c:v png -pix_fmt rgba"
 alpha cineform    "mov mkv" "-c:v cfhd -quality film1 -pix_fmt gbrap12le"
 alpha hap         "mov mkv" "-c:v hap -format hap_alpha"
+# CineForm as the CineForm SDK writes it (tools/codec-corpus/cfhdenc.c, on the SDK library CuTePi decodes with):
+# FFmpeg's cfhd encoder writes streams the SDK rejects in part, so the corpus has both. Needs the library built
+# (deploy/build-cineform.sh). cfsdk <name> <422|444|4444> -> video/<name>.{mov,mkv}
+CFHDENC=${CFHDENC:-/tmp/cutepi-cfhdenc}
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+if [ ! -x "$CFHDENC" ] && [ -f "$ROOT/third_party/cineform-sdk/libcutepi-cfhd.so" ]; then
+	cc -O2 -o "$CFHDENC" "$ROOT/tools/codec-corpus/cfhdenc.c" -I "$ROOT/third_party/cineform-sdk/Common" \
+		$(pkg-config --cflags --libs gstreamer-app-1.0) -L "$ROOT/third_party/cineform-sdk" -lcutepi-cfhd \
+		-Wl,-rpath,"$ROOT/third_party/cineform-sdk" || true
+fi
+cfsdk() {
+	local name=$1 fmt=$2 pix=yuyv422 vf=""
+	[ -x "$CFHDENC" ] || { echo "SKIPPED $name (no cfhdenc: build the CineForm library first)"; return; }
+	[ "$fmt" = 422 ] || pix=bgra
+	local tmp=$V/.${name}.video.mov
+	if [ ! -s "$V/$name.mov" ] || [ ! -s "$V/$name.mkv" ]; then
+		if [ "$fmt" = 4444 ]; then
+			$FF $SRC -loop 1 -framerate 60 -i "$MASK" -t $D -filter_complex "[2:v]format=gray[m];[0:v]format=rgba[c];[c][m]alphamerge[v]" \
+				-map "[v]" -f rawvideo -pix_fmt $pix - </dev/null | "$CFHDENC" 1920 1080 60 $fmt "$tmp" film1
+		else
+			$FF $SRC -map 0:v -f rawvideo -pix_fmt $pix - </dev/null | "$CFHDENC" 1920 1080 60 $fmt "$tmp" film1
+		fi
+	fi
+	for ext in mov mkv; do
+		mk "$V/$name.$ext" -i "$tmp" -f lavfi -i sine=frequency=1000:sample_rate=48000 -t $D -map 0:v -map 1:a -c:v copy -c:a pcm_s16le
+	done
+	rm -f "$tmp"
+}
+cfsdk cineform_sdk_422 422
+cfsdk cineform_sdk_444 444
+cfsdk cineform_sdk_alpha 4444
 alpha ffv1        "mkv"     "-c:v ffv1 -pix_fmt yuva420p" "-c:a flac"
 alpha vp9         "mkv"     "-c:v libvpx-vp9 -deadline realtime -cpu-used 8 -row-mt 1 -b:v 8M -pix_fmt yuva420p" "-c:a libopus"
 

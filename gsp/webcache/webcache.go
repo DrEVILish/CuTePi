@@ -25,6 +25,8 @@ import (
 	"time"
 	"unsafe"
 
+	"CuTePi/gsp/glwall"
+
 	"github.com/go-gst/go-gst/gst"
 )
 
@@ -53,11 +55,12 @@ var ErrStopped = errors.New("preload stopped")
 // is busy: a preload costs about 1.5 cores for its ~2 s on a Pi 4).
 func Preload(url string, timeout time.Duration, keepGoing func() bool) error {
 	p, err := gst.NewPipelineFromString(
-		"wpevideosrc name=src ! " + wpeCaps() + ",width=1920,height=1080,framerate=1/1 ! fakesink sync=true")
+		"wpevideosrc name=src ! " + wpeCaps() + ",width=1920,height=1080,framerate=60/1 ! fakesink sync=false enable-last-sample=false")
 	if err != nil {
 		return err
 	}
 	defer p.SetState(gst.StateNull)
+	glwall.ShareGLDisplay(p) // the process-wide GL display: never one of its own (glwall.c)
 	src, err := p.GetElementByName("src")
 	if err != nil {
 		return err
@@ -84,6 +87,11 @@ func Preload(url string, timeout time.Duration, keepGoing func() bool) error {
 	return fmt.Errorf("not loaded within %v", timeout)
 }
 
+// The fakesinks keep no last sample: a WebKit frame held past the pipeline's
+// teardown is released after wpevideosrc destroyed its view, and WPEBackend-fdo
+// then crashes the service (release_exported_image on a freed view; seen at
+// every few start-ups on the GPU wall).
+//
 // wpeCaps is the output wpevideosrc is asked for here: GL memory, as the
 // wall's live pages use (gsp livePageChain). WPE sets up its rendering
 // backend once per process, either on the GPU (EGL) or on the CPU (SHM); a
@@ -122,11 +130,12 @@ func Clear(remove, keep []string, timeout time.Duration) ([]string, error) {
 	job.remove_hosts = C.CString(strings.Join(remove, "\n")) // freed with the job
 	job.keep_hosts = C.CString(strings.Join(keep, "\n"))
 	p, err := gst.NewPipelineFromString(
-		"wpevideosrc name=src location=about:blank ! " + wpeCaps() + ",width=64,height=64,framerate=1/1 ! fakesink sync=true")
+		"wpevideosrc name=src location=about:blank ! " + wpeCaps() + ",width=64,height=64,framerate=1/1 ! fakesink sync=true enable-last-sample=false")
 	if err != nil {
 		C.cutepi_wk_job_free(job)
 		return nil, err
 	}
+	glwall.ShareGLDisplay(p)
 	src, err := p.GetElementByName("src")
 	if err != nil {
 		C.cutepi_wk_job_free(job)

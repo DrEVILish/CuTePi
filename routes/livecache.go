@@ -33,6 +33,12 @@ const livePreloadRetry = time.Minute
 // often.
 const sandboxSweep = time.Minute
 
+// liveCacheStartDelay holds the keeper's first pass back until the wall has
+// started: a WebKit pre-load setting up its GL while the GPU wall's GL was
+// still starting crashed the service in WPEBackend-fdo at about one start-up
+// in two (release_exported_image).
+var liveCacheStartDelay = 10 * time.Second
+
 var (
 	liveCacheMu sync.Mutex
 	// preloaded: source id -> URL preloaded this run; failed: id -> next try.
@@ -46,6 +52,9 @@ func RunLiveCacheKeeper() {
 	if !caching {
 		logs.Printf(logs.GSPPipeDebug, "live-page cache: WebKit not available, cache keeping off")
 	}
+	// Let the display (and the GPU wall's GL) finish starting before WebKit's
+	// first GL set-up in this process (liveCacheStartDelay).
+	time.Sleep(liveCacheStartDelay)
 	var lastSweep time.Time
 	for {
 		keepLiveCache(caching)
