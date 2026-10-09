@@ -54,7 +54,14 @@ selection, settings).
   when nothing is beneath), and animations play at their own frame timing. Design: §6.1.3; tests: §8.
 - **Decoder ranks**: decoders that autoplugging would pick but that fail on the Pi are demoted
   (`gsp.decoderRankOverrides`): `v4l2jpegdec` (unreliable firmware path; software `jpegdec` instead) and
-  `openjpegdec` (fails to negotiate JPEG 2000; `avdec_jpeg2000` instead).
+  `openjpegdec` (fails to negotiate JPEG 2000; `avdec_jpeg2000` instead); `avdec_vp8` is promoted over libvpx's
+  `vp8dec` (two VP8 layers: 56 + 56 fps against 6 + 6).
+- **CuTePi's own decoders and converters** (§12.16), registered in-process at start-up: `cutepidav1ddec` (AV1 on
+  dav1d, 4× libaom), `cutepicfhddec` (CineForm on the GoPro CineForm SDK ported to AArch64, 4× FFmpeg),
+  `cutepiyuvpack` (10-bit and 4:2:2 frames to I420 in one NEON pass), `wpedmabuf` (live pages to scanout
+  buffers, no CPU copy).
+- **URL imports** keep the site's own format when it plays at 1080p60 here; otherwise they are converted in a
+  background queue that never runs while anything plays (§12.15).
 - **Codec test corpus**: `tools/codec-corpus/` generates 52 short files in many codecs and containers (video, audio,
   image) with the Pi's own ffmpeg/GStreamer, probes how GStreamer decodes each (decoder, hardware or software, speed),
   and runs each end to end through the live service (upload, play, output checked from outside). Results:
@@ -1520,3 +1527,79 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   image and recovers automatically only while that cue remains active; missing
   or invalid endpoints produce actionable errors; no browser window, stuck
   layer, leaked renderer, or credential disclosure occurs.
+
+  *Out of process, 2026-10-09:* WebKit no longer runs in the service on the zero-copy routes (KMS wall with
+  display-controller rotation, and the GPU wall). Tearing a view down in the service crashed it now and then
+  (GStreamer 1.26's wpe plugin: WPEBackend-fdo `release_exported_image` on the view being deleted; on the GPU wall
+  about one start-up in two and one live-page stop in 15). A live cue now starts a renderer child, `cutepi
+  --livepage-render URL W H FPS` (`gsp/scanout/remote.c`): `wpevideosrc ! wpedmabuf ! appsink` in the child, its
+  ring of scanout buffers passed once as dmabuf file descriptors over a `SOCK_SEQPACKET` socket, one small message
+  per frame; the service pushes them from an `appsrc` (leaky, 2 buffers) into the cue's pipeline and hands each slot
+  back when its buffer is freed; load progress arrives as the same `wpe-stats` messages. The child exits when the
+  cue's pipeline returns to NULL, without tearing WebKit down; a child that dies fails only its cue (recovery
+  as for a lost endpoint). The cache keeper's preload and clear run in a child too (`cutepi --webcache-preload` /
+  `--webcache-clear`, `gsp/webcache/child.go`): a child dying costs one attempt, retried. Every GL pipeline in the
+  service shares one `GstGLDisplay` (`glwall.ShareGLDisplay`): one per pipeline, finalised with it, terminated the
+  shared EGL display under the others. `CUTEPI_LIVEPAGE_INPROC=1` restores the in-process route.
+  Measured on the GPU wall (wall counters, new page frames shown per second): transparent overlay 60.01, blue-future
+  theme with `steps()` 58.0, the theme as shipped 52.4 (GPU-bound: WebKit's painting, the scanout blit and the
+  mixer share the V3D); 0 service crashes in 20 play/stop cycles and 5 restarts.
+
+### 12.15 URL import: native format, conversion only when needed (decided 2026-10-09)
+
+- **Native first.** Before downloading, CuTePi reads yt-dlp's format list (`-J`) and, among the video streams at
+  the best height (at most the display's 1080 lines) and frame rate on offer, takes the highest-bitrate stream in
+  a codec that plays at 1080p60 on the display path in use (`routes/youtube_format.go`). A lower resolution in a
+  playable codec never wins over a better picture. YouTube offers H.264, VP9 and AV1 at 1080p60: H.264 (format
+  312) is taken and imported as it is.
+- **Which codecs play at 60** (`plays60`), from the codec support tests on the Pi 4 (README tables; real YouTube
+  files through the GPU wall: H.264 60.2 fps steady and through fades, VP9 59.8 steady but 21 on its fade-out,
+  AV1 49.4): GPU wall H.264, HEVC, VP8, MPEG-1/2, MPEG-4 Part 2, MJPEG; KMS wall the same without HEVC (0.8 fps:
+  its 128-column frames cannot go on a plane as they are) and with Theora.
+- **Otherwise converted**, to the best measured option for the display path: HEVC on the GPU wall (x265
+  superfast CRF 18, 44.6 dB for 1080p60; Main 10 kept for 10-bit sources), H.264 on the KMS wall (x264 veryfast
+  CRF 18). Audio and subtitles are copied, into MKV.
+- **Never during playback.** Conversions run one at a time in a background queue (`routes/youtube_convert.go`):
+  a job waits until nothing plays (no cue running, nothing on the wall), and the encoder is stopped (SIGSTOP) the
+  moment playback starts and continued (SIGCONT) when the wall is idle again. The import dialog follows the job
+  ("queued for conversion: waiting until playback stops", "Conversion paused while playback runs", progress and
+  ETA) while open; the job runs on when it is closed, and when done the converted file is imported and every
+  client's media pool refreshes. Converting runs at about 6× the video's length for 1080p60 on a Pi 4 at 2 GHz.
+  The queue lives in memory: a restart drops pending jobs (their downloads are in `tmp/`).
+  `CUTEPI_YTDLP_TRANSCODE=0` imports every download as it comes.
+- yt-dlp needs a current release: Debian trixie's (2025.04.30) gets only 360p30 or nothing from YouTube. The
+  service no longer forces `player_client=android` (format 18, 360p30, with that release).
+
+### 12.16 Decoders and codec paths on the Pi 4 (2026-10-09)
+
+Measured on the test Pi (Pi 4, ARM 2.0 GHz, codec blocks 650 MHz); research notes and raw results in the
+h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
+
+- **AV1: `cutepidav1ddec`** (`gsp/av1dec`): a `GstVideoDecoder` on libdav1d, loaded with `dlopen` (headers vendored
+  in `third_party/dav1d`; no build dependency). Frame numbers ride in dav1d's per-picture data, so frame threading
+  and unshown frames are handled; dav1d decodes into `GstMemory` from CuTePi's picture allocator and the pictures go
+  downstream without a copy when the next element takes `GstVideoMeta`. Rank primary + 1 (above libaom's
+  `av1dec`). 1080p60: 137.5 fps for one stream, 69 + 69 for two (libaom: 34, 29 + 29), bit-identical to FFmpeg's
+  dav1d.
+- **CineForm: `cutepicfhddec`** (`gsp/cfhd`, library `third_party/cineform-sdk`, built and installed by
+  `deploy/build-cineform.sh` to `/usr/local/lib/cutepi/libcutepi-cfhd.so`, loaded with `dlmopen`). The SDK is
+  x86-only; its SSE2 is mapped to NEON by sse2neon and its MMX by `compat/mmx2neon.h`, bit-identical to the x86
+  build single-threaded. Two SDK fixes: a bounded band-end scan, and a per-frame dither generator (libc `rand()`
+  made output vary between runs). The SDK's own threads are not used (non-deterministic, and a rejected sample
+  breaks their queue): three single-threaded decoders work on alternate frames, each in its own copy of the
+  library. Output YUY2, or BGRA for RGBA CineForm. CineForm written by FFmpeg's encoder is partly rejected by the
+  SDK; from the first rejected sample the element decodes the stream with FFmpeg's decoder (internal pipeline), so
+  no frame is lost. 1080p: 19-23 fps with FFmpeg, 48 on one SDK decoder, 82/92/98 with 2/3/4.
+- **10-bit and 4:2:2: `cutepiyuvpack`** (`gsp/yuvpack`): I420_10LE, I422_10LE and Y42B to I420 in one NEON pass
+  (2.35 ms for 1080p 10-bit 4:2:2, against 20 ms for `videoconvert`), ahead of `videoconvert` on both walls'
+  software routes. On the KMS wall ProRes 422/HQ/LT/Proxy went from 0.3-1.4 fps to 37-54 and DNxHR from 20-27 to
+  60 (kmssink cannot allocate 4:2:2 buffers, so these went to RGB before).
+- **VP8:** `avdec_vp8` promoted over `vp8dec` (decoder ranks above).
+- **GPU wall software route** (decoder → `cutepiyuvpack` → `videoconvert` → ISP `v4l2convert` → YU12 dmabufs):
+  about 70-85 fps flat out for 1080p, so a decoder near 60 can fall short in the service beside the mixer (VP9
+  corpus file 13-37 fps, YouTube VP9 59.8). A CPU copy into system dma-heap buffers instead of the ISP measured
+  +15% for VP9, -9% for ProRes: not adopted.
+- **Not usable on the Pi 4:** the VideoCore MJPEG decoder (its end of stream hangs the firmware until a reboot;
+  demoted), OpenVVC (wrong output), VVC in FFmpeg (16 fps), Daniel2 and MLVC (no ARM/NPU support), CEF for live
+  pages (16.8-28 fps through its CPU path; no dmabuf output without a display server).
+
