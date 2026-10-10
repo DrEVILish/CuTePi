@@ -139,6 +139,7 @@ static struct {
 } P;
 
 static GQuark fb_quark;
+static GQuark dumb_quark;       /* a scanout-pool memory's dumb buffer handle */
 
 static plane_st *plane_of (uint32_t id) {
   for (int i = 0; i < P.npl; i++)
@@ -523,14 +524,25 @@ static uint32_t dmabuf_fb (GstBuffer * b, const GstVideoInfo * vi, uint32_t four
   int np = vm ? (int) vm->n_planes : (int) GST_VIDEO_INFO_N_PLANES (vi);
   uint32_t handles[4] = { 0 }, pitches[4] = { 0 }, offsets[4] = { 0 };
   uint64_t mods[4] = { 0 };
+  int owned[4] = { 0 };         /* handle belongs to our pool: never closed here */
   for (int p = 0; p < np && p < 4; p++) {
     gsize off = vm ? vm->offset[p] : GST_VIDEO_INFO_PLANE_OFFSET (vi, p);
     guint idx, len;
     gsize skip;
     if (!gst_buffer_find_memory (b, off, 1, &idx, &len, &skip)) return 0;
     GstMemory *m = gst_buffer_peek_memory (b, idx);
-    int dfd = gst_is_dmabuf_memory (m) ? gst_dmabuf_memory_get_fd (m) : gst_is_fd_memory (m) ? gst_fd_memory_get_fd (m) : -1;
-    if (dfd < 0 || drmPrimeFDToHandle (P.fd, dfd, &handles[p])) return 0;
+    gpointer own = dumb_quark ? gst_mini_object_get_qdata (GST_MINI_OBJECT (m), dumb_quark) : NULL;
+    if (own) {
+      /* Our own scanout pool's buffer: importing its dmabuf would hand back
+       * the pool's handle (no new reference), and closing that below would
+       * free the handle number under the pool, whose later DESTROY_DUMB
+       * could then hit another object. Use it as it is. */
+      handles[p] = GPOINTER_TO_UINT (own);
+      owned[p] = 1;
+    } else {
+      int dfd = gst_is_dmabuf_memory (m) ? gst_dmabuf_memory_get_fd (m) : gst_is_fd_memory (m) ? gst_fd_memory_get_fd (m) : -1;
+      if (dfd < 0 || drmPrimeFDToHandle (P.fd, dfd, &handles[p])) return 0;
+    }
     offsets[p] = skip + m->offset;
     pitches[p] = vm ? vm->stride[p] : GST_VIDEO_INFO_PLANE_STRIDE (vi, p);
     mods[p] = mod;
@@ -542,7 +554,7 @@ static uint32_t dmabuf_fb (GstBuffer * b, const GstVideoInfo * vi, uint32_t four
   for (int p = 0; p < np && p < 4; p++) {
     int dup = 0;
     for (int q = 0; q < p; q++) dup |= handles[q] == handles[p];
-    if (handles[p] && !dup) drmCloseBufferHandle (P.fd, handles[p]);
+    if (handles[p] && !dup && !owned[p]) drmCloseBufferHandle (P.fd, handles[p]);
   }
   if (r) {
     GST_WARNING ("addfb2 %" GST_FOURCC_FORMAT " mod %#" G_GINT64_MODIFIER "x %dx%d: %s", GST_FOURCC_ARGS (fourcc), mod, w, h, g_strerror (errno));
@@ -619,7 +631,6 @@ fail:
 typedef struct { GstBufferPool parent; GstVideoInfo info; GstAllocator *dmabuf; } PwPool;
 typedef struct { GstBufferPoolClass parent_class; } PwPoolClass;
 G_DEFINE_TYPE (PwPool, pw_pool, GST_TYPE_BUFFER_POOL);
-static GQuark dumb_quark;
 
 static void dumb_destroy (gpointer d) {
   struct drm_mode_destroy_dumb dd = { .handle = GPOINTER_TO_UINT (d) };

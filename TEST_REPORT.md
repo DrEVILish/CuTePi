@@ -1334,7 +1334,10 @@ which ignores enums: an assertion per frame, frames unsynced); Active Cues liste
 the presenter: a scanout pool of 4 buffers ran dry (8 now); the HEVC gather after the clock wait bunched frames (it
 runs in `prepare` now: 54.8 -> 59.5 fps beside H.264); an HEVC cue shown before its pad appeared stayed at alpha 0;
 HEVC Main 10's two-plane SAND would have gone to the plane as decoded (a corrupt picture): SAND is offered only as the
-gather handles it.
+gather handles it. Importing a frame from the sink's own scanout pool closed the pool's GEM handle (an import of
+one's own export returns the existing handle), so a later free could destroy another object under that number; the
+pool's handle is now used as it is. Checked after the fix: MPEG-2 (pool) over HEVC (UV ring), both looping, 60 s:
+59.75 + 59.78 fps, 60.00 commits/s, 0 failed, no errors.
 
 **Method notes.** The live-page cache keeper starts WebKit 10 s after a service start and pre-loads every live page
 once; runs started within ~30 s of a restart were starved by it (AV1 60 -> 0.8 fps for seconds). Wait ~40 s after a
