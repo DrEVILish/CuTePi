@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 
+	"CuTePi/gsp/planewall"
 	"CuTePi/gsp/yuvpack"
 	"CuTePi/logs"
 )
@@ -42,6 +43,14 @@ type wallLayer struct {
 }
 
 func (l *wallLayer) post(alpha float64) {
+	if planewall.IsOpen() {
+		// The presenter puts it in the next commit (every refresh): no
+		// pacing, nothing to share.
+		if w := kmsWall(); w != nil {
+			_ = w.setAlpha(l.plane, alpha)
+		}
+		return
+	}
 	l.want.Store(math.Float64bits(alpha))
 	select {
 	case l.kick <- struct{}{}:
@@ -142,7 +151,7 @@ func Layered() bool { return kmsWall() != nil }
 
 // kmsWall returns the open KMS display when the wall sink is kmssink.
 func kmsWall() *KMSWall {
-	if wallVideoSink() != "kmssink" && !glWallEnabled() {
+	if !planeSinkWanted() && wallVideoSink() != "kmssink" && !glWallEnabled() {
 		return nil
 	}
 	wallOnce.Do(func() {
@@ -153,8 +162,32 @@ func kmsWall() *KMSWall {
 		}
 		kmsDisp = w
 		logs.Printf(logs.GSPPipeDebug, "gsp: KMS wall %dx%d@%dHz, %d layers", w.Width, w.Height, w.Refresh, len(w.planes))
+		if planeSinkWanted() && !glWallEnabled() {
+			gstInit()
+			ids := make([]uint32, len(w.planes))
+			for i, p := range w.planes {
+				ids[i] = p.id
+			}
+			if err := planewall.Open(w.fd, w.crtcID, ids, w.Width, w.Height, w.Refresh); err != nil {
+				logs.PrintfWarn(logs.GSPPipeDebug, "gsp: plane wall presenter unavailable, using kmssink: %v", err)
+			} else {
+				logs.Printf(logs.GSPPipeDebug, "gsp: plane wall presenter on %d planes (one atomic commit per refresh)", len(ids))
+			}
+		}
 	})
 	return kmsDisp
+}
+
+// planeSinkWanted: CUTEPI_WALL_SINK=planesink asks for the plane wall with
+// CuTePi's presenter (DESIGN §6.1.4) instead of a kmssink per layer.
+func planeSinkWanted() bool { return wallVideoSink() == "planesink" }
+
+// layerSink is the plane wall's sink element: the presenter's when it runs.
+func layerSink() string {
+	if planewall.IsOpen() {
+		return "cutepiplanesink"
+	}
+	return "kmssink"
 }
 
 // DisplayMode reports the wall's resolution and refresh rate (0s when not
@@ -437,6 +470,9 @@ func dropLayer(p *gst.Pipeline) {
 	if w != nil && l != nil {
 		close(l.quit)
 		_ = w.setAlpha(l.plane, 0)
+		if planewall.IsOpen() {
+			planewall.Detach(l.plane.id) // normally done when its sink stopped
+		}
 		w.release(l.plane)
 	}
 }
@@ -658,7 +694,7 @@ func kmsVideoTail(dmabuf bool, opts LoadOpts) []string {
 	if opts.FitMode == "stretch" {
 		names = append(names, "capssetter")
 	}
-	return append(names, "kmssink")
+	return append(names, layerSink())
 }
 
 // packStage is cutepiyuvpack (gsp/yuvpack) where it registers: 10-bit
@@ -770,6 +806,10 @@ func cropPx(v string, full int) int {
 func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts LoadOpts, srcW, srcH int, still bool) error {
 	w := kmsWall()
 	sink := firstByFactory(byFactory, "kmssink")
+	planeSink := sink == nil
+	if planeSink {
+		sink = firstByFactory(byFactory, "cutepiplanesink")
+	}
 	if w == nil || sink == nil {
 		return fmt.Errorf("kms tail without a KMS wall")
 	}
@@ -779,9 +819,11 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 	}
 	l.sink.Store(sink)
 	l.still.Store(still)
-	sink.Set("fd", w.fd)
 	sink.Set("plane-id", int(l.plane.id))
-	sink.Set("skip-vsync", true) // one vsync waiter per DRM fd: several sinks share it
+	if !planeSink {
+		sink.Set("fd", w.fd)
+		sink.Set("skip-vsync", true) // one vsync waiter per DRM fd: several sinks share it
+	}
 	// First-frame flag: a live page has no preroll, so its show waits on this.
 	sink.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer, func(*gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
 		l.framed.Store(true)

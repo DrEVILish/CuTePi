@@ -1,6 +1,7 @@
 package gsp
 
 import (
+	"CuTePi/gsp/planewall"
 	"errors"
 	"fmt"
 	"os"
@@ -317,11 +318,17 @@ func (w *KMSWall) release(p *kmsPlane) {
 	w.mu.Unlock()
 }
 
-// set writes one plane property; unknown properties are ignored.
+// set writes one plane property; unknown properties are ignored. With the
+// plane wall's presenter running, it goes into the presenter's next atomic
+// commit instead: a property ioctl of its own would be a commit sharing the
+// display's refreshes with the frames (the old 30-steps-a-second fades).
 func (w *KMSWall) set(p *kmsPlane, name string, value uint64) error {
 	pid, ok := p.props[name]
 	if !ok {
 		return nil
+	}
+	if planewall.IsOpen() {
+		return planewall.Set(p.id, name, value)
 	}
 	s := drmModeObjSetProperty{Value: value, PropID: pid, ObjID: p.id, ObjType: drmObjectPlane}
 	return drmIoctl(w.fd, ioctlModeObjSetProperty, unsafe.Pointer(&s))
