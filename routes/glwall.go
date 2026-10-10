@@ -18,4 +18,11 @@ func registerGLWallRoutes(rg *gin.RouterGroup) {
 		c.JSON(http.StatusOK, gin.H{"on": on, "mixed": mixed, "presented": presented, "layers": layers, "pool": gsp.GLPoolStats(),
 			"displayDelayMs": float64(delay.Microseconds()) / 1000, "cueAudioOffsetMs": float64(audio.Microseconds()) / 1000})
 	})
+	// Plane wall presenter (CUTEPI_WALL_SINK=planesink): commits, the
+	// intervals between them, and frames on screen per visible layer.
+	rg.GET("/debug/planewall", func(c *gin.Context) {
+		st, layers, on := gsp.PlaneWallStats()
+		c.JSON(http.StatusOK, gin.H{"on": on, "commits": st.Commits, "fails": st.Fails,
+			"intervalMs": gin.H{"p50": st.P50Ms, "p99": st.P99Ms, "max": st.MaxMs}, "layers": layers})
+	})
 }

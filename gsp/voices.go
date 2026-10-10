@@ -220,7 +220,9 @@ type Voice struct {
 func Voices() []Voice {
 	mgr.mu.Lock()
 	clips := make([]clip, 0, len(mgr.voices)+1)
-	if mgr.pipeline != nil && !mgr.testShowing {
+	// Stop keeps the stopped pipeline for a resume, with no file: that is
+	// not a running cue.
+	if mgr.pipeline != nil && mgr.currentFile != "" && !mgr.testShowing {
 		clips = append(clips, mgr.clip)
 	}
 	for _, v := range mgr.voices {

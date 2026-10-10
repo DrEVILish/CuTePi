@@ -2362,7 +2362,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 				return nil, err
 			}
 			src.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=AB24,width=%d,height=%d,framerate=%d/1,pixel-aspect-ratio=1/1", dw, dh, hz)))
-			src.Set("format", gst.FormatTime)
+			src.SetArg("format", "time") // enum: Set(gst.FormatTime) was silently ignored (segments stayed in bytes: a GStreamer assertion per frame)
 			src.Set("is-live", true)
 			src.Set("do-timestamp", true)
 			src.Set("max-buffers", uint64(2))

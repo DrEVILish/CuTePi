@@ -930,3 +930,31 @@ func testPatternRate(pattern string, displayHz int) int {
 	}
 	return 5
 }
+
+// PlaneWallLayer is one visible plane-wall layer as the presenter counts it.
+type PlaneWallLayer struct {
+	Plane   uint32 `json:"plane"`
+	Zpos    int    `json:"zpos"`
+	Shown   uint64 `json:"shown"`   // frames that reached the screen
+	Dropped uint64 `json:"dropped"` // frames replaced before reaching it
+	First   bool   `json:"first"`   // has shown a frame
+}
+
+// PlaneWallStats reports the plane wall presenter's commits and its
+// visible layers (bottom first); on=false without the presenter.
+func PlaneWallStats() (st planewall.Stats, ls []PlaneWallLayer, on bool) {
+	if !planewall.IsOpen() {
+		return st, nil, false
+	}
+	layersMu.Lock()
+	ids := make([]uint32, len(stack))
+	for i, l := range stack {
+		ids[i] = l.plane.id
+	}
+	layersMu.Unlock()
+	for i, id := range ids {
+		s, d, f := planewall.PlaneStats(id)
+		ls = append(ls, PlaneWallLayer{Plane: id, Zpos: i + 1, Shown: s, Dropped: d, First: f})
+	}
+	return planewall.ReadStats(), ls, true
+}

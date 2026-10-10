@@ -126,6 +126,10 @@ func TestVoicesTransportActsOnAll(t *testing.T) {
 	if got := running(); len(got) != 0 {
 		t.Fatalf("after Stop, running = %v", got)
 	}
+	// Stop keeps the focus pipeline for a resume: not a running cue.
+	if vs := Voices(); len(vs) != 0 {
+		t.Fatalf("after Stop, Voices() = %+v", vs)
+	}
 }
 
 // A lower-layer cue that ends by itself leaves the stack and reports its end

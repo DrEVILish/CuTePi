@@ -279,3 +279,17 @@ func TestFireKeepsOthersRunning(t *testing.T) {
 	}
 	waitRunning("3")
 }
+
+// A still with a display duration holds its frame until the duration's
+// timer ends it (it used to end on its only frame and never show).
+func TestStillWithDurationHolds(t *testing.T) {
+	for _, d := range []int{0, 10000} {
+		o := cueOpts(ctp.Cue{Media: ctp.Media{Mimetype: "image/png", Filename: "x.png"}, CueDuration: d}, false)
+		if !o.Hold {
+			t.Errorf("still with duration %d ms: Hold false", d)
+		}
+	}
+	if o := cueOpts(ctp.Cue{Media: ctp.Media{Mimetype: "video/mp4"}}, false); o.Hold {
+		t.Error("a video without Hold holds")
+	}
+}

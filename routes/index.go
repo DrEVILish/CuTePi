@@ -622,13 +622,14 @@ func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 		InPoint:  float64(cue.PosStart) / 1000,
 		OutPoint: float64(cue.PosEnd) / 1000,
 		Hold: cue.Hold && (strings.HasPrefix(cue.Mimetype, "video/") || strings.HasPrefix(cue.Mimetype, "image/")) ||
-			// A blank display duration means indefinitely: with no timer to
-			// end it and no hold to park it, a still would EOS-teardown on
-			// its first frame (the inspector promises "blank = indefinitely").
-			(strings.HasPrefix(cue.Mimetype, "image/") && cue.CueDuration == 0) ||
-			// An animated image shorter than its display duration stays on
-			// its last frame until the timer ends the cue, not black (§6.1.3).
-			(strings.HasPrefix(cue.Mimetype, "image/") && gsp.IsAnimated(cue.Filename)),
+			// A still is one frame: without a hold it ended on that frame,
+			// before its display-duration timer (loadAndPlayCue) could run, so
+			// a still with a set duration never showed. Images always hold; a
+			// set duration ends the cue on its timer, a blank one shows it
+			// indefinitely (the inspector's "blank = indefinitely"). An
+			// animated image shorter than its duration stays on its last frame
+			// until the timer, not black (§6.1.3).
+			strings.HasPrefix(cue.Mimetype, "image/"),
 		Loop:           cue.Loop,
 		LoopCount:      cue.LoopCount,
 		Volume:         cue.Volume,
@@ -701,10 +702,9 @@ func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
 	gsp.Play()
 	logs.Emit(logs.AuditEvent{Event: "cue_start", Pos: cue.CuePos, Title: cue.Title})
 	// A set display duration ends the still on a timer (then
-	// auto-continues like any other end). A blank duration holds the frame
-	// indefinitely instead (cueOpts forces hold): without that, the still
-	// would EOS-teardown on its first frame. The generation guard drops
-	// stale timers when the operator acts meanwhile.
+	// auto-continues like any other end); stills always hold their frame
+	// until then (cueOpts). A blank duration shows it indefinitely. The
+	// generation guard drops stale timers when the operator acts meanwhile.
 	if strings.HasPrefix(cue.Mimetype, "image/") && cue.CueDuration > 0 {
 		gen, pos, hold := gsp.Generation(), cue.CuePos, cue.Hold
 		dur := time.Duration(cue.CueDuration) * time.Millisecond
