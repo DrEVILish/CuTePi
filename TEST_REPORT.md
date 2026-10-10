@@ -1303,6 +1303,47 @@ editor is open or was just asked for. Double-click checks (PreWait cell, open th
 selected, in every case; a single click still selects; no console errors. **Control:** with the swap guard disabled, the
 0 ms double-click lost its editor, so the test does exercise the race.
 
+## Plane wall presenter, 2026-10-10
+
+The atomic plane engine (PERFORMANCE_PROPOSALS.md Proposal 1, h264-pi4 PROPOSALS-two-streams Proposal 1) built into
+the service as an opt-in wall (`CUTEPI_WALL_SINK=planesink`, DESIGN §6.1.4). Test Pi 4, 1080p60, live service on the
+plane wall for these runs (a temporary drop-in), codec blocks at 650 MHz. Counters from the presenter
+(`/api/debug/planewall`: counts as of a commit, with its time, so rates are exact over commit times).
+
+| Measure | `kmssink` per layer (before) | Presenter |
+|---|---|---|
+| Fade steps a second, video moving | 30 | 59-60 on every file of the support set |
+| Codec support set (`support.py`) | no video codec supported | **44 of 101** (GPU wall: 45); 14 video rows, H.264 1080p60 among them |
+| HEVC Main 1080p60 alone | ~1 fps (CPU untile) | 60 fps; fade-in 57.7-58.9 (first-use imports), so not yet "Supported" |
+| AV1 / VP9 / ProRes Proxy steady | 34.8 / - / 51.3 | 53 / 51.5 / 58-60 |
+| Two 1080p60 layers, H.264 + HEVC, real footage | froze (27 fps each for H.264 pairs) | **59.47 + 59.47** over 30 s, 60.00 commits/s |
+| Live page (WebKit DMABufs) | - | 58 fps |
+
+**Soak, 10 minutes, H.264 (top) + HEVC (underneath) 1080p60 looping, sampled every 30 s:** HEVC mean 59.45 fps (lowest
+window 59.10), H.264 59.68 (59.27); commits 60.00/s in every window, 0 failed, commit interval p99 17.75-18.09 ms;
+service RSS 196-204 MB (flat), CmaFree 128 MB (flat), 48.7-50.6 °C, never throttled.
+
+**Picture checks (HEVC, Y from the decoder's buffer + GPU-gathered UV, as displayed, against FFmpeg's software decode;
+`CUTEPI_PLANEWALL_DUMP` + `tools/codec-corpus/sandcheck.py`):** displayed frame 300 = clip frame 344 and frame 420 =
+clip frame 466 of the corpus `hevc_main.mov`; frame 420 = clip frame 441 of the real-footage `B_hevc_60_long.mov`:
+every byte of Y and UV identical.
+
+**Found on the way and fixed (each also without the presenter):** stills with a display duration ended on their only
+frame and never showed; the live-page `appsrc` ran with byte segments (its format was set through go-gst's `Set`,
+which ignores enums: an assertion per frame, frames unsynced); Active Cues listed a stopped cue as running. And in
+the presenter: a scanout pool of 4 buffers ran dry (8 now); the HEVC gather after the clock wait bunched frames (it
+runs in `prepare` now: 54.8 -> 59.5 fps beside H.264); an HEVC cue shown before its pad appeared stayed at alpha 0;
+HEVC Main 10's two-plane SAND would have gone to the plane as decoded (a corrupt picture): SAND is offered only as the
+gather handles it.
+
+**Method notes.** The live-page cache keeper starts WebKit 10 s after a service start and pre-loads every live page
+once; runs started within ~30 s of a restart were starved by it (AV1 60 -> 0.8 fps for seconds). Wait ~40 s after a
+restart before measuring. Rates at the very start of a cue include each decoder buffer's first framebuffer import.
+
+**Not done:** 10-bit HEVC gather (Main 10 stays at the decoder's copy, 1-4 fps); 90°/270° rotation is still a software
+stage; the crossfade's "incoming is on screen" signal is the sink's first buffer, not the first commit carrying it. The
+test Pi was put back on the GPU wall afterwards; making the presenter the default is the operator's decision.
+
 ## Open findings (not fixed; need a decision)
 
 ### O1 — Frame rate: 1080p60 plays at 60 fps; fades, two layers and HEVC do not (major)
