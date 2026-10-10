@@ -89,6 +89,8 @@ typedef struct {
   int nfmt;
   /* stats */
   uint64_t shown_frames, dropped;
+  uint64_t steps;               /* commits that changed its opacity on screen */
+  uint64_t alpha_shown;         /* alpha of the last commit that carried it */
   int first_seen;
 } plane_st;
 
@@ -294,6 +296,64 @@ fail:
   return -1;
 }
 
+/* ---- scanout pool ---------------------------------------------------------
+ * Offered to upstream in the allocation query for system-memory caps: each
+ * buffer is a dumb (scanout) buffer exported as a dmabuf, laid out by
+ * GstVideoInfo (GstVideoMeta attached). A decoder or converter that takes it
+ * writes the picture straight into scanout memory, and show_frame puts it on
+ * the plane as a framebuffer without a copy (as kmssink's pool did: AV1
+ * through dav1d 34.8 fps there against 20.5 with a copy per frame). */
+typedef struct { GstBufferPool parent; GstVideoInfo info; GstAllocator *dmabuf; } PwPool;
+typedef struct { GstBufferPoolClass parent_class; } PwPoolClass;
+G_DEFINE_TYPE (PwPool, pw_pool, GST_TYPE_BUFFER_POOL);
+static GQuark dumb_quark;
+
+static void dumb_destroy (gpointer d) {
+  struct drm_mode_destroy_dumb dd = { .handle = GPOINTER_TO_UINT (d) };
+  if (P.fd >= 0) drmIoctl (P.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+}
+
+static gboolean pw_pool_set_config (GstBufferPool * bp, GstStructure * cfg) {
+  PwPool *pool = (PwPool *) bp;
+  GstCaps *caps;
+  guint size, min, max;
+  if (!gst_buffer_pool_config_get_params (cfg, &caps, &size, &min, &max) || !caps) return FALSE;
+  if (!gst_video_info_from_caps (&pool->info, caps)) return FALSE;
+  gst_buffer_pool_config_set_params (cfg, caps, GST_VIDEO_INFO_SIZE (&pool->info), min, max);
+  return GST_BUFFER_POOL_CLASS (pw_pool_parent_class)->set_config (bp, cfg);
+}
+
+static GstFlowReturn pw_pool_alloc (GstBufferPool * bp, GstBuffer ** out, GstBufferPoolAcquireParams * ap) {
+  PwPool *pool = (PwPool *) bp;
+  GstVideoInfo *vi = &pool->info;
+  struct drm_mode_create_dumb cd = { .width = 4096, .height = (GST_VIDEO_INFO_SIZE (vi) + 4095) / 4096, .bpp = 8 };
+  if (drmIoctl (P.fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd)) return GST_FLOW_ERROR;
+  int fd = -1;
+  if (drmPrimeHandleToFD (P.fd, cd.handle, DRM_CLOEXEC | DRM_RDWR, &fd)) { dumb_destroy (GUINT_TO_POINTER (cd.handle)); return GST_FLOW_ERROR; }
+  GstMemory *m = gst_dmabuf_allocator_alloc (pool->dmabuf, fd, cd.size);
+  /* The dumb buffer goes with the memory (after its framebuffer: qdata set
+   * later is destroyed first). */
+  gst_mini_object_set_qdata (GST_MINI_OBJECT (m), dumb_quark, GUINT_TO_POINTER (cd.handle), dumb_destroy);
+  GstBuffer *b = gst_buffer_new ();
+  gst_buffer_append_memory (b, m);
+  gst_buffer_add_video_meta_full (b, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_INFO_FORMAT (vi), GST_VIDEO_INFO_WIDTH (vi),
+      GST_VIDEO_INFO_HEIGHT (vi), GST_VIDEO_INFO_N_PLANES (vi), vi->offset, vi->stride);
+  *out = b;
+  return GST_FLOW_OK;
+}
+
+static void pw_pool_finalize (GObject * o) {
+  PwPool *pool = (PwPool *) o;
+  gst_clear_object (&pool->dmabuf);
+  G_OBJECT_CLASS (pw_pool_parent_class)->finalize (o);
+}
+static void pw_pool_class_init (PwPoolClass * k) {
+  G_OBJECT_CLASS (k)->finalize = pw_pool_finalize;
+  GST_BUFFER_POOL_CLASS (k)->set_config = pw_pool_set_config;
+  GST_BUFFER_POOL_CLASS (k)->alloc_buffer = pw_pool_alloc;
+}
+static void pw_pool_init (PwPool * p) { p->dmabuf = gst_dmabuf_allocator_new (); }
+
 /* ---- presenter ----------------------------------------------------------- */
 
 static void add (drmModeAtomicReq * rq, uint32_t obj, uint32_t prop, uint64_t v) {
@@ -310,7 +370,7 @@ static gpointer present (gpointer d) {
   if (pthread_setschedparam (pthread_self (), SCHED_FIFO, &sp) != 0)
     g_printerr ("planewall: SCHED_FIFO: %s\n", g_strerror (errno));
   frame *next[MAXP];
-  int off[MAXP];
+  int off[MAXP], inc[MAXP];
   for (;;) {
     g_mutex_lock (&P.lock);
     while (!P.dirty && !P.quit) g_cond_wait (&P.cond, &P.lock);
@@ -321,6 +381,7 @@ static gpointer present (gpointer d) {
       plane_st *s = &P.pl[i];
       next[i] = NULL;
       off[i] = 0;
+      inc[i] = 0;
       if (s->pending) { next[i] = s->pending; s->pending = NULL; }
       frame *f = next[i] ? next[i] : s->shown;
       if (!s->attached || !f) {
@@ -329,6 +390,7 @@ static gpointer present (gpointer d) {
         continue;
       }
       if (!next[i] && !s->props_dirty && s->on) continue;
+      inc[i] = 1;
       add (rq, s->id, s->p_fb, f->fb);
       add (rq, s->id, s->p_crtc, P.crtc);
       add (rq, s->id, s->p_sx, (uint64_t) f->sx << 16);
@@ -371,6 +433,8 @@ static gpointer present (gpointer d) {
       for (int i = 0; i < P.npl; i++) {
         plane_st *s = &P.pl[i];
         if (off[i]) { s->on = 0; frame_free (s, s->shown); s->shown = NULL; continue; }
+        if (inc[i] && s->on && s->alpha != s->alpha_shown) s->steps++;
+        if (inc[i]) s->alpha_shown = s->alpha;
         if (next[i]) {
           /* The frame it replaced has left the screen. */
           frame_free (s, s->shown);
@@ -397,6 +461,7 @@ int planewall_open (int drm_fd, uint32_t crtc_id, const uint32_t * planes, int n
   if (P.open) return 0;
   GST_DEBUG_CATEGORY_INIT (planewall_debug, "cutepiplanewall", 0, "CuTePi plane wall");
   fb_quark = g_quark_from_static_string ("cutepi-planewall-fb");
+  dumb_quark = g_quark_from_static_string ("cutepi-planewall-dumb");
   g_mutex_init (&P.lock);
   g_cond_init (&P.cond);
   g_cond_init (&P.done);
@@ -469,12 +534,14 @@ void planewall_stats (planewall_stats_t * st) {
   st->max_ms = n ? tmp[n - 1] : 0;
 }
 
-void planewall_plane_stats (uint32_t plane, uint64_t * shown, uint64_t * dropped, int *first) {
+void planewall_plane_stats (uint32_t plane, uint64_t * shown, uint64_t * dropped, uint64_t * steps, int *first, int64_t * t_us) {
   g_mutex_lock (&P.lock);
   plane_st *s = plane_of (plane);
   *shown = s ? s->shown_frames : 0;
   *dropped = s ? s->dropped : 0;
+  *steps = s ? s->steps : 0;
   *first = s ? s->first_seen : 0;
+  *t_us = P.last_us;            /* the commit these counts are as of */
   g_mutex_unlock (&P.lock);
 }
 
@@ -616,6 +683,21 @@ static gboolean cutepi_plane_sink_set_caps (GstBaseSink * bs, GstCaps * caps) {
 static gboolean cutepi_plane_sink_propose_allocation (GstBaseSink * bs, GstQuery * q) {
   gst_query_add_allocation_meta (q, GST_VIDEO_META_API_TYPE, NULL);
   gst_query_add_allocation_meta (q, GST_VIDEO_CROP_META_API_TYPE, NULL);
+  GstCaps *caps;
+  gboolean need_pool;
+  gst_query_parse_allocation (q, &caps, &need_pool);
+  GstVideoInfo vi;
+  if (!caps || gst_video_is_dma_drm_caps (caps) || !gst_video_info_from_caps (&vi, caps)) return TRUE;
+  if (!gst_video_dma_drm_fourcc_from_format (GST_VIDEO_INFO_FORMAT (&vi))) return TRUE;
+  if (need_pool) {
+    GstBufferPool *pool = g_object_new (pw_pool_get_type (), NULL);
+    GstStructure *cfg = gst_buffer_pool_get_config (pool);
+    gst_buffer_pool_config_set_params (cfg, caps, GST_VIDEO_INFO_SIZE (&vi), 8, 0);
+    gst_buffer_pool_config_add_option (cfg, GST_BUFFER_POOL_OPTION_VIDEO_META);
+    if (gst_buffer_pool_set_config (pool, cfg))
+      gst_query_add_allocation_pool (q, pool, GST_VIDEO_INFO_SIZE (&vi), 8, 0);
+    gst_object_unref (pool);
+  }
   return TRUE;
 }
 
@@ -644,7 +726,12 @@ static GstFlowReturn cutepi_plane_sink_show_frame (GstVideoSink * vs, GstBuffer 
   if (!s) return GST_FLOW_ERROR;
   frame *f = g_new0 (frame, 1);
   f->ring = -1;
-  if (self->dmabuf) {
+  uint32_t sys_fourcc = self->dmabuf ? 0 : gst_video_dma_drm_fourcc_from_format (GST_VIDEO_INFO_FORMAT (&self->vi));
+  GstMemory *m0 = gst_buffer_n_memory (b) ? gst_buffer_peek_memory (b, 0) : NULL;
+  if (!self->dmabuf && sys_fourcc && m0 && gst_is_dmabuf_memory (m0) && gst_buffer_get_video_meta (b) &&
+      (f->fb = dmabuf_fb (b, &self->vi, sys_fourcc, DRM_FORMAT_MOD_LINEAR)) != 0) {
+    f->buf = gst_buffer_ref (b);  /* written straight into scanout memory */
+  } else if (self->dmabuf) {
     f->fb = dmabuf_fb (b, &self->vi, self->drm.drm_fourcc, self->drm.drm_modifier);
     if (!f->fb) { g_free (f); GST_ELEMENT_ERROR (self, RESOURCE, FAILED, ("cannot put the frame on plane %u", self->plane_id), (NULL)); return GST_FLOW_ERROR; }
     f->buf = gst_buffer_ref (b);

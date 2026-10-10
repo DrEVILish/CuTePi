@@ -937,7 +937,9 @@ type PlaneWallLayer struct {
 	Zpos    int    `json:"zpos"`
 	Shown   uint64 `json:"shown"`   // frames that reached the screen
 	Dropped uint64 `json:"dropped"` // frames replaced before reaching it
+	Steps   uint64 `json:"steps"`   // commits that changed its opacity on screen
 	First   bool   `json:"first"`   // has shown a frame
+	AtUs    int64  `json:"atUs"`    // monotonic µs of the commit the counts are as of
 }
 
 // PlaneWallStats reports the plane wall presenter's commits and its
@@ -953,8 +955,8 @@ func PlaneWallStats() (st planewall.Stats, ls []PlaneWallLayer, on bool) {
 	}
 	layersMu.Unlock()
 	for i, id := range ids {
-		s, d, f := planewall.PlaneStats(id)
-		ls = append(ls, PlaneWallLayer{Plane: id, Zpos: i + 1, Shown: s, Dropped: d, First: f})
+		s := planewall.PlaneStats(id)
+		ls = append(ls, PlaneWallLayer{Plane: id, Zpos: i + 1, Shown: s.Shown, Dropped: s.Dropped, Steps: s.Steps, First: s.First, AtUs: s.AtUs})
 	}
 	return planewall.ReadStats(), ls, true
 }

@@ -45,6 +45,15 @@ presented frame in the same response, scaled by the presented rate over the
 whole run, so the polling jitter cancels out. Alpha on the GPU wall is not
 measured: the mixer always blends straight alpha.
 
+On the plane wall with CuTePi's presenter (CUTEPI_WALL_SINK=planesink,
+detected from GET /api/debug/planewall), every plane goes on the screen in
+atomic commits, which the setplane probe does not see. The presenter counts,
+per plane and only for commits that returned (the frame is latched): frames
+shown and commits that changed the plane's opacity. Each response carries the
+monotonic time of the commit those counts are as of, so rates are counts over
+commit-time differences: no polling jitter. The cue under test is the top
+visible layer. Alpha files: format and blend mode as on the kmssink wall.
+
 Per file: upload, add a cue, set its fade in to 1 s, set the ESC fade to 1 s
 (restored afterwards), play the cue, after 4 s trigger the fade out
 (POST /api/fadeOut), then stop and delete the cue and the media. With
@@ -461,6 +470,32 @@ def gl_sample():
     return (time.monotonic(), l["ShownFrames"], l["ShownSteps"], d.get("presented", 0), l.get("Route", ""), l.get("Caps", ""))
 
 
+def pw_wall():
+    """True when the live service runs the plane wall's presenter (planesink)."""
+    try:
+        st_, body = call("GET", "/api/debug/planewall")
+        return st_ == 200 and json.loads(body).get("on") is True
+    except Exception:
+        return False
+
+
+def pw_sample():
+    """(commit time, shown_frames, shown_steps, commits, "", "", plane) of the
+    top visible layer, or None. The time is the presenter's (CLOCK_MONOTONIC,
+    as time.monotonic) of the commit the counts are as of."""
+    st_, body = call("GET", "/api/debug/planewall")
+    if st_ != 200:
+        return None
+    d = json.loads(body)
+    ls = d.get("layers") or []
+    if not ls:
+        return None
+    l = max(ls, key=lambda x: x.get("zpos", 0))
+    if not l.get("atUs"):
+        return None
+    return (l["atUs"] / 1e6, l["shown"], l["steps"], d.get("commits", 0), "", "", l["plane"])
+
+
 def gl_per_refresh(samples, lo, hi, idx, hz):
     """Counter idx per presented output frame over [lo, hi), scaled to hz.
 
@@ -553,11 +588,14 @@ def run(path, mdl, keep=False):
             res["ok"] = run_ok
             res["status"] = "Supported" if run_ok else mdl + " - unsupported"
             return res
-        if GL:
+        if GL or PW:
             # GPU wall: the plane is committed every refresh whatever is
             # shown, so the cue's own frames and opacity changes are read
             # from the wall's per-layer counters of presented output frames
-            # (/api/debug/glwall), sampled every 30 ms.
+            # (/api/debug/glwall), sampled every 30 ms. Plane wall presenter:
+            # its per-plane counters, timed by the commits they are as of
+            # (/api/debug/planewall).
+            sample = gl_sample if GL else pw_sample
             t_play = time.monotonic()
             call("POST", "/api/cue/%d/play" % pos)
             samples = []
@@ -569,7 +607,7 @@ def run(path, mdl, keep=False):
                 if t_fo is None and time.monotonic() >= t_due:
                     call("POST", "/api/fadeOut")
                     t_fo = time.monotonic()
-                smp = gl_sample()
+                smp = sample()
                 if smp:
                     samples.append(smp)
                 time.sleep(0.03)
@@ -592,15 +630,18 @@ def run(path, mdl, keep=False):
             res["fade_out_delay_ms"] = round((t_fo_seen - t_fo) * 1000)
             win = {"fade_in": (t_first + 0.05, t_first + FADE_S - 0.05), "steady": (t_first + FADE_S + 0.3, t_fo - 0.1),
                    "fade_out": (t_fo_seen + 0.05, t_fo_seen + FADE_S - 0.05)}
-            hz = gl_rate(samples, t_first, samples[-1][0] + 0.001, 3)
-            res["refresh_hz"] = round(hz, 2) if hz is not None else None
+            if GL:
+                hz = gl_rate(samples, t_first, samples[-1][0] + 0.001, 3)
+                res["refresh_hz"] = round(hz, 2) if hz is not None else None
             for w, (lo, hi) in win.items():
-                fps = gl_per_refresh(samples, lo, hi, 1, hz or 0)
+                fps = gl_per_refresh(samples, lo, hi, 1, hz or 0) if GL else gl_rate(samples, lo, hi, 1)
                 res[w + "_fps"] = round(fps, 1) if fps is not None else None
                 if w != "steady":
-                    st = gl_per_refresh(samples, lo, hi, 2, hz or 0)
+                    st = gl_per_refresh(samples, lo, hi, 2, hz or 0) if GL else gl_rate(samples, lo, hi, 2)
                     res[w + "_steps"] = round(st, 1) if st is not None else None
-            plane = None
+            plane = samples[-1][6] if PW else None
+            if PW and is_alpha:
+                formats, blends = debugfs_formats(), blend_modes()
         else:
             trace_start()
             t_play = time.monotonic()
@@ -651,7 +692,7 @@ def run(path, mdl, keep=False):
             need = MIN_FPS if not animated else (src_fps or 60) - 1 / (FADE_S - 0.1)
             res["need_fps"] = round(need, 1)
             ok = smooth and all((res[w + "_fps"] or 0) >= need for w in win)
-        if is_alpha and GL:
+        if is_alpha and GL and not PW:
             # The mixer blends every layer with straight alpha over the layers
             # beneath, so what decides is whether the cue's frames keep their
             # alpha on the way: only the RGBA upload route does (the ISP and
@@ -813,13 +854,15 @@ def write_readme(results, mdl, path_label):
 
 
 GL = False
+PW = False
 
 
 def main():
-    global GL
+    global GL, PW
     mdl = model()
     GL = gl_wall()
-    path_label = "GPU compositor wall" if GL else output_path()
+    PW = not GL and pw_wall()
+    path_label = "GPU compositor wall" if GL else "plane wall, CuTePi presenter" if PW else output_path()
     # Only the test files: video/, image/ and audio/ (helper files such as the
     # alpha mask live beside them).
     files = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(ROOT) for f in fs

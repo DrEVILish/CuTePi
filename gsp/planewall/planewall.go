@@ -68,11 +68,19 @@ func ReadStats() Stats {
 	return Stats{uint64(s.commits), uint64(s.fails), float64(s.p50_ms), float64(s.p99_ms), float64(s.max_ms)}
 }
 
-// PlaneStats: frames that reached the screen on the plane, frames replaced
-// before they got there, and whether it has shown one yet.
-func PlaneStats(plane uint32) (shown, dropped uint64, first bool) {
-	var s, d C.uint64_t
+// PlaneStat is one plane's presenter counts as of one commit.
+type PlaneStat struct {
+	Shown   uint64 // frames that reached the screen
+	Dropped uint64 // frames replaced before reaching it
+	Steps   uint64 // commits that changed its opacity on screen
+	First   bool   // has shown a frame
+	AtUs    int64  // monotonic time (µs) of the commit the counts are as of
+}
+
+func PlaneStats(plane uint32) PlaneStat {
+	var s, d, st C.uint64_t
 	var f C.int
-	C.planewall_plane_stats(C.uint32_t(plane), &s, &d, &f)
-	return uint64(s), uint64(d), f != 0
+	var t C.int64_t
+	C.planewall_plane_stats(C.uint32_t(plane), &s, &d, &st, &f, &t)
+	return PlaneStat{uint64(s), uint64(d), uint64(st), f != 0, int64(t)}
 }

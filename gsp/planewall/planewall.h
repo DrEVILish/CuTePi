@@ -13,6 +13,6 @@ int planewall_is_open (void);
 int planewall_set (uint32_t plane, const char *name, uint64_t value);
 void planewall_detach (uint32_t plane);
 void planewall_stats (planewall_stats_t * st);
-void planewall_plane_stats (uint32_t plane, uint64_t * shown, uint64_t * dropped, int *first);
+void planewall_plane_stats (uint32_t plane, uint64_t * shown, uint64_t * dropped, uint64_t * steps, int *first, int64_t * t_us);
 int cutepi_planesink_register (void);
 #endif
