@@ -867,6 +867,11 @@ struct _CutepiPlaneSink {
   GstVideoInfoDmaDrm drm;
   int dmabuf, yuv, sand;
   uint64_t enc, range;
+  /* HEVC: the frame prepared (UV gathered, framebuffer made) ahead of its
+   * time, by prepare(), which basesink calls before waiting on the clock. */
+  GstBuffer *prep_buf;          /* compared only, not referenced */
+  int prep_slot;
+  uint32_t prep_fb;
 };
 
 static void cutepi_plane_sink_overlay_init (GstVideoOverlayInterface * iface);
@@ -1049,6 +1054,53 @@ static void place (CutepiPlaneSink * self, frame * f) {
   f->ch = h > 0 ? h : 1;
 }
 
+/* Gather the frame's UV and make its framebuffer. *slot -1: no free UV
+ * buffer (the frame is dropped). Returns -1 on an error (posted). */
+static int sand_prepare (CutepiPlaneSink * self, plane_st * s, GstBuffer * b, int *slot, uint32_t * fb) {
+  GstMemory *my = gst_buffer_n_memory (b) >= 2 ? gst_buffer_peek_memory (b, 0) : NULL;
+  GstMemory *muv = my ? gst_buffer_peek_memory (b, 1) : NULL;
+  *slot = -1;
+  *fb = 0;
+  if (!muv) return 0;
+  g_mutex_lock (&P.lock);
+  for (int i = 0; i < s->uv_n; i++) if (!s->uv[i].busy) { *slot = i; s->uv[i].busy = 1; break; }
+  g_mutex_unlock (&P.lock);
+  if (*slot < 0) return 0;
+  gl_job j = { .s = s, .m = muv, .slot = *slot };
+  gst_gl_context_thread_add (G.ctx, gather_cb, &j);
+  *fb = j.ok ? sand_fb (s, my, self->vi.width, self->vi.height, *slot) : 0;
+  if (!*fb) {
+    g_mutex_lock (&P.lock); s->uv[*slot].busy = 0; g_mutex_unlock (&P.lock);
+    *slot = -1;
+    GST_ELEMENT_ERROR (self, RESOURCE, FAILED, ("cannot put the HEVC frame on plane %u", self->plane_id), (NULL));
+    return -1;
+  }
+  s->sand_frames++;
+  sand_dump (s, b, my, *slot, self->vi.width, self->vi.height);
+  return 0;
+}
+
+static void prep_release (CutepiPlaneSink * self, plane_st * s) {
+  if (self->prep_slot >= 0 && s) { g_mutex_lock (&P.lock); s->uv[self->prep_slot].busy = 0; g_mutex_unlock (&P.lock); }
+  self->prep_slot = -1;
+  self->prep_buf = NULL;
+}
+
+/* basesink calls this before waiting for the buffer's time: the HEVC gather
+ * (~10 ms) happens ahead, so at its time the frame only changes hands (done
+ * at show time it made frames bunch: two in one refresh, one replaced). */
+static GstFlowReturn cutepi_plane_sink_prepare (GstBaseSink * bs, GstBuffer * b) {
+  CutepiPlaneSink *self = CUTEPI_PLANE_SINK (bs);
+  plane_st *s = plane_of (self->plane_id);
+  if (!self->sand || !s) return GST_FLOW_OK;
+  prep_release (self, s);       /* a prepared frame that was never shown (late) */
+  int slot;
+  uint32_t fb;
+  if (sand_prepare (self, s, b, &slot, &fb)) return GST_FLOW_ERROR;
+  if (slot >= 0) { self->prep_buf = b; self->prep_slot = slot; self->prep_fb = fb; }
+  return GST_FLOW_OK;
+}
+
 static GstFlowReturn cutepi_plane_sink_show_frame (GstVideoSink * vs, GstBuffer * b) {
   CutepiPlaneSink *self = CUTEPI_PLANE_SINK (vs);
   plane_st *s = plane_of (self->plane_id);
@@ -1057,24 +1109,21 @@ static GstFlowReturn cutepi_plane_sink_show_frame (GstVideoSink * vs, GstBuffer 
   f->ring = -1;
   f->uv = -1;
   if (self->sand) {
-    GstMemory *my = gst_buffer_n_memory (b) >= 2 ? gst_buffer_peek_memory (b, 0) : NULL;
-    GstMemory *muv = my ? gst_buffer_peek_memory (b, 1) : NULL;
-    g_mutex_lock (&P.lock);
-    int slot = -1;
-    for (int i = 0; i < s->uv_n; i++) if (!s->uv[i].busy) { slot = i; s->uv[i].busy = 1; break; }
-    g_mutex_unlock (&P.lock);
-    if (!muv || slot < 0) { g_free (f); s->dropped++; return GST_FLOW_OK; }
-    gl_job j = { .s = s, .m = muv, .slot = slot };
-    gst_gl_context_thread_add (G.ctx, gather_cb, &j);
-    uint32_t fb = j.ok ? sand_fb (s, my, self->vi.width, self->vi.height, slot) : 0;
-    if (!fb) {
-      g_mutex_lock (&P.lock); s->uv[slot].busy = 0; g_mutex_unlock (&P.lock);
+    int slot;
+    uint32_t fb;
+    if (self->prep_buf == b && self->prep_slot >= 0) {
+      slot = self->prep_slot;
+      fb = self->prep_fb;
+      self->prep_buf = NULL;
+      self->prep_slot = -1;
+    } else if (sand_prepare (self, s, b, &slot, &fb)) {
       g_free (f);
-      GST_ELEMENT_ERROR (self, RESOURCE, FAILED, ("cannot put the HEVC frame on plane %u", self->plane_id), (NULL));
       return GST_FLOW_ERROR;
+    } else if (slot < 0) {
+      g_free (f);
+      s->dropped++;
+      return GST_FLOW_OK;
     }
-    s->sand_frames++;
-    sand_dump (s, b, my, slot, self->vi.width, self->vi.height);
     f->fb = fb;
     f->uv = slot;
     f->buf = gst_buffer_ref (b);
@@ -1147,6 +1196,7 @@ void planewall_detach (uint32_t plane) {
 
 static gboolean cutepi_plane_sink_stop (GstBaseSink * bs) {
   CutepiPlaneSink *self = CUTEPI_PLANE_SINK (bs);
+  prep_release (self, plane_of (self->plane_id));
   /* The decoder's pool wants its buffers back: none stay on the plane. */
   planewall_detach (self->plane_id);
   plane_st *s = plane_of (self->plane_id);
@@ -1172,10 +1222,11 @@ static void cutepi_plane_sink_class_init (CutepiPlaneSinkClass * k) {
   bc->set_caps = cutepi_plane_sink_set_caps;
   bc->propose_allocation = cutepi_plane_sink_propose_allocation;
   bc->stop = cutepi_plane_sink_stop;
+  bc->prepare = cutepi_plane_sink_prepare;
   vc->show_frame = cutepi_plane_sink_show_frame;
 }
 
-static void cutepi_plane_sink_init (CutepiPlaneSink * self) {}
+static void cutepi_plane_sink_init (CutepiPlaneSink * self) { self->prep_slot = -1; }
 
 int cutepi_planesink_register (void) {
   return gst_element_register (NULL, "cutepiplanesink", GST_RANK_NONE, CUTEPI_TYPE_PLANE_SINK);
