@@ -23,6 +23,10 @@ restarts the service. See DESIGN.md §7 for what the service user is allowed to 
 
 Also on the Pi:
 
+- **Codec clocks**: `sudo deploy/install-firmware-config.sh` holds the VideoCore codec blocks at their stock maximum
+  in `/boot/firmware/config.txt` (without it a hardware H.264 decode runs at half clock: 54 fps instead of 90).
+  `--overclock` adds the test Pi's measured overclock (650 MHz codec blocks, ARM 2.0 GHz; keep the Pi cooled),
+  `--remove` takes CuTePi's block out. Reboot to apply. Pi 4 only. See DESIGN.md §12.16.
 - **CineForm decoder library**: `sudo deploy/build-cineform.sh` builds the GoPro CineForm SDK (ported to AArch64,
   `third_party/cineform-sdk`) and installs `/usr/local/lib/cutepi/libcutepi-cfhd.so`, which CuTePi's CineForm
   decoder loads at start-up (about 2 minutes; needs `uuid-dev`). Without it CineForm plays through FFmpeg's slower

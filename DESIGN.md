@@ -1575,6 +1575,19 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
 Measured on the test Pi (Pi 4, ARM 2.0 GHz, codec blocks 650 MHz); research notes and raw results in the
 h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
 
+- **Codec clocks (firmware, `deploy/install-firmware-config.sh`).** The Pi 4 firmware runs the H.264, ISP and core
+  clocks at their minimum (250/250/200 MHz) unless the ARM is at full speed, and the H.264 decoder driver
+  (`bcm2835-codec`, unlike `rpi-hevc-dec`) asks for no clock, so under the `ondemand` governor a hardware H.264 decode
+  ran at half speed: 54 fps for one 1080p stream instead of 90. CuTePi's setup therefore adds to `config.txt`, in a
+  marked block (a re-run replaces it, `--remove` takes it out, the old file is kept as `config.txt.cutepi-bak`):
+  - always: `h264_freq_min`, `isp_freq_min`, `core_freq_min` = 500 (`deploy/firmware/codec-clocks.txt`): the stock
+    maximum held, no overvoltage;
+  - `--overclock`, opt-in: the test Pi's settings (`deploy/firmware/overclock.txt`): codec blocks, core and V3D at
+    650 MHz, ARM 2.0 GHz, +75 mV, no `force_turbo`. Checked on that board bit-exact against stock clocks and soaked
+    (53.5 °C max, no throttling); H.264 decode 90 → 98 fps, encode 74 → 93. Other boards: check first, keep cooled.
+  Pi 4 only (the script refuses elsewhere: the Pi 5 has no H.264 block); it never reboots, the settings apply at the
+  next boot.
+
 - **AV1: `cutepidav1ddec`** (`gsp/av1dec`): a `GstVideoDecoder` on libdav1d, loaded with `dlopen` (headers vendored
   in `third_party/dav1d`; no build dependency). Frame numbers ride in dav1d's per-picture data, so frame threading
   and unshown frames are handled; dav1d decodes into `GstMemory` from CuTePi's picture allocator and the pictures go
