@@ -58,7 +58,7 @@ func Detach(plane uint32) { C.planewall_detach(C.uint32_t(plane)) }
 // Stats is the presenter's commit count, failures and the intervals between
 // commits.
 type Stats struct {
-	Commits, Fails     uint64
+	Commits, Fails      uint64
 	P50Ms, P99Ms, MaxMs float64
 }
 
