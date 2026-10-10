@@ -438,6 +438,9 @@ GStreamer runtime is smoke-tested against real `gst-launch-1.0`
 assets (`gsp` test; skips when absent).
 - **Wall: GPU compositor (target design, being built — §6.1.1).** Replaces the per-cue display planes below as the
   default once it matches them feature for feature; until then it is selected with `CUTEPI_WALL=gl`.
+- **Wall: plane presenter (opt-in, `CUTEPI_WALL_SINK=planesink`, §6.1.4).** The display layers below, with CuTePi's
+  own presenter instead of a `kmssink` per layer: one atomic commit per refresh carries every layer's frame, opacity,
+  z-order and placement.
 - **Wall: one display layer per cue (KMS)** — current default and fallback. With `CUTEPI_WALL_SINK=kmssink` (the Pi
   default, set in the unit's `playback-env.conf`) every pipeline that shows video gets its own hardware overlay plane on
   the HDMI output (`gsp/kms.go`, `gsp/wall.go`). All `kmssink`s share one DRM file descriptor, which the service opens at
@@ -853,6 +856,57 @@ Any number of cues can run at once, each on its own display layer, stacked; the 
   cue is in, to the cue that number landed on (append mode renumbers).
 - **Limits:** the plane wall has one display plane per layer (16 on the Pi 4, one kept for the panic image); the
   hardware decoders' totals apply (two 1080p60 H.264 layers cannot both run at full rate, HEVC can: §6.1.1).
+
+### 6.1.4 Plane wall presenter (opt-in, 2026-10-10)
+
+The KMS wall (§6.1) with its frames and plane properties committed by CuTePi instead of a `kmssink` per layer
+(`gsp/planewall`). Selected with `CUTEPI_WALL_SINK=planesink` (no `CUTEPI_WALL=gl`); if the presenter cannot start,
+the wall falls back to `kmssink` (logged). Which wall is the default is the operator's decision, from the numbers
+below.
+
+- **Presenter.** One thread (SCHED_FIFO 10) on the service's DRM fd (master, atomic capability). When a frame or a
+  plane property changed, it makes one blocking atomic commit carrying every changed plane: framebuffer, source crop,
+  on-screen rectangle, alpha, zpos, rotation, pixel blend mode, and COLOR_ENCODING/COLOR_RANGE for YUV frames. The
+  commit returns at the vblank that latched it, which paces it; nothing is committed when nothing changed. Every
+  plane property the service writes (`KMSWall.set`: fades, restack, the panic image's park and raise) goes into the
+  next commit, so fades step **every refresh** on any layer, with no frames lost to them. A frame is released only
+  after the commit that replaced it has returned; a failed commit drops the frames it carried and keeps what was
+  shown.
+- **`cutepiplanesink`** (clock-synced `GstVideoSink`, same `plane-id` and `render-rectangle` as `kmssink`; shows
+  preroll frames, so stills and paused cues appear):
+  - Caps: the plane's own IN_FORMATS fourcc+modifier pairs as DMA_DRM, and the system-memory layouts `kmssink` took.
+    Broadcom SAND layouts only as the HEVC gather below handles them (a decoder's two-plane SAND scanned out as it is
+    is a corrupt picture).
+  - Decoder DMABufs become framebuffers directly (one per decoder buffer, cached; removed when the buffer goes).
+  - System memory: the allocation query offers a pool of scanout (dumb) buffers exported as DMABufs (8 or more);
+    a decoder or converter that takes it writes straight into scanout memory and the frame goes on the plane
+    without a copy. Otherwise frames are copied into a ring of four scanout buffers.
+  - Crop from `GstVideoCropMeta`; the picture is fitted inside the render rectangle by its pixel aspect ratio.
+  - Stopping the sink takes the plane off the screen (and waits for it), so the decoder gets its buffers back.
+- **HEVC.** The decoder writes two-plane SAND128 (Y columns ALIGN(h,16) lines tall, UV half that); a vc4 framebuffer
+  takes one column height. For 8-bit 4:2:0 HEVC the sink gathers only the UV (a GLES3 pass, ~10 ms, a quarter of the
+  bytes) into a ring of six buffers laid out with the Y's column height, and the framebuffer takes Y from the
+  decoder's own buffer. The gather runs in `prepare`, before the sink waits for the frame's time. The GL context is on
+  the process's one GL display (`glwall.SharedGLDisplay`). These files use `decodebin3` (chosen from the import
+  metadata, `hevc/yuv420p`): `decodebin` exposes the stateless decoder's pad with system-memory caps and never
+  renegotiates. 10-bit HEVC keeps the decoder's system-memory copy (slow) until it has a gather of its own.
+  `CUTEPI_PLANEWALL_DUMP=N` dumps the Nth HEVC frame as displayed; `tools/codec-corpus/sandcheck.py` checks it
+  against FFmpeg's software decode.
+- **Late pads.** A cue shown before its video pad appeared (decodebin3 reaches PAUSED first) is shown as soon as its
+  layer is created.
+- **Measured (test Pi, 1080p60):**
+  - One commit per refresh when frames change every refresh; fades 59-60 steps a second on every file of the codec
+    corpus (`kmssink`: 30 while video moves).
+  - H.264 1080p60 + HEVC 1080p60 on two layers, real footage, 30 s: **59.47 + 59.47 fps**, 60.00 commits a second,
+    none failed (`kmssink`: two 1080p60 layers froze; HEVC alone ~1 fps).
+  - HEVC 1080p60 alone: 60 fps; pictures bit-exact (Y and UV) with FFmpeg's software decode at three frames on two
+    clips.
+  - Live page (WebKit, DMABufs): 58 fps.
+  - Counters: `GET /api/debug/planewall` (commits, failures, commit intervals; per visible layer frames shown,
+    frames replaced before reaching the screen, opacity steps, and the time of the commit they are as of), which
+    `tools/codec-corpus/support.py` reads on this wall.
+- **Not done yet:** 10-bit HEVC gather; 90°/270° rotation stays a software stage; the crossfade's "incoming is on
+  screen" signal is still the sink's first buffer, not the first commit carrying it.
 
 ### 6.2 Trim, Hold, Loop, Volume, Seek
 

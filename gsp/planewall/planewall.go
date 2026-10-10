@@ -41,6 +41,10 @@ func Open(drmFD int, crtcID uint32, planes []uint32, width, height, refreshHz in
 // freed): HEVC frames are gathered on the GPU in a context on it.
 func SetGLDisplay(display unsafe.Pointer) { C.planewall_set_gl_display(display) }
 
+// WarmGL makes the HEVC gather's GL context now (false: none, HEVC stays
+// off the planes' fast route).
+func WarmGL() bool { return C.planewall_gl_warm() != 0 }
+
 // IsOpen reports whether the presenter runs.
 func IsOpen() bool { return C.planewall_is_open() != 0 }
 

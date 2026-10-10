@@ -319,6 +319,10 @@ static int gl_ready (void) {
   return ok;
 }
 
+/* Make the GL context now (at start-up), not on the first HEVC cue: its
+ * creation and shader compile delayed that cue's first second. */
+int planewall_gl_warm (void) { return gl_ready (); }
+
 /* A linear RGBA8 texture, 512 texels (2048 bytes) wide, over size bytes of a
  * dmabuf at off. */
 static GLuint linear_tex (int dfd, size_t off, size_t size, EGLImageKHR * img) {

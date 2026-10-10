@@ -176,6 +176,11 @@ func kmsWall() *KMSWall {
 				logs.PrintfWarn(logs.GSPPipeDebug, "gsp: plane wall presenter unavailable, using kmssink: %v", err)
 			} else {
 				logs.Printf(logs.GSPPipeDebug, "gsp: plane wall presenter on %d planes (one atomic commit per refresh)", len(ids))
+				go func() {
+					if !planewall.WarmGL() {
+						logs.PrintfWarn(logs.GSPPipeDebug, "gsp: plane wall: no GL for the HEVC gather")
+					}
+				}()
 			}
 		}
 	})
