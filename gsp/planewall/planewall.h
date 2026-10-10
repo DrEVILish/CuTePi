@@ -15,4 +15,5 @@ void planewall_detach (uint32_t plane);
 void planewall_stats (planewall_stats_t * st);
 void planewall_plane_stats (uint32_t plane, uint64_t * shown, uint64_t * dropped, uint64_t * steps, int *first, int64_t * t_us);
 int cutepi_planesink_register (void);
+void planewall_set_gl_display (void *display);
 #endif

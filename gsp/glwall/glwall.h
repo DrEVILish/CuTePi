@@ -5,6 +5,7 @@
 #define CUTEPI_GLWALL_H
 
 #include <gst/gst.h>
+#include <gst/gl/gl.h>
 #include <stdint.h>
 
 typedef struct glwall_layer glwall_layer;
@@ -59,6 +60,8 @@ void glwall_layer_set_rect(glwall_layer *l, int x, int y, int w, int h, int keep
 void glwall_use_system_clock(GstElement *pipeline);
 /* glwall_share_gl_display gives e (a pipeline) the process-wide GstGLDisplay. */
 void glwall_share_gl_display(GstElement *e);
+/* glwall_shared_gl_display is that display (never freed). */
+GstGLDisplay *glwall_shared_gl_display(void);
 /* glwall_layer_free detaches the layer. The cue pipeline must be in NULL
  * (its appsink has released the pump). */
 void glwall_layer_free(glwall_layer *l);

@@ -3106,6 +3106,20 @@ func MediaHasAlpha(filename string) bool {
 	return info.HasAlpha()
 }
 
+// MediaVideoCodec is a media file's video codec and pixel format as probed
+// at import ("hevc/yuv420p", "h264/yuv420p10le", ...), "" if unknown.
+func MediaVideoCodec(filename string) string {
+	var meta string
+	if db.Get(&meta, `SELECT media_meta FROM mediapool WHERE filename = ?`, filename) != nil || meta == "" {
+		return ""
+	}
+	var info media.MediaInfo
+	if json.Unmarshal([]byte(meta), &info) != nil || info.Video == nil {
+		return ""
+	}
+	return info.Video.Codec + "/" + info.Video.PixFmt
+}
+
 func MediaLoudnessGain(filename string) (gain float64, err error) {
 	err = db.Get(&gain, `SELECT loudness_gain FROM mediapool WHERE filename = ?`, filename)
 	return

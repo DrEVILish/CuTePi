@@ -6,7 +6,7 @@
 package planewall
 
 /*
-#cgo pkg-config: gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 gstreamer-allocators-1.0 libdrm
+#cgo pkg-config: gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 gstreamer-allocators-1.0 gstreamer-gl-1.0 libdrm egl glesv2
 #include <stdlib.h>
 #include <glib.h>
 #include "planewall.h"
@@ -36,6 +36,10 @@ func Open(drmFD int, crtcID uint32, planes []uint32, width, height, refreshHz in
 	regOnce.Do(func() { C.cutepi_planesink_register() })
 	return nil
 }
+
+// SetGLDisplay hands in the process-wide GstGLDisplay (glwall's, never
+// freed): HEVC frames are gathered on the GPU in a context on it.
+func SetGLDisplay(display unsafe.Pointer) { C.planewall_set_gl_display(display) }
 
 // IsOpen reports whether the presenter runs.
 func IsOpen() bool { return C.planewall_is_open() != 0 }

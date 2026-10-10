@@ -192,6 +192,10 @@ func Stats() (mixed, presented uint64) {
 	return uint64(m), uint64(p)
 }
 
+// SharedGLDisplay is the process-wide GstGLDisplay (glwall.c, never freed), for
+// C code outside a pipeline that needs GL (the plane wall's HEVC gather).
+func SharedGLDisplay() unsafe.Pointer { return unsafe.Pointer(C.glwall_shared_gl_display()) }
+
 // ShareGLDisplay gives a pipeline the process-wide GL display (glwall.c):
 // every pipeline with GL elements must use it, or one ending can terminate
 // the EGL display under the others. Call before the pipeline starts.

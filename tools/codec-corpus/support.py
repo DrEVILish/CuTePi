@@ -603,7 +603,12 @@ def run(path, mdl, keep=False):
             # file); the steady window must not shrink by that.
             t_due = time.monotonic() + FADE_S + STEADY_S   # when the fade out is triggered
             t_fo = None
+            formats = blends = None
             while time.monotonic() < t_due + FADE_S + 0.3:
+                if PW and is_alpha and formats is None and time.monotonic() >= t_due - 0.3:
+                    # The plane's format and blend mode while it is on screen
+                    # (end of steady play, as on the kmssink wall).
+                    formats, blends = debugfs_formats(), blend_modes()
                 if t_fo is None and time.monotonic() >= t_due:
                     call("POST", "/api/fadeOut")
                     t_fo = time.monotonic()
@@ -640,8 +645,6 @@ def run(path, mdl, keep=False):
                     st = gl_per_refresh(samples, lo, hi, 2, hz or 0) if GL else gl_rate(samples, lo, hi, 2)
                     res[w + "_steps"] = round(st, 1) if st is not None else None
             plane = samples[-1][6] if PW else None
-            if PW and is_alpha:
-                formats, blends = debugfs_formats(), blend_modes()
         else:
             trace_start()
             t_play = time.monotonic()

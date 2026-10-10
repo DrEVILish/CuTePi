@@ -4,6 +4,7 @@ import (
 	"CuTePi/gsp/av1dec"
 	"CuTePi/gsp/cfhd"
 	"CuTePi/gsp/glwall"
+	"CuTePi/gsp/planewall"
 	"CuTePi/gsp/scanout"
 	"errors"
 	"fmt"
@@ -2397,8 +2398,16 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	// (TEST_REPORT, GPU wall step 2).
 	// Live pages stay on decodebin: its raw passthrough is what was verified
 	// for wpevideosrc's frames.
+	// Plane wall presenter: 8-bit HEVC (4:2:0) goes to the plane as the
+	// decoder's tiled DMABuf frames (cutepiplanesink gathers their UV,
+	// §6.1.4), which takes decodebin3 as on the GPU wall. Only these files:
+	// decodebin3 exposes software decoders' pads before their size is known
+	// (the plane wall's crop needs it), and 10-bit HEVC's tiled frames have no
+	// gather yet (they stay on the decoder's system-memory copy).
+	planeHEVC := planewall.IsOpen() && spec.endpointURL == "" && !spec.isTest &&
+		CodecLookup != nil && CodecLookup(spec.filename) == "hevc/yuv420p"
 	decoderBin := "decodebin"
-	if glOpen && spec.endpointURL == "" {
+	if (glOpen && spec.endpointURL == "") || planeHEVC {
 		decoderBin = "decodebin3"
 	}
 	decodebin, err := gst.NewElement(decoderBin)
@@ -2499,7 +2508,14 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 				glDirection(spec.opts.Rotation, spec.opts.Flip) != dirIdentity, !spec.isTest && glISPCanTake(srcPad))
 		} else if kmsWall() != nil {
 			// KMS wall: own display plane, hardware scaling/blending.
-			elementNames = kmsVideoTail(!spec.isTest && dmaBufUpstream(srcPad), spec.opts)
+			// 8-bit HEVC on the presenter: DMABuf even when its pad has not
+			// fixed it yet (the decoder's untiled system-memory output is
+			// ~1 fps); cutepiplanesink takes its tiled frames (§6.1.4).
+			dmabuf := dmaBufUpstream(srcPad)
+			if planeHEVC {
+				dmabuf = glDmaBufCapable(srcPad)
+			}
+			elementNames = kmsVideoTail(!spec.isTest && dmabuf, spec.opts)
 		} else {
 			// Two videoflip stages (rotate, then mirror) so a cue can
 			// combine e.g. 90° with a horizontal mirror; method=none

@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 
+	"CuTePi/gsp/glwall"
 	"CuTePi/gsp/planewall"
 	"CuTePi/gsp/yuvpack"
 	"CuTePi/logs"
@@ -164,6 +165,9 @@ func kmsWall() *KMSWall {
 		logs.Printf(logs.GSPPipeDebug, "gsp: KMS wall %dx%d@%dHz, %d layers", w.Width, w.Height, w.Refresh, len(w.planes))
 		if planeSinkWanted() && !glWallEnabled() {
 			gstInit()
+			// HEVC frames are gathered on the GPU in a context on the
+			// process's one GL display (glwall.SharedGLDisplay).
+			planewall.SetGLDisplay(glwall.SharedGLDisplay())
 			ids := make([]uint32, len(w.planes))
 			for i, p := range w.planes {
 				ids[i] = p.id
@@ -254,7 +258,12 @@ func newWallLayer(p *gst.Pipeline, opts LoadOpts) (*wallLayer, error) {
 	}
 	layersMu.Lock()
 	layers[p] = l
+	show, pending := pendingShow[p]
+	delete(pendingShow, p)
 	layersMu.Unlock()
+	if pending {
+		showLayer(p, show.level, show.at, show.ref)
+	}
 	return l, nil
 }
 
@@ -275,11 +284,18 @@ func showLayer(p *gst.Pipeline, level float64, at string, ref *gst.Pipeline) {
 		return
 	}
 	w := kmsWall()
-	l := layerOf(p)
-	if w == nil || l == nil {
+	if w == nil {
 		return
 	}
 	layersMu.Lock()
+	l := layers[p]
+	if l == nil {
+		// Its video pad has not appeared yet (decodebin3 reaches PAUSED
+		// before exposing it): shown as soon as the layer exists.
+		pendingShow[p] = layerShow{level, at, ref}
+		layersMu.Unlock()
+		return
+	}
 	if !l.visible {
 		l.visible = true
 		stack = insertLayer(stack, l, stackIndex(stack, layers[ref], at))
@@ -288,6 +304,15 @@ func showLayer(p *gst.Pipeline, level float64, at string, ref *gst.Pipeline) {
 	layersMu.Unlock()
 	setLayerLevel(p, level)
 }
+
+// layerShow is a showLayer that came before the layer.
+type layerShow struct {
+	level float64
+	at    string
+	ref   *gst.Pipeline
+}
+
+var pendingShow = map[*gst.Pipeline]layerShow{} // guarded by layersMu
 
 // stackIndex is where a layer placed at `at` goes in a bottom-to-top stack;
 // refLayer is LayerUnder's reference (nil or absent: on top).
@@ -458,6 +483,7 @@ func dropLayer(p *gst.Pipeline) {
 	layersMu.Lock()
 	l := layers[p]
 	delete(layers, p)
+	delete(pendingShow, p)
 	if l != nil && l.visible {
 		for i, s := range stack {
 			if s == l {
@@ -687,6 +713,13 @@ func kmsVideoTail(dmabuf bool, opts LoadOpts) []string {
 			names = append(names, packStage()...)
 			names = append(names, "videoconvert", "capsfilter")
 		}
+		if dmabuf && planewall.IsOpen() {
+			// (any decoder DMABuf on the presenter: H.264's, 8-bit HEVC's)
+			// DMABuf only (configureKMSTail): the presenter's sink also takes
+			// system memory, and a decoder that already fixed that would
+			// stay on it.
+			names = append(names, "capsfilter")
+		}
 		// On decoder frames videocrop only attaches crop metadata: the plane
 		// scans out the sub-rectangle, no pixels are copied (measured 30 fps).
 		names = append(names, "videocrop")
@@ -843,7 +876,11 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 			cf.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=I420,width=%d,height=%d,pixel-aspect-ratio=1/1", lay.preW, lay.preH)))
 		}
 	} else if cf := firstByFactory(byFactory, "capsfilter"); cf != nil {
-		cf.Set("caps", gst.NewCapsFromString(kmsSysmemCaps))
+		if planeSink && firstByFactory(byFactory, "videoconvert") == nil {
+			cf.Set("caps", gst.NewCapsFromString("video/x-raw(memory:DMABuf)")) // decoder frames, as DMABuf
+		} else {
+			cf.Set("caps", gst.NewCapsFromString(kmsSysmemCaps))
+		}
 	}
 	if vc := firstByFactory(byFactory, "videocrop"); vc != nil {
 		vc.Set("left", lay.cropL)

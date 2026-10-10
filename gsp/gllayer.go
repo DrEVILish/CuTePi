@@ -235,6 +235,11 @@ func glTailDMABuf(srcPad *gst.Pad, opts LoadOpts, isTest bool) bool {
 // video would take the ISP route, which has no alpha.
 var AlphaLookup func(filename string) bool
 
+// CodecLookup reports a media file's video codec and pixel format from its
+// import metadata ("hevc/yuv420p", ...; set by main once the database is
+// open).
+var CodecLookup func(filename string) string
+
 // glTailFormat is the format the GL tail is chosen by: the pad's own when
 // fixed, else "RGBA" for a file recorded as having alpha. Unfixed caps (a
 // caps query's answer) list what the decoder could produce, not what it

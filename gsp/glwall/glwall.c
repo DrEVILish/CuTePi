@@ -624,15 +624,19 @@ int glwall_is_open(void) { return W.open; }
  * live page stopping, a cache pre-load ending) calls eglTerminate on that display under everything still using
  * it: with the GPU wall running, WebKit's next frame release (wpe_view_backend_exportable_fdo_egl_dispatch_
  * release_exported_image) then crashed the service. */
-void glwall_share_gl_display(GstElement *e) {
+GstGLDisplay *glwall_shared_gl_display(void) {
   static GstGLDisplay *display;
   static GMutex lock;
   g_mutex_lock(&lock);
   if (!display)
     display = gst_gl_display_new();
-  GstContext *ctx = gst_context_new(GST_GL_DISPLAY_CONTEXT_TYPE, TRUE);
-  gst_context_set_gl_display(ctx, display);
   g_mutex_unlock(&lock);
+  return display;
+}
+
+void glwall_share_gl_display(GstElement *e) {
+  GstContext *ctx = gst_context_new(GST_GL_DISPLAY_CONTEXT_TYPE, TRUE);
+  gst_context_set_gl_display(ctx, glwall_shared_gl_display());
   gst_element_set_context(e, ctx);
   gst_context_unref(ctx);
 }

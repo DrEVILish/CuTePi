@@ -97,6 +97,7 @@ func main() {
 	}
 	defer ctp.CloseDB()
 	gsp.AlphaLookup = ctp.MediaHasAlpha
+	gsp.CodecLookup = ctp.MediaVideoCodec
 
 	// One-time scan flags media whose source files are missing on disk; cues
 	// and pool tiles then surface a warning (see the Missing flag).

@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
@@ -34,6 +35,13 @@
 #include <gst/video/video.h>
 #include <gst/video/gstvideosink.h>
 #include <gst/video/videooverlay.h>
+#include <gst/gl/gl.h>
+#include <gst/gl/egl/gstgldisplay_egl.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
+#include <stdio.h>
 
 #include "planewall.h"
 
@@ -43,12 +51,15 @@ GST_DEBUG_CATEGORY_STATIC (planewall_debug);
 #define MAXP 16
 #define RING 4                  /* scanout buffers per plane for copied frames */
 #define IVN 2048                /* commit intervals kept for percentiles */
+#define UVN 6                   /* gathered UV buffers per plane (HEVC) */
+#define UVTEX 32                /* decoder UV memories imported per plane */
 
 /* A frame ready to be shown: the buffer (kept referenced while it may be on
  * screen), its framebuffer and how it sits on the plane. */
 typedef struct {
   GstBuffer *buf;               /* decoder frame (NULL for a copied frame) */
   int ring;                     /* ring slot of a copied frame, else -1 */
+  int uv;                       /* UV ring slot of an HEVC frame, else -1 */
   uint32_t fb;
   uint32_t sx, sy, sw, sh;      /* source rectangle, pixels */
   int cx, cy, cw, ch;           /* on-screen rectangle */
@@ -83,6 +94,22 @@ typedef struct {
   ring_buf ring[RING];
   int ring_n;
   GstVideoInfo ring_info;
+  /* HEVC (two-plane SAND128): UV gathered by the GPU into buffers whose
+   * columns have the Y image's height, so one framebuffer takes Y straight
+   * from the decoder's buffer and UV from here (r18/r19 of the codec work). */
+  struct {
+    uint32_t handle;
+    uint8_t *map;
+    size_t size;
+    EGLImageKHR img;
+    GLuint tex, fbo;
+    int busy;
+  } uv[UVN];
+  int uv_n, uv_aw, uv_ah;
+  uint32_t uv_gen;
+  struct { GstMemory *key; EGLImageKHR img; GLuint tex; } uvtex[UVTEX];
+  int nuvtex;
+  uint64_t sand_frames;
   /* formats it scans out: fourcc + modifier */
   uint32_t *fmt;
   uint64_t *mod;
@@ -180,13 +207,295 @@ static int plane_takes (plane_st * s, uint32_t fourcc, uint64_t mod) {
   return 0;
 }
 
+static int plane_takes_sand (plane_st * s) {
+  for (int i = 0; i < s->nfmt; i++)
+    if (s->fmt[i] == DRM_FORMAT_NV12 && fourcc_mod_broadcom_mod (s->mod[i]) == DRM_FORMAT_MOD_BROADCOM_SAND128)
+      return 1;
+  return 0;
+}
+
 /* ---- frames ------------------------------------------------------------- */
 
 static void frame_free (plane_st * s, frame * f) {
   if (!f) return;
   if (f->buf) gst_buffer_unref (f->buf);
   if (f->ring >= 0 && s) s->ring[f->ring].busy = 0;
+  if (f->uv >= 0 && s) s->uv[f->uv].busy = 0;
   g_free (f);
+}
+
+/* ---- HEVC: Y zero-copy, UV gathered by the GPU -----------------------------
+ * The HEVC decoder writes two-plane SAND128: Y with columns of ALIGN(h,16)
+ * lines in one memory, UV with columns of half that in another. A vc4
+ * framebuffer takes one column height for both planes, so as decoded the
+ * frame cannot be scanned out (it went through a CPU untile: ~1 fps). A
+ * GLES3 pass copies only the UV (a quarter of the bytes; ~10 ms) into a
+ * buffer laid out with the Y's column height; the framebuffer then takes Y
+ * from the decoder's own buffer. The GL context lives on the process's
+ * shared GstGLDisplay (never terminated: see glwall_shared_gl_display). */
+static struct {
+  GstGLDisplay *display;
+  GstGLContext *ctx;
+  int tried, ok;
+  EGLDisplay edpy;
+  PFNEGLCREATEIMAGEKHRPROC mkimg;
+  PFNEGLDESTROYIMAGEKHRPROC rmimg;
+  PFNGLEGLIMAGETARGETTEXTURE2DOESPROC img2tex;
+  GLuint prog, vbo;
+  GLint u_tuv, u_ah;
+} G;
+static GMutex gl_lock;
+
+void planewall_set_gl_display (void *display) { G.display = display; }
+
+static int is_sand (uint32_t fourcc, uint64_t mod) {
+  return fourcc == DRM_FORMAT_NV12 && fourcc_mod_broadcom_mod (mod) == DRM_FORMAT_MOD_BROADCOM_SAND128;
+}
+
+static GLuint gl_shader (GLenum t, const char *src) {
+  GLuint sh = glCreateShader (t);
+  glShaderSource (sh, 1, &src, NULL);
+  glCompileShader (sh);
+  GLint ok;
+  glGetShaderiv (sh, GL_COMPILE_STATUS, &ok);
+  if (!ok) { char log[512]; glGetShaderInfoLog (sh, sizeof log, NULL, log); g_printerr ("planewall: shader: %s\n", log); }
+  return sh;
+}
+
+static void gl_init_cb (GstGLContext * ctx, gpointer d) {
+  G.edpy = (EGLDisplay) gst_gl_display_get_handle (G.display);
+  G.mkimg = (void *) eglGetProcAddress ("eglCreateImageKHR");
+  G.rmimg = (void *) eglGetProcAddress ("eglDestroyImageKHR");
+  G.img2tex = (void *) eglGetProcAddress ("glEGLImageTargetTexture2DOES");
+  const char *vs = "#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }";
+  /* Each RGBA8 texel is 4 bytes of a 128-byte column row: destination
+   * column c, row r (r < ah/2) takes source texel c*(ah/2)*32 + r*32 + x. */
+  const char *fs =
+      "#version 300 es\nprecision highp float; precision highp int;\n"
+      "uniform highp sampler2D tuv; uniform int ah; out vec4 o;\n"
+      "void main(){\n"
+      "  ivec2 q = ivec2(gl_FragCoord.xy); int i = q.y * 512 + q.x;\n"
+      "  int colt = ah * 32; int c = i / colt; int r = i - c * colt; int row = r / 32; int xo = r - row * 32;\n"
+      "  if (row >= ah / 2) { o = vec4(0.0); return; }\n"
+      "  int si = c * (ah / 2) * 32 + row * 32 + xo; o = texelFetch(tuv, ivec2(si % 512, si / 512), 0);\n"
+      "}\n";
+  G.prog = glCreateProgram ();
+  glAttachShader (G.prog, gl_shader (GL_VERTEX_SHADER, vs));
+  glAttachShader (G.prog, gl_shader (GL_FRAGMENT_SHADER, fs));
+  glBindAttribLocation (G.prog, 0, "p");
+  glLinkProgram (G.prog);
+  GLint ok = 0;
+  glGetProgramiv (G.prog, GL_LINK_STATUS, &ok);
+  G.u_tuv = glGetUniformLocation (G.prog, "tuv");
+  G.u_ah = glGetUniformLocation (G.prog, "ah");
+  static const float q[] = { -1, -1, 1, -1, -1, 1, 1, 1 };
+  glGenBuffers (1, &G.vbo);
+  glBindBuffer (GL_ARRAY_BUFFER, G.vbo);
+  glBufferData (GL_ARRAY_BUFFER, sizeof q, q, GL_STATIC_DRAW);
+  G.ok = ok && G.mkimg && G.rmimg && G.img2tex && G.edpy;
+}
+
+/* The GL context, made on first use (0 = no GLES3: HEVC stays off planes). */
+static int gl_ready (void) {
+  g_mutex_lock (&gl_lock);
+  if (!G.tried && G.display) {
+    G.tried = 1;
+    GError *err = NULL;
+    G.ctx = gst_gl_context_new (G.display);
+    if (!gst_gl_context_create (G.ctx, NULL, &err)) {
+      g_printerr ("planewall: GL context: %s\n", err ? err->message : "?");
+      g_clear_error (&err);
+      gst_clear_object (&G.ctx);
+    } else if (!gst_gl_context_check_gl_version (G.ctx, GST_GL_API_GLES2, 3, 0)) {
+      g_printerr ("planewall: GLES 3 needed for the HEVC gather\n");
+      gst_clear_object (&G.ctx);
+    } else {
+      gst_gl_context_thread_add (G.ctx, gl_init_cb, NULL);
+      if (!G.ok) g_printerr ("planewall: HEVC gather set-up failed\n");
+    }
+  }
+  int ok = G.ctx && G.ok;
+  g_mutex_unlock (&gl_lock);
+  return ok;
+}
+
+/* A linear RGBA8 texture, 512 texels (2048 bytes) wide, over size bytes of a
+ * dmabuf at off. */
+static GLuint linear_tex (int dfd, size_t off, size_t size, EGLImageKHR * img) {
+  EGLint a[] = { EGL_WIDTH, 512, EGL_HEIGHT, (EGLint) (size / 2048), EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ABGR8888,
+    EGL_DMA_BUF_PLANE0_FD_EXT, dfd, EGL_DMA_BUF_PLANE0_OFFSET_EXT, (EGLint) off, EGL_DMA_BUF_PLANE0_PITCH_EXT, 2048,
+    EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, 0, EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, 0, EGL_NONE };
+  *img = G.mkimg (G.edpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, a);
+  if (*img == EGL_NO_IMAGE_KHR) return 0;
+  GLuint t;
+  glGenTextures (1, &t);
+  glBindTexture (GL_TEXTURE_2D, t);
+  glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  G.img2tex (GL_TEXTURE_2D, *img);
+  return t;
+}
+
+typedef struct { plane_st *s; int w, h, n, ok; GstMemory *m; int slot; } gl_job;
+
+static void uv_alloc_cb (GstGLContext * ctx, gpointer d) {
+  gl_job *j = d;
+  plane_st *s = j->s;
+  uint32_t aw = (j->w + 127) & ~127u, ah = (j->h + 15) & ~15u;
+  j->ok = 0;
+  for (int i = 0; i < UVN; i++) {
+    struct drm_mode_create_dumb cd = { .width = aw, .height = ah, .bpp = 8 };
+    if (drmIoctl (P.fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd)) return;
+    s->uv[i].handle = cd.handle;
+    s->uv[i].size = cd.size;
+    s->uv_n = i + 1;
+    struct drm_mode_map_dumb md = { .handle = cd.handle };
+    if (!drmIoctl (P.fd, DRM_IOCTL_MODE_MAP_DUMB, &md)) {
+      s->uv[i].map = mmap (NULL, cd.size, PROT_READ, MAP_SHARED, P.fd, md.offset);
+      if (s->uv[i].map == MAP_FAILED) s->uv[i].map = NULL;
+    }
+    int dfd;
+    if (drmPrimeHandleToFD (P.fd, cd.handle, DRM_CLOEXEC | DRM_RDWR, &dfd)) return;
+    s->uv[i].tex = linear_tex (dfd, 0, (size_t) aw * ah, &s->uv[i].img);
+    close (dfd);
+    if (!s->uv[i].tex) return;
+    glGenFramebuffers (1, &s->uv[i].fbo);
+    glBindFramebuffer (GL_FRAMEBUFFER, s->uv[i].fbo);
+    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s->uv[i].tex, 0);
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return;
+  }
+  s->uv_aw = aw;
+  s->uv_ah = ah;
+  s->uv_gen++;
+  j->ok = 1;
+}
+
+static void uv_free_cb (GstGLContext * ctx, gpointer d) {
+  plane_st *s = d;
+  for (int i = 0; i < s->nuvtex; i++) {
+    glDeleteTextures (1, &s->uvtex[i].tex);
+    G.rmimg (G.edpy, s->uvtex[i].img);
+  }
+  s->nuvtex = 0;
+  for (int i = 0; i < s->uv_n; i++) {
+    if (s->uv[i].fbo) glDeleteFramebuffers (1, &s->uv[i].fbo);
+    if (s->uv[i].tex) glDeleteTextures (1, &s->uv[i].tex);
+    if (s->uv[i].img) G.rmimg (G.edpy, s->uv[i].img);
+    if (s->uv[i].map) munmap (s->uv[i].map, s->uv[i].size);
+    if (s->uv[i].handle) {
+      struct drm_mode_destroy_dumb dd = { .handle = s->uv[i].handle };
+      drmIoctl (P.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd);
+    }
+  }
+  memset (s->uv, 0, sizeof s->uv);
+  s->uv_n = 0;
+}
+
+/* Frames of the plane's HEVC stream go: ring set up for w x h. Off screen
+ * first (its buffers may be shown). */
+static int uv_setup (plane_st * s, int w, int h) {
+  uint32_t aw = (w + 127) & ~127u, ah = (h + 15) & ~15u;
+  if (s->uv_n == UVN && s->uv_aw == (int) aw && s->uv_ah == (int) ah) return 0;
+  if (s->uv_n) { planewall_detach (s->id); gst_gl_context_thread_add (G.ctx, uv_free_cb, s); }
+  gl_job j = { .s = s, .w = w, .h = h };
+  gst_gl_context_thread_add (G.ctx, uv_alloc_cb, &j);
+  if (!j.ok) { gst_gl_context_thread_add (G.ctx, uv_free_cb, s); return -1; }
+  return 0;
+}
+
+static void gather_cb (GstGLContext * ctx, gpointer d) {
+  gl_job *j = d;
+  plane_st *s = j->s;
+  GLuint tuv = 0;
+  for (int i = 0; i < s->nuvtex; i++) if (s->uvtex[i].key == j->m) tuv = s->uvtex[i].tex;
+  if (!tuv) {
+    int dfd = gst_is_dmabuf_memory (j->m) ? gst_dmabuf_memory_get_fd (j->m) : gst_fd_memory_get_fd (j->m);
+    EGLImageKHR img;
+    tuv = linear_tex (dfd, j->m->offset, j->m->size, &img);
+    if (!tuv) { j->ok = 0; return; }
+    if (s->nuvtex == UVTEX) {   /* full: drop the oldest */
+      glDeleteTextures (1, &s->uvtex[0].tex);
+      G.rmimg (G.edpy, s->uvtex[0].img);
+      memmove (s->uvtex, s->uvtex + 1, (UVTEX - 1) * sizeof s->uvtex[0]);
+      s->nuvtex--;
+    }
+    s->uvtex[s->nuvtex].key = j->m;
+    s->uvtex[s->nuvtex].img = img;
+    s->uvtex[s->nuvtex++].tex = tuv;
+  }
+  glBindFramebuffer (GL_FRAMEBUFFER, s->uv[j->slot].fbo);
+  glViewport (0, 0, 512, s->uv_aw * s->uv_ah / 2048);
+  glUseProgram (G.prog);
+  glActiveTexture (GL_TEXTURE0);
+  glBindTexture (GL_TEXTURE_2D, tuv);
+  glUniform1i (G.u_tuv, 0);
+  glUniform1i (G.u_ah, s->uv_ah);
+  glBindBuffer (GL_ARRAY_BUFFER, G.vbo);
+  glEnableVertexAttribArray (0);
+  glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+  glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
+  glFinish ();
+  j->ok = 1;
+}
+
+/* A framebuffer: Y = the decoder's Y memory, UV = gathered buffer slot
+ * (cached on the Y memory per UV slot and ring generation). */
+typedef struct { int n; struct { uint32_t gen; int slot; uint32_t fb; } e[UVN * 2]; } sand_fbs;
+
+static void sand_fbs_free (gpointer d) {
+  sand_fbs *c = d;
+  for (int i = 0; i < c->n; i++) if (c->e[i].fb && P.fd >= 0) drmModeRmFB (P.fd, c->e[i].fb);
+  g_free (c);
+}
+
+static uint32_t sand_fb (plane_st * s, GstMemory * my, int w, int h, int slot) {
+  static GQuark q;
+  if (!q) q = g_quark_from_static_string ("cutepi-planewall-sandfb");
+  sand_fbs *c = gst_mini_object_get_qdata (GST_MINI_OBJECT (my), q);
+  if (c) for (int i = 0; i < c->n; i++) if (c->e[i].gen == s->uv_gen && c->e[i].slot == slot) return c->e[i].fb;
+  int dfd = gst_is_dmabuf_memory (my) ? gst_dmabuf_memory_get_fd (my) : gst_is_fd_memory (my) ? gst_fd_memory_get_fd (my) : -1;
+  uint32_t hy;
+  if (dfd < 0 || drmPrimeFDToHandle (P.fd, dfd, &hy)) return 0;
+  uint32_t hd[4] = { hy, s->uv[slot].handle }, pt[4] = { (uint32_t) w, (uint32_t) w }, of[4] = { (uint32_t) my->offset, 0 };
+  uint64_t mo[4] = { DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT (s->uv_ah), DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT (s->uv_ah) };
+  uint32_t fb = 0;
+  int r = drmModeAddFB2WithModifiers (P.fd, w, h, DRM_FORMAT_NV12, hd, pt, of, mo, &fb, DRM_MODE_FB_MODIFIERS);
+  if (hy != s->uv[slot].handle) drmCloseBufferHandle (P.fd, hy);
+  if (r) { GST_WARNING ("addfb2 SAND Y+UV %dx%d: %s", w, h, g_strerror (errno)); return 0; }
+  if (!c) { c = g_new0 (sand_fbs, 1); gst_mini_object_set_qdata (GST_MINI_OBJECT (my), q, c, sand_fbs_free); }
+  if (c->n == UVN * 2) {        /* stale generations: drop the oldest */
+    drmModeRmFB (P.fd, c->e[0].fb);
+    memmove (c->e, c->e + 1, (UVN * 2 - 1) * sizeof c->e[0]);
+    c->n--;
+  }
+  c->e[c->n].gen = s->uv_gen;
+  c->e[c->n].slot = slot;
+  c->e[c->n++].fb = fb;
+  return fb;
+}
+
+/* CUTEPI_PLANEWALL_DUMP=N: the Nth HEVC frame's Y (from the decoder) and
+ * gathered UV, as displayed, to /dev/shm/pw_Y.raw, pw_UV.raw and pw_meta.txt
+ * (bit-exact check against a software decode). */
+static void sand_dump (plane_st * s, GstBuffer * b, GstMemory * my, int slot, int w, int h) {
+  const char *e = g_getenv ("CUTEPI_PLANEWALL_DUMP");
+  if (!e || (uint64_t) atoll (e) != s->sand_frames) return;
+  GstMapInfo mi;
+  if (gst_memory_map (my, &mi, GST_MAP_READ)) {
+    FILE *f = fopen ("/dev/shm/pw_Y.raw", "wb");
+    if (f) { fwrite (mi.data, 1, mi.size, f); fclose (f); }
+    gst_memory_unmap (my, &mi);
+  }
+  if (s->uv[slot].map) {
+    FILE *f = fopen ("/dev/shm/pw_UV.raw", "wb");
+    if (f) { fwrite (s->uv[slot].map, 1, s->uv[slot].size, f); fclose (f); }
+  }
+  FILE *f = fopen ("/dev/shm/pw_meta.txt", "w");
+  if (f) {
+    fprintf (f, "frame %" G_GUINT64_FORMAT " pts_ns %" G_GUINT64_FORMAT " w %d h %d aw %d ah %d\n", s->sand_frames,
+        GST_BUFFER_PTS (b), w, h, s->uv_aw, s->uv_ah);
+    fclose (f);
+  }
 }
 
 typedef struct { uint32_t fb; int w, h; uint32_t fourcc; uint64_t mod; } fb_cache;
@@ -556,7 +865,7 @@ struct _CutepiPlaneSink {
   int bx, by, bw, bh;           /* render rectangle (0 size: the whole display) */
   GstVideoInfo vi;
   GstVideoInfoDmaDrm drm;
-  int dmabuf, yuv;
+  int dmabuf, yuv, sand;
   uint64_t enc, range;
 };
 
@@ -609,6 +918,13 @@ static GstCaps *cutepi_plane_sink_get_caps (GstBaseSink * bs, GstCaps * filter) 
     GValue list = G_VALUE_INIT;
     g_value_init (&list, GST_TYPE_LIST);
     for (int i = 0; i < s->nfmt; i++) {
+      /* Broadcom SAND layouts only as the gather below handles them: a
+       * decoder's two-plane SAND (Y and UV with different column heights,
+       * 8- or 10-bit) put on the plane as it is shows a corrupt picture. */
+      if (fourcc_mod_broadcom_mod (s->mod[i]) == DRM_FORMAT_MOD_BROADCOM_SAND128 ||
+          fourcc_mod_broadcom_mod (s->mod[i]) == DRM_FORMAT_MOD_BROADCOM_SAND64 ||
+          fourcc_mod_broadcom_mod (s->mod[i]) == DRM_FORMAT_MOD_BROADCOM_SAND256)
+        continue;
       gchar *str = gst_video_dma_drm_fourcc_to_string (s->fmt[i], s->mod[i]);
       if (!str) continue;
       GValue v = G_VALUE_INIT;
@@ -620,6 +936,13 @@ static GstCaps *cutepi_plane_sink_get_caps (GstBaseSink * bs, GstCaps * filter) 
     GstStructure *st = gst_structure_new ("video/x-raw", "format", G_TYPE_STRING, "DMA_DRM",
         "width", GST_TYPE_INT_RANGE, 1, G_MAXINT, "height", GST_TYPE_INT_RANGE, 1, G_MAXINT,
         "framerate", GST_TYPE_FRACTION_RANGE, 0, 1, G_MAXINT, 1, NULL);
+    if (G.display && plane_takes_sand (s)) {
+      gchar *str = gst_video_dma_drm_fourcc_to_string (DRM_FORMAT_NV12, DRM_FORMAT_MOD_BROADCOM_SAND128);
+      GValue v = G_VALUE_INIT;
+      g_value_init (&v, G_TYPE_STRING);
+      g_value_take_string (&v, str);
+      gst_value_list_append_and_take_value (&list, &v);
+    }
     gst_structure_take_value (st, "drm-format", &list);
     gst_caps_append_structure_full (caps, st, gst_caps_features_new_single_static_str (GST_CAPS_FEATURE_MEMORY_DMABUF));
     gst_caps_append (caps, gst_caps_from_string (GST_VIDEO_CAPS_MAKE (SYSMEM_FORMATS)));
@@ -649,7 +972,13 @@ static gboolean cutepi_plane_sink_set_caps (GstBaseSink * bs, GstCaps * caps) {
       self->vi.colorimetry = self->drm.vinfo.colorimetry;
       self->vi.finfo = self->drm.vinfo.finfo;
     }
-    if (!plane_takes (s, self->drm.drm_fourcc, self->drm.drm_modifier)) {
+    self->sand = is_sand (self->drm.drm_fourcc, self->drm.drm_modifier);
+    if (self->sand) {
+      if (!gl_ready () || uv_setup (s, self->vi.width, self->vi.height)) {
+        GST_ELEMENT_ERROR (self, RESOURCE, FAILED, ("no GPU gather for HEVC frames on plane %u", self->plane_id), (NULL));
+        return FALSE;
+      }
+    } else if (!plane_takes (s, self->drm.drm_fourcc, self->drm.drm_modifier)) {
       GST_ELEMENT_ERROR (self, STREAM, FORMAT, ("plane %u cannot scan out %" GST_FOURCC_FORMAT " %#" G_GINT64_MODIFIER "x",
               self->plane_id, GST_FOURCC_ARGS (self->drm.drm_fourcc), self->drm.drm_modifier), (NULL));
       return FALSE;
@@ -726,6 +1055,31 @@ static GstFlowReturn cutepi_plane_sink_show_frame (GstVideoSink * vs, GstBuffer 
   if (!s) return GST_FLOW_ERROR;
   frame *f = g_new0 (frame, 1);
   f->ring = -1;
+  f->uv = -1;
+  if (self->sand) {
+    GstMemory *my = gst_buffer_n_memory (b) >= 2 ? gst_buffer_peek_memory (b, 0) : NULL;
+    GstMemory *muv = my ? gst_buffer_peek_memory (b, 1) : NULL;
+    g_mutex_lock (&P.lock);
+    int slot = -1;
+    for (int i = 0; i < s->uv_n; i++) if (!s->uv[i].busy) { slot = i; s->uv[i].busy = 1; break; }
+    g_mutex_unlock (&P.lock);
+    if (!muv || slot < 0) { g_free (f); s->dropped++; return GST_FLOW_OK; }
+    gl_job j = { .s = s, .m = muv, .slot = slot };
+    gst_gl_context_thread_add (G.ctx, gather_cb, &j);
+    uint32_t fb = j.ok ? sand_fb (s, my, self->vi.width, self->vi.height, slot) : 0;
+    if (!fb) {
+      g_mutex_lock (&P.lock); s->uv[slot].busy = 0; g_mutex_unlock (&P.lock);
+      g_free (f);
+      GST_ELEMENT_ERROR (self, RESOURCE, FAILED, ("cannot put the HEVC frame on plane %u", self->plane_id), (NULL));
+      return GST_FLOW_ERROR;
+    }
+    s->sand_frames++;
+    sand_dump (s, b, my, slot, self->vi.width, self->vi.height);
+    f->fb = fb;
+    f->uv = slot;
+    f->buf = gst_buffer_ref (b);
+    goto placed;
+  }
   uint32_t sys_fourcc = self->dmabuf ? 0 : gst_video_dma_drm_fourcc_from_format (GST_VIDEO_INFO_FORMAT (&self->vi));
   GstMemory *m0 = gst_buffer_n_memory (b) ? gst_buffer_peek_memory (b, 0) : NULL;
   if (!self->dmabuf && sys_fourcc && m0 && gst_is_dmabuf_memory (m0) && gst_buffer_get_video_meta (b) &&
@@ -756,6 +1110,7 @@ static GstFlowReturn cutepi_plane_sink_show_frame (GstVideoSink * vs, GstBuffer 
     f->ring = slot;
     f->fb = s->ring[slot].fb;
   }
+placed:;
   GstVideoCropMeta *cm = gst_buffer_get_video_crop_meta (b);
   if (cm && cm->width && cm->height) { f->sx = cm->x; f->sy = cm->y; f->sw = cm->width; f->sh = cm->height; }
   else { f->sx = 0; f->sy = 0; f->sw = self->vi.width; f->sh = self->vi.height; }
@@ -796,6 +1151,7 @@ static gboolean cutepi_plane_sink_stop (GstBaseSink * bs) {
   planewall_detach (self->plane_id);
   plane_st *s = plane_of (self->plane_id);
   if (s && s->ring_n) ring_free (s);
+  if (s && s->uv_n && G.ctx) gst_gl_context_thread_add (G.ctx, uv_free_cb, s);
   return TRUE;
 }
 
