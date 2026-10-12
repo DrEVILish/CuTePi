@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
-	"strings"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 

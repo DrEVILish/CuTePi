@@ -1669,6 +1669,11 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   element's default) cost 32 ms a frame; the VideoCore deinterlacer (`v4l2video18convert`) cannot be driven 1:2 by
   GStreamer's converter and returned the frames combed. Hardware (DMABuf) tails are not deinterlaced yet. 1080i
   MPEG-2, 4:2:0 25 Mbit/s and 4:2:2 50 Mbit/s: Supported (support corpus `mpeg2_1080i`).
+- **PNG video: `cutepipngvdec`** (`gsp/pngvdec`, 2026-10-13): PNG frames in MOV/MKV decoded by four workers with
+  libpng's simplified API straight into the output buffers (straight-alpha RGBA), finished in order; byte-identical
+  to `pngdec`, which decoded one frame at a time (21-22 ms at 1080p RGBA, 33-39 fps on the wall). Moving pictures
+  only: PNG stills keep `pngdec`. 1080p RGBA 45.8 → 145 fps flat out; `png_alpha.mov` Supported (60), `.mkv` at the
+  edge (fades 57.8-60): the wall's copy of each RAM frame into its upload slots (8 MB a frame) is the limit there.
 - **Motion JPEG: `cutepimjpegdec`** (`gsp/mjpegdec`, 2026-10-13): every MJPEG frame is a complete JPEG, so three
   `jpegdec` instances (each in a small in-process pipeline) decode frames in parallel and the element finishes them in
   order, passing `jpegdec`'s buffers on without a copy; byte-identical to `jpegdec`. Moving pictures only (its caps

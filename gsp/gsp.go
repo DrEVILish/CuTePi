@@ -7,6 +7,7 @@ import (
 	"CuTePi/gsp/glwall"
 	"CuTePi/gsp/mjpegdec"
 	"CuTePi/gsp/planewall"
+	"CuTePi/gsp/pngvdec"
 	"CuTePi/gsp/scanout"
 	"errors"
 	"fmt"
@@ -159,6 +160,10 @@ func gstInit() {
 		// Motion JPEG on several cores (gsp/mjpegdec).
 		if mjpegdec.Register() {
 			logs.Printf(logs.GSPPipeDebug, "gsp: Motion JPEG decoder: parallel jpegdec (cutepimjpegdec)")
+		}
+		// PNG video on several cores (gsp/pngvdec).
+		if pngvdec.Register() {
+			logs.Printf(logs.GSPPipeDebug, "gsp: PNG video decoder: parallel libpng (cutepipngvdec)")
 		}
 		// Animated WebP, APNG, AVIF and JPEG XL (gsp/animdec).
 		if f := animdec.Register(); f != "" {

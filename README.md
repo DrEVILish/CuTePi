@@ -43,7 +43,7 @@ set. Every codec has its own test, and this table is regenerated after each batc
 Beyond GStreamer's own decoders, CuTePi registers its own (DESIGN §12.16): **AV1** through dav1d
 (`cutepidav1ddec`, about 4× libaom), **CineForm** through the CineForm SDK (`cutepicfhddec`, about 4× FFmpeg),
 FFmpeg's **VP8** decoder ranked above libvpx's, a NEON packer that turns **10-bit and 4:2:2** frames (ProRes,
-DNxHR) into 4:2:0 for the display path, **Motion JPEG** on three cores (`cutepimjpegdec`), and an **animated image** decoder (`cutepianimdec`: GIF, APNG, animated
+DNxHR) into 4:2:0 for the display path, **Motion JPEG** and **PNG video** on several cores (`cutepimjpegdec`, `cutepipngvdec`), and an **animated image** decoder (`cutepianimdec`: GIF, APNG, animated
 WebP, AVIF stills and sequences, JPEG XL stills and animations, with alpha) that decodes frames in parallel. The "Video decoder" column comes from a probe that runs outside the
 service, so it names GStreamer's choice there (e.g. `av1dec`, `avdec_cfhd`) rather than CuTePi's own elements,
 which only exist in the service. URL imports are kept in their own format when it plays at 1080p60 here and
