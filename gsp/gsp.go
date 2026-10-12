@@ -5,6 +5,7 @@ import (
 	"CuTePi/gsp/av1dec"
 	"CuTePi/gsp/cfhd"
 	"CuTePi/gsp/glwall"
+	"CuTePi/gsp/mjpegdec"
 	"CuTePi/gsp/planewall"
 	"CuTePi/gsp/scanout"
 	"errors"
@@ -154,6 +155,10 @@ func gstInit() {
 		// CineForm through the CineForm SDK (gsp/cfhd) when its library is installed.
 		if cfhd.Register() {
 			logs.Printf(logs.GSPPipeDebug, "gsp: CineForm decoder: CineForm SDK (cutepicfhddec)")
+		}
+		// Motion JPEG on several cores (gsp/mjpegdec).
+		if mjpegdec.Register() {
+			logs.Printf(logs.GSPPipeDebug, "gsp: Motion JPEG decoder: parallel jpegdec (cutepimjpegdec)")
 		}
 		// Animated WebP, APNG, AVIF and JPEG XL (gsp/animdec).
 		if f := animdec.Register(); f != "" {

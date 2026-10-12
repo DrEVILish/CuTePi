@@ -1662,6 +1662,12 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   software routes. On the KMS wall ProRes 422/HQ/LT/Proxy went from 0.3-1.4 fps to 37-54 and DNxHR from 20-27 to
   60 (kmssink cannot allocate 4:2:2 buffers, so these went to RGB before).
 - **VP8:** `avdec_vp8` promoted over `vp8dec` (decoder ranks above).
+- **Motion JPEG: `cutepimjpegdec`** (`gsp/mjpegdec`, 2026-10-13): every MJPEG frame is a complete JPEG, so three
+  `jpegdec` instances (each in a small in-process pipeline) decode frames in parallel and the element finishes them in
+  order, passing `jpegdec`'s buffers on without a copy; byte-identical to `jpegdec`. Moving pictures only (its caps
+  need a non-zero framerate): JPEG stills keep `jpegdec`. 1080p 4:2:0 115 → 294 fps flat out, 4:2:2 92 → 241, 4K 4:2:2
+  26.8 → 55-69 (a 4K30 camera stream now plays at 30 in the service). The VideoCore JPEG decoder stays out
+  (`v4l2jpegdec:0`: caps collapse, and its end of stream hung the firmware).
 - **Animated images: `cutepianimdec`** (`gsp/animdec`, 2026-10-12): GIF, APNG, WebP (animated and still), AVIF
   (stills and sequences, alpha as AVIF's auxiliary image) and JPEG XL (stills and animations), to straight-alpha RGBA
   at each frame's own duration; stills come out at `framerate=0/1` as before. GStreamer here decodes GIF on one
