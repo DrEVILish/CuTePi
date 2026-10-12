@@ -10,7 +10,8 @@ import (
 	"testing"
 )
 
-// TestImageAnimation builds still and animated GIF, PNG/APNG and WebP files
+// TestImageAnimation builds still and animated GIF, PNG/APNG, WebP and AVIF
+// files (and a JPEG XL still)
 // with ffmpeg and checks the header reader tells them apart, loop count included.
 func TestImageAnimation(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
@@ -31,6 +32,9 @@ func TestImageAnimation(t *testing.T) {
 		{"anim.apng", []string{"-c:v", "apng", "-plays", "0", "-f", "apng"}, Animation{Animated: true, LoopForever: true, Loops: 1}},
 		{"still.webp", []string{"-frames:v", "1", "-c:v", "libwebp"}, Animation{}},
 		{"anim.webp", []string{"-c:v", "libwebp_anim", "-loop", "0"}, Animation{Animated: true, LoopForever: true, Loops: 1}},
+		{"still.avif", []string{"-frames:v", "1", "-c:v", "libaom-av1", "-cpu-used", "8", "-f", "avif"}, Animation{}},
+		{"anim.avif", []string{"-c:v", "libaom-av1", "-cpu-used", "8", "-f", "avif"}, Animation{Animated: true, LoopForever: true, Loops: 1}},
+		{"still.jxl", []string{"-frames:v", "1", "-c:v", "libjxl"}, Animation{}},
 	}
 	for _, c := range cases {
 		p := filepath.Join(dir, c.name)
@@ -41,6 +45,14 @@ func TestImageAnimation(t *testing.T) {
 		}
 		if got := ImageAnimation(p); got != c.want {
 			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+	// Animated JPEG XL (FFmpeg 7.1 cannot write one): libjxl's conformance
+	// animations, fetched outside the repo on the test Pi.
+	jxls, _ := filepath.Glob("/opt/raspberrypi-codecs/animated-images/testdata/animation_*.jxl")
+	for _, p := range jxls {
+		if got := ImageAnimation(p); !got.Animated {
+			t.Errorf("%s: got %+v, want animated", filepath.Base(p), got)
 		}
 	}
 	if got := ImageAnimation(filepath.Join(dir, "missing.gif")); got.Animated {

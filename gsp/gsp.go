@@ -1,6 +1,7 @@
 package gsp
 
 import (
+	"CuTePi/gsp/animdec"
 	"CuTePi/gsp/av1dec"
 	"CuTePi/gsp/cfhd"
 	"CuTePi/gsp/glwall"
@@ -153,6 +154,10 @@ func gstInit() {
 		// CineForm through the CineForm SDK (gsp/cfhd) when its library is installed.
 		if cfhd.Register() {
 			logs.Printf(logs.GSPPipeDebug, "gsp: CineForm decoder: CineForm SDK (cutepicfhddec)")
+		}
+		// Animated WebP, APNG, AVIF and JPEG XL (gsp/animdec).
+		if f := animdec.Register(); f != "" {
+			logs.Printf(logs.GSPPipeDebug, "gsp: animated image decoder (cutepianimdec): %s", f)
 		}
 		// Bus watches (EOS/error handling in watchAndPlay/watchWarm) only
 		// dispatch on a running GLib main loop — without it a finished cue

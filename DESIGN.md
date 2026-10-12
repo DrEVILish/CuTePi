@@ -747,8 +747,9 @@ with the KMS plane wall as the default until the GPU wall covers everything it d
   CineForm RGBA, HAP Alpha, FFV1 and VP9 with alpha (`yuva420p`), in MOV and in MKV wherever the container carries
   the codec.
 - **Stills with transparency**: PNG (RGBA and palette with tRNS), TIFF, WebP and GIF (1-bit) transparency.
-- **Animated images**: animated GIF, APNG and animated WebP, played at the file's own frame delays, looping as the file
-  says (GIF/APNG loop count, 0 = forever) unless the cue's own Loop/Hold says otherwise.
+- **Animated images**: animated GIF, APNG, animated WebP, AVIF sequences and animated JPEG XL, played at the file's
+  own frame delays, looping as the file says (GIF/APNG/WebP/JPEG XL loop count, 0 = forever; an AVIF sequence
+  repeats forever) unless the cue's own Loop/Hold says otherwise.
 
 **What transparency means on the wall.** A transparent pixel shows whatever lies beneath it: lower cue layers (for
 example a lower-third graphic over a playing video, once simultaneous cues land, §6.1.2; during a crossfade, the
@@ -785,8 +786,9 @@ alpha preserved. Same rules: no opaque conversion in the cue chain, background b
   first frame with its own frame timing, and its media duration is the sum of its frame delays (ffprobe's format
   duration, recorded at import). A pool badge showing "animated" with the frame rate is planned.
 - Single-frame vs animated is read from the file header (`media.ImageAnimation`): a second GIF image descriptor,
-  an APNG `acTL` chunk before the first `IDAT`, the WebP `VP8X` animation flag, plus the loop count (GIF NETSCAPE2.0,
-  APNG `num_plays`, WebP `ANIM`). It costs microseconds, so playback decides at load without a probe or a stored
+  an APNG `acTL` chunk before the first `IDAT`, the WebP `VP8X` animation flag, the AVIF `avis` brand, the JPEG XL
+  image header's `have_animation`, plus the loop count (GIF NETSCAPE2.0, APNG `num_plays`, WebP `ANIM`, JPEG XL
+  `num_loops`). It costs microseconds, so playback decides at load without a probe or a stored
   flag, and the extension never decides (a `.gif` is often a still; an APNG is often a `.png`).
 - The still-image shortcuts (§6.2 infinite hold, brightness re-render of the single frame in `applyBrightness`, the
   armed panic holding image) apply only to **single-frame** images (`gsp.isStillFile`). A fade over an animated image
@@ -797,12 +799,10 @@ alpha preserved. Same rules: no opaque conversion in the cue chain, background b
   0 = forever) and then holds the last frame, as a browser shows it.
 - Frame timing: GIF delays are in 1/100 s, so 25 fps (4/100) and 50 fps (2/100) are exact, and 60 fps cannot be
   stored. On a 60 Hz wall every frame is shown at its due refresh (a 25 fps animation repeats frames in a 2-3 cadence,
-  as any 25 fps video does). Browsers treat GIF delays of 0 or 1/100 s as 10/100 s; whether `avdec_gif` does the
-  same is still to be checked.
-- Decoders: `avdec_gif` (animated GIF, palette transparency → RGBA). APNG and animated WebP need decoders that this
-  GStreamer may lack (no `avdec_apng`; `webpdec` decodes stills only): import checks them like any file (§2,
-  `gsp.CheckDecodable`), and if they are refused the gap is recorded in the codec table as unsupported, not hidden.
-  Converting such files at import to a lossless intermediate is a fallback to decide with the user.
+  as any 25 fps video does). Browsers treat GIF delays of 0 or 1/100 s as 10/100 s, and so does `cutepianimdec`.
+- Decoders: CuTePi's own `cutepianimdec` (§12.16) for GIF, APNG, WebP, AVIF and JPEG XL, stills and animations,
+  palette or channel alpha → straight-alpha RGBA. It follows browsers for GIF: a delay of 0 or 1/100 s shows for
+  1/10 s. Import still checks every file through GStreamer (§2, `gsp.CheckDecodable`).
 
 **Measured on the KMS wall (2026-10-01, TEST_REPORT "Codec support: transparency and animated images").** Alpha
 reaches the planes for every alpha file that imports (AB24/AR24, VP9 alpha included). The first run found every plane
@@ -1662,6 +1662,42 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   software routes. On the KMS wall ProRes 422/HQ/LT/Proxy went from 0.3-1.4 fps to 37-54 and DNxHR from 20-27 to
   60 (kmssink cannot allocate 4:2:2 buffers, so these went to RGB before).
 - **VP8:** `avdec_vp8` promoted over `vp8dec` (decoder ranks above).
+- **Animated images: `cutepianimdec`** (`gsp/animdec`, 2026-10-12): GIF, APNG, WebP (animated and still), AVIF
+  (stills and sequences, alpha as AVIF's auxiliary image) and JPEG XL (stills and animations), to straight-alpha RGBA
+  at each frame's own duration; stills come out at `framerate=0/1` as before. GStreamer here decodes GIF on one
+  thread (`avdec_gif`, ~40 fps at 1080p), animated WebP not at all (`webpdec` is stills only; FFmpeg 7.1 cannot
+  either), APNG as its first frame only, and has no AVIF or JPEG XL decoder. The element collects the whole file,
+  then pushes frames from its source pad's task; flush seeks (cue loops) restart it, duration and seeking queries
+  are answered. GIF, WebP and APNG frames are complete images of their regions, so four threads decode frames ahead
+  and the task composites them in order (dispose none/background/previous, blend source/over) straight into each
+  output buffer, from the last frame pushed: GIF by its own parser and LZW decoder (browsers' rule: a 0 or 1/100 s
+  delay shows for 1/10 s), WebP by libwebp's demuxer and `WebPDecodeRGBAInto`, APNG frames rebuilt as PNGs for
+  `pngdec`. AVIF and JPEG XL frames depend on earlier ones and go through libavif / libjxl in order, with their own
+  threads. libwebp, libavif and libjxl are loaded with `dlopen` (headers vendored in `third_party/`). Own type
+  finders (rank above PRIMARY) recognise APNG (a PNG with `acTL` before `IDAT`; plain PNGs stay with `pngdec`),
+  AVIF and JPEG XL. Rank primary + 1, above `webpdec`, `avdemux_gif`/`avdec_gif`. Checked: WebP bit-exact against
+  libwebp's own animation decoder, GIF against FFmpeg's, APNG against FFmpeg's and a hand-built file with every
+  dispose/blend operation, JPEG XL frame count and durations against libjxl's conformance set. GIF frames reach the
+  compositor as 1-byte palette indices (the palette is applied as they are drawn); APNG frames are decoded by
+  libpng's simplified API straight into the worker's patch (`pngdec` is the fallback); AVIF image sequences are read
+  from their tracks (ISOBMFF sample tables, the alpha track found by its `auxl` reference) and decoded by two
+  frame-threaded dav1d instances, with libavif converting each picture pair to RGBA (libavif's own sequence decoding
+  runs dav1d one frame at a time: 1080p30 with alpha played at 20-22 fps). 1080p, flat out: GIF 87-106 fps (25 and 50
+  fps files), APNG 50-59, WebP 42-46, AVIF sequences 40 (with alpha) / 60 (30 fps files); all of these support set
+  files play at their own rate on the GPU wall. Details in `/opt/raspberrypi-codecs/animated-images` on the test Pi.
+  Import: `media.ImageAnimation` also recognises AVIF sequences (the `avis` brand) and animated JPEG XL (its image
+  header's `have_animation`), and an animated image's duration comes from the decode check (`gsp.DecodeCheck`)
+  where ffprobe has none (all but GIF).
+- **GPU wall copy route for packed RGB** (2026-10-12): every packed 8-bit RGB layout (RGBA, BGRA, ARGB, ABGR, the x
+  variants, RGB, BGR) reaches the wall's linear upload slots without a `videoconvert` pass: RGBA/BGRA/RGBx/BGRx are
+  copied and imported with the matching DRM format, the others reordered to RGBA by NEON inside the same copy.
+  Opaque packed RGB (QuickTime Animation, BMP, TIFF) takes this route instead of the ISP (which converts 24-bit RGB
+  at 63 fps flat out). QuickTime Animation with alpha: 10.1 → 20.8 fps steady (`videoconvert`'s ARGB → RGBA cost
+  17.7 ms of CPU a 1080p frame). The route has 6 linear upload slots (`LIN_SLOTS`): one being copied, up to 3 in the
+  layer's appsrc, 2 in its queue and the mixer's frame; with 4 the copy waited on the mixer and the route topped out
+  at ~45 fps (QuickTime Animation 43.7 → 55.2 steady, a 50 fps GIF 43 → 50). Opaque packed RGB stills keep the ISP
+  route (on the copy route a 24-bit PNG still faded in at 44 steps/s). The route is chosen from the pad's format when
+  its caps name a single one, even before the size is fixed (`cutepianimdec`, always RGBA).
 - **GPU wall software route** (decoder → `cutepiyuvpack` → `videoconvert` → ISP `v4l2convert` → YU12 dmabufs):
   about 70-85 fps flat out for 1080p, so a decoder near 60 can fall short in the service beside the mixer (VP9
   corpus file 13-37 fps, YouTube VP9 59.8). A CPU copy into system dma-heap buffers instead of the ISP measured

@@ -25,19 +25,28 @@ const decodeCheckTimeout = 10 * time.Second
 // it; otherwise the error says what is missing or broken, in words an
 // operator can act on (e.g. a missing demuxer names its media type).
 func CheckDecodable(path string) error {
+	_, err := DecodeCheck(path)
+	return err
+}
+
+// DecodeCheck is CheckDecodable that also returns the duration GStreamer
+// reports once prerolled (0 when it has none). For animated images it is
+// the sum of the frame delays (cutepianimdec), where ffprobe has none for
+// APNG, animated WebP, AVIF sequences and JPEG XL animations.
+func DecodeCheck(path string) (time.Duration, error) {
 	gstInit()
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	p, err := gst.NewElement("playbin")
 	if err != nil {
-		return fmt.Errorf("gsp: decode check: %w", err)
+		return 0, fmt.Errorf("gsp: decode check: %w", err)
 	}
 	for prop, factory := range map[string]string{"video-sink": "fakevideosink", "audio-sink": "fakesink", "text-sink": "fakesink"} {
 		sink, err := gst.NewElement(factory)
 		if err != nil {
-			return fmt.Errorf("gsp: decode check: %w", err)
+			return 0, fmt.Errorf("gsp: decode check: %w", err)
 		}
 		sink.Set("sync", false)
 		p.Set(prop, sink)
@@ -59,21 +68,25 @@ func CheckDecodable(path string) error {
 			if len(missing) > 0 {
 				// Prerolled, but a stream went without a decoder (e.g. the
 				// audio of a file whose video plays).
-				return fmt.Errorf("this system has no GStreamer %s", strings.Join(missing, ", "))
+				return 0, fmt.Errorf("this system has no GStreamer %s", strings.Join(missing, ", "))
 			}
-			return nil
+			var d time.Duration
+			if ok, ns := p.QueryDuration(gst.FormatTime); ok && ns > 0 {
+				d = time.Duration(ns)
+			}
+			return d, nil
 		case gst.MessageElement:
 			if st := msg.GetStructure(); st != nil && st.Name() == "missing-plugin" {
 				missing = append(missing, missingPluginText(st))
 			}
 		case gst.MessageError:
 			if len(missing) > 0 {
-				return fmt.Errorf("this system has no GStreamer %s", strings.Join(missing, ", "))
+				return 0, fmt.Errorf("this system has no GStreamer %s", strings.Join(missing, ", "))
 			}
-			return fmt.Errorf("GStreamer cannot decode it: %s", msg.ParseError().Error())
+			return 0, fmt.Errorf("GStreamer cannot decode it: %s", msg.ParseError().Error())
 		}
 	}
-	return fmt.Errorf("GStreamer did not finish decoding the first frame within %v", decodeCheckTimeout)
+	return 0, fmt.Errorf("GStreamer did not finish decoding the first frame within %v", decodeCheckTimeout)
 }
 
 // missingPluginText turns a missing-plugin message into "decoder for

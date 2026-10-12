@@ -1091,9 +1091,18 @@ func importMedia(filename, srcPath string) (err error) {
 	}
 	// The playback engine must decode it, not just ffmpeg (§5.7): ffprobe
 	// reads formats this system's GStreamer may lack (ASF, AVIF, JPEG XL).
-	if err := gsp.CheckDecodable(srcPath); err != nil {
+	playDur, err := gsp.DecodeCheck(srcPath)
+	if err != nil {
 		os.Remove(srcPath)
 		return fmt.Errorf("cannot be played: %w", err)
+	}
+	// An animated image's timeline is the sum of its frame delays: ffprobe
+	// reports it for GIF only, the decoder for every animated format.
+	if meta.Kind == media.KindImage && meta.Duration <= 0 && playDur > 0 && media.ImageAnimation(srcPath).Animated {
+		meta.Duration = playDur.Seconds()
+		if meta.Info != nil {
+			meta.Info.Duration = meta.Duration
+		}
 	}
 	if meta.Kind == media.KindVideo || meta.Kind == media.KindAudio {
 		if err := media.VerifyPlayable(srcPath); err != nil {

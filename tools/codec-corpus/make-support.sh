@@ -187,5 +187,15 @@ gif $I/gif_anim_50fps.gif  50 0 $D
 AN30="-f lavfi -i testsrc2=size=1920x1080:rate=30:duration=$D,drawtext=text=%{n}:fontsize=120:x=40:y=40:fontcolor=white:box=1:boxcolor=black"
 mk $I/apng_anim.apng      $AN30 -c:v apng -plays 0
 mk $I/webp_anim_30fps.webp $AN30 -c:v libwebp_anim -quality 80 -loop 0
+# The same with transparency (the alpha videos' mask), and AVIF image
+# sequences (alpha as AVIF's auxiliary sequence). Animated JPEG XL cannot be
+# written by this FFmpeg (7.1); libjxl's conformance animations stand in
+# (/opt/raspberrypi-codecs/animated-images/testdata on the test Pi).
+ANA="-loop 1 -framerate 30 -t $D -i $MASK"
+ANM="[1:v]format=gray[m];[0:v]format=rgba[c];[c][m]alphamerge"
+mk $I/apng_anim_alpha.apng  $AN30 $ANA -filter_complex "$ANM" -c:v apng -plays 0
+mk $I/webp_anim_alpha_30fps.webp $AN30 $ANA -filter_complex "$ANM" -c:v libwebp_anim -quality 80 -pix_fmt yuva420p -loop 0
+mk $I/avif_anim_30fps.avif  $AN30 -c:v libaom-av1 -cpu-used 8 -crf 30 -pix_fmt yuv420p -f avif
+mk $I/avif_anim_alpha_30fps.avif $AN30 $ANA -filter_complex "$ANM,split[c2][a];[c2]format=yuv420p[cy];[a]alphaextract[a2]" -map "[cy]" -map "[a2]" -c:v libaom-av1 -cpu-used 8 -crf 30 -f avif
 
 echo "support set: $ok present, $fail failed${failed[*]:+ (${failed[*]})} in $OUT"
