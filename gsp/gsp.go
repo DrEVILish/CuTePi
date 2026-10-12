@@ -2514,8 +2514,10 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", sink}
 		} else if glOpen && !spec.warmSink {
 			// GPU wall: the cue feeds the mixer through an appsink (gllayer.go).
-			elementNames = glVideoTail(glTailDMABuf(srcPad, spec.opts, spec.isTest), glTailFormat(caps, spec.filename),
+			dmabufTail := glTailDMABuf(srcPad, spec.opts, spec.isTest)
+			elementNames = glVideoTail(dmabufTail, glTailFormat(caps, spec.filename),
 				glDirection(spec.opts.Rotation, spec.opts.Flip) != dirIdentity, !spec.isTest && glISPCanTake(srcPad))
+			elementNames = glDeinterlace(elementNames, !dmabufTail && glInterlaced(caps, spec.filename))
 		} else if kmsWall() != nil {
 			// KMS wall: own display plane, hardware scaling/blending.
 			// 8-bit HEVC on the presenter: DMABuf even when its pad has not

@@ -1662,6 +1662,13 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   software routes. On the KMS wall ProRes 422/HQ/LT/Proxy went from 0.3-1.4 fps to 37-54 and DNxHR from 20-27 to
   60 (kmssink cannot allocate 4:2:2 buffers, so these went to RGB before).
 - **VP8:** `avdec_vp8` promoted over `vp8dec` (decoder ranks above).
+- **Interlaced video** (2026-10-13): the import records ffprobe's field order (`MediaVideoInfo.Interlaced`), and on
+  the GPU wall a software tail of interlaced video (by its caps or that metadata) gets `deinterlace method=linear
+  fields=all mode=auto` before its first `videoconvert`: each field becomes a frame, so 1080i shows as 60 frames a
+  second without combing. Before, interlaced frames reached the wall woven (combed, half motion rate). `greedyh` (the
+  element's default) cost 32 ms a frame; the VideoCore deinterlacer (`v4l2video18convert`) cannot be driven 1:2 by
+  GStreamer's converter and returned the frames combed. Hardware (DMABuf) tails are not deinterlaced yet. 1080i
+  MPEG-2, 4:2:0 25 Mbit/s and 4:2:2 50 Mbit/s: Supported (support corpus `mpeg2_1080i`).
 - **Motion JPEG: `cutepimjpegdec`** (`gsp/mjpegdec`, 2026-10-13): every MJPEG frame is a complete JPEG, so three
   `jpegdec` instances (each in a small in-process pipeline) decode frames in parallel and the element finishes them in
   order, passing `jpegdec`'s buffers on without a copy; byte-identical to `jpegdec`. Moving pictures only (its caps

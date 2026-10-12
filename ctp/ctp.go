@@ -3106,6 +3106,20 @@ func MediaHasAlpha(filename string) bool {
 	return info.HasAlpha()
 }
 
+// MediaInterlaced reports whether a media file's video was probed at import
+// as interlaced (a field order).
+func MediaInterlaced(filename string) bool {
+	var meta string
+	if db.Get(&meta, `SELECT media_meta FROM mediapool WHERE filename = ?`, filename) != nil || meta == "" {
+		return false
+	}
+	var info media.MediaInfo
+	if json.Unmarshal([]byte(meta), &info) != nil || info.Video == nil {
+		return false
+	}
+	return info.Video.Interlaced
+}
+
 // MediaVideoCodec is a media file's video codec and pixel format as probed
 // at import ("hevc/yuv420p", "h264/yuv420p10le", ...), "" if unknown.
 func MediaVideoCodec(filename string) string {

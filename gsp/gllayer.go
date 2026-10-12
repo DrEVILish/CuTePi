@@ -255,6 +255,53 @@ func glTailDMABuf(srcPad *gst.Pad, opts LoadOpts, isTest bool) bool {
 // video would take the ISP route, which has no alpha.
 var AlphaLookup func(filename string) bool
 
+// InterlacedLookup reports whether a media file's video was probed at import
+// as interlaced (set by main once the database is open).
+var InterlacedLookup func(filename string) bool
+
+// glInterlaced: the cue's frames are interlaced, from its pad's caps when they
+// say so, else from its import metadata (decodebin3 exposes a software
+// decoder's pad before its caps are fixed).
+func glInterlaced(caps *gst.Caps, filename string) bool {
+	if caps != nil && caps.GetSize() > 0 {
+		if v, err := caps.GetStructureAt(0).GetValue("interlace-mode"); err == nil {
+			if m, ok := v.(string); ok && m != "progressive" {
+				return true
+			}
+		}
+	}
+	return InterlacedLookup != nil && filename != "" && InterlacedLookup(filename)
+}
+
+// glDeinterlace puts a deinterlacer into a software tail of interlaced video,
+// ahead of its first videoconvert (after the NEON packer, so it sees I420):
+// every field becomes a frame (1080i30 shows as 60 frames a second, without
+// combing on moving edges). Hardware tails (DMABuf) are left as they are.
+// "linear" (line interpolation of each field) costs ~4 ms a 1080 field here;
+// greedyh, the element's default, cost 32 ms and could not keep up.
+func glDeinterlace(names []string, interlaced bool) []string {
+	if !interlaced {
+		return names
+	}
+	for i, n := range names {
+		if n == "videoconvert" {
+			out := append(append(append([]string{}, names[:i]...), "deinterlace"), names[i:]...)
+			return out
+		}
+	}
+	return names
+}
+
+// configureDeinterlace sets the tail's deinterlacer: line interpolation of
+// every field, only where the frames are interlaced (mode auto).
+func configureDeinterlace(byFactory map[string][]*gst.Element) {
+	for _, d := range byFactory["deinterlace"] {
+		d.SetArg("method", "linear")
+		d.SetArg("fields", "all")
+		d.SetArg("mode", "auto")
+	}
+}
+
 // CodecLookup reports a media file's video codec and pixel format from its
 // import metadata ("hevc/yuv420p", ...; set by main once the database is
 // open).
@@ -343,6 +390,7 @@ func configureGLTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, names
 	if conv := firstByFactory(byFactory, "videoconvert"); conv != nil {
 		conv.Set("n-threads", uint(4))
 	}
+	configureDeinterlace(byFactory)
 	glwall.PrepareSink(sink, glDecoderPool)
 	logs.Printf(logs.GSPPipeDebug, "gsp: GL wall tail %v (dmabuf=%v format=%q)", names, dmabuf, format)
 	return nil

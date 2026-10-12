@@ -79,6 +79,7 @@ type ffprobeStream struct {
 	ColorTransfer  string            `json:"color_transfer"`
 	ColorPrimaries string            `json:"color_primaries"`
 	AvgFrameRate   string            `json:"avg_frame_rate"`
+	FieldOrder     string            `json:"field_order"`
 	BitRate        string            `json:"bit_rate"`
 	Channels       int               `json:"channels"`
 	ChannelLayout  string            `json:"channel_layout"`
@@ -112,6 +113,9 @@ type MediaVideoInfo struct {
 	// Alpha: the stream carries an alpha channel (its pixel format has one,
 	// or it is VP8/VP9 with a Matroska alpha_mode=1 side channel).
 	Alpha bool `json:",omitempty"`
+	// Interlaced: ffprobe reports a field order (tt, bb, tb, bt): the frames
+	// are two fields woven together and must be deinterlaced to show.
+	Interlaced bool `json:",omitempty"`
 }
 type MediaAudioInfo struct {
 	Codec      string
@@ -230,15 +234,16 @@ func Probe(path string) (Metadata, error) {
 			Container:      parsed.Format.FormatName,
 			OverallBitrate: num(parsed.Format.BitRate),
 			Video: &MediaVideoInfo{
-				Codec:   videoStream.CodecName,
-				Profile: videoStream.Profile,
-				Width:   videoStream.Width,
-				Height:  videoStream.Height,
-				FPS:     ratio(videoStream.AvgFrameRate),
-				PixFmt:  videoStream.PixFmt,
-				Bitrate: num(videoStream.BitRate),
-				Color:   cs,
-				Alpha:   streamHasAlpha(videoStream, path),
+				Codec:      videoStream.CodecName,
+				Profile:    videoStream.Profile,
+				Width:      videoStream.Width,
+				Height:     videoStream.Height,
+				FPS:        ratio(videoStream.AvgFrameRate),
+				PixFmt:     videoStream.PixFmt,
+				Bitrate:    num(videoStream.BitRate),
+				Color:      cs,
+				Alpha:      streamHasAlpha(videoStream, path),
+				Interlaced: fieldOrderInterlaced(videoStream.FieldOrder),
 			},
 		}
 	}
@@ -547,4 +552,14 @@ func (i *MediaInfo) HasAlpha() bool {
 		return false
 	}
 	return i.Video.Alpha || (i.Video.Codec != "gif" && PixFmtHasAlpha(i.Video.PixFmt))
+}
+
+// fieldOrderInterlaced: ffprobe's field_order for interlaced video (top or
+// bottom field first, coded either way); "progressive" and "" are not.
+func fieldOrderInterlaced(fo string) bool {
+	switch fo {
+	case "tt", "bb", "tb", "bt":
+		return true
+	}
+	return false
 }

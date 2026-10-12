@@ -36,6 +36,9 @@ video hevc_main10       "mov mkv" "-c:v libx265 -preset ultrafast -x265-params l
 video vp9               "mkv"     "-c:v libvpx-vp9 -deadline realtime -cpu-used 8 -row-mt 1 -b:v 8M" "-c:a libopus"
 video av1               "mkv"     "-c:v libsvtav1 -preset 12 -crf 35" "-c:a libopus"
 video mpeg2             "mov mkv" "-c:v mpeg2video -b:v 25M" "-c:a ac3"
+# Interlaced: 1080i (60 fields a second, top field first), as broadcast MPEG-2;
+# the wall must deinterlace it to 60 frames a second (DESIGN §12.16).
+video mpeg2_1080i       "mov mkv" "-vf interlace=scan=tff -c:v mpeg2video -b:v 25M -flags +ilme+ildct -top 1" "-c:a ac3"
 video mpeg4_asp         "mov mkv" "-c:v mpeg4 -q:v 3" "-c:a libmp3lame"
 video mjpeg             "mov mkv" "-c:v mjpeg -q:v 3 -pix_fmt yuvj420p" "-c:a pcm_s16le"
 video prores_proxy      "mov mkv" "-c:v prores_ks -profile:v 0" "-c:a pcm_s16le"

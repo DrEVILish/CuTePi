@@ -308,3 +308,36 @@ func TestFadeLandAndAudioSyncOffWall(t *testing.T) {
 		t.Errorf("GL wall: fadeLand %v, want %v (the picture is shown ~100 ms after its time)", fadeLand(), alphaLand+glWallDelay)
 	}
 }
+
+// An interlaced cue's software tail gets a deinterlacer before its first
+// videoconvert; progressive ones and hardware (DMABuf) tails do not.
+func TestGLDeinterlace(t *testing.T) {
+	gst.Init(nil)
+	sw := glVideoTail(false, "I420", false, false)
+	got := glDeinterlace(sw, true)
+	di, vc := indexOfName(got, "deinterlace"), indexOfName(got, "videoconvert")
+	if di < 0 || vc != di+1 {
+		t.Errorf("interlaced software tail %v: want deinterlace right before videoconvert", got)
+	}
+	if p := indexOfName(got, "cutepiyuvpack"); p >= 0 && p > di {
+		t.Errorf("deinterlace %d before the packer %d in %v", di, p, got)
+	}
+	if got := glDeinterlace(sw, false); indexOfName(got, "deinterlace") >= 0 {
+		t.Errorf("progressive tail got a deinterlacer: %v", got)
+	}
+	if got := glDeinterlace(glVideoTail(true, "", false, false), true); indexOfName(got, "deinterlace") >= 0 {
+		t.Errorf("DMABuf tail got a deinterlacer: %v", got)
+	}
+	saved := InterlacedLookup
+	defer func() { InterlacedLookup = saved }()
+	InterlacedLookup = func(name string) bool { return name == "i.mov" }
+	if !glInterlaced(nil, "i.mov") || glInterlaced(nil, "p.mov") {
+		t.Errorf("metadata lookup not used")
+	}
+	if !glInterlaced(gst.NewCapsFromString("video/x-raw,interlace-mode=interleaved"), "p.mov") {
+		t.Errorf("interleaved caps not seen as interlaced")
+	}
+	if glInterlaced(gst.NewCapsFromString("video/x-raw,interlace-mode=progressive"), "p.mov") {
+		t.Errorf("progressive caps seen as interlaced")
+	}
+}

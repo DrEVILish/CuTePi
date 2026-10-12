@@ -193,3 +193,30 @@ func TestStreamHasAlpha(t *testing.T) {
 		}
 	}
 }
+
+// Interlaced video (a field order from ffprobe) is flagged at import;
+// progressive video is not.
+func TestProbeInterlaced(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	for name, want := range map[string]bool{"i.mkv": true, "p.mkv": false} {
+		p := filepath.Join(dir, name)
+		args := []string{"-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=50:duration=1"}
+		if want {
+			args = append(args, "-vf", "interlace=scan=tff", "-flags", "+ilme+ildct", "-top", "1")
+		}
+		args = append(args, "-c:v", "mpeg2video", p)
+		if out, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v %s", name, err, out)
+		}
+		m, err := Probe(p)
+		if err != nil || m.Info == nil || m.Info.Video == nil {
+			t.Fatalf("%s: probe %v", name, err)
+		}
+		if m.Info.Video.Interlaced != want {
+			t.Errorf("%s: interlaced %v, want %v", name, m.Info.Video.Interlaced, want)
+		}
+	}
+}
