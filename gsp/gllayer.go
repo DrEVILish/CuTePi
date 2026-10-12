@@ -115,9 +115,29 @@ func hasAlphaFormat(f string) bool {
 	return strings.HasPrefix(f, "A4") || strings.HasPrefix(f, "GBRA") || strings.HasPrefix(f, "RGBA")
 }
 
+// isPackedRGB reports an 8-bit packed RGB format the wall's copy route takes
+// as it is (glwall.c lin_layout: copied, or reordered to RGBA by NEON in the
+// same copy), so no videoconvert pass is needed before it.
+func isPackedRGB(f string) bool {
+	switch f {
+	case "RGBA", "BGRA", "ARGB", "ABGR", "RGBx", "BGRx", "xRGB", "xBGR", "RGB", "BGR":
+		return true
+	}
+	return false
+}
+
+// glCopyCaps are what reaches the appsink on the copy route: the wall takes
+// every packed RGB layout (videoconvert passes a matching source through);
+// a source with alpha is offered only those that keep it.
+const (
+	glCopyCaps      = "video/x-raw,format={RGBA,BGRA,ARGB,ABGR,RGBx,BGRx,xRGB,xBGR,RGB,BGR}"
+	glCopyAlphaCaps = "video/x-raw,format={RGBA,BGRA,ARGB,ABGR}"
+)
+
 // glVideoTail is the cue's video chain to the wall: hardware frames
-// (DMABuf) go straight to the appsink; frames with alpha are uploaded from
-// system memory (the ISP would drop the alpha); everything else goes
+// (DMABuf) go straight to the appsink; frames with alpha, and packed RGB
+// ones, are copied from system memory by the wall (the ISP would drop the
+// alpha, and converts 24-bit RGB at 63 fps flat out); everything else goes
 // through the ISP, which writes YU12 DMABufs the GPU samples directly (a
 // CPU repack first only when the decoder's format is not one the ISP takes).
 func glVideoTail(dmabuf bool, format string, flip, hw bool) []string {
@@ -147,7 +167,7 @@ func glVideoTail(dmabuf bool, format string, flip, hw bool) []string {
 			return append(names, "videoconvert", "capsfilter", "appsink")
 		}
 		return append(names, "v4l2convert", "capsfilter", "appsink") // to YU12 DMABufs, as the ISP route
-	case hasAlphaFormat(format):
+	case hasAlphaFormat(format) || isPackedRGB(format):
 		return []string{"queue", "videoconvert", "capsfilter", "appsink"}
 	default:
 		// 10-bit and 4:2:2 frames are packed to I420 by NEON first (packStage):
@@ -245,7 +265,22 @@ var CodecLookup func(filename string) string
 // caps query's answer) list what the decoder could produce, not what it
 // will: gdkpixbufdec offers RGB first and delivers RGBA for a TIFF with alpha.
 func glTailFormat(caps *gst.Caps, filename string) string {
-	if caps != nil && caps.IsFixed() {
+	f := glPadFormat(caps, filename)
+	// A 24-bit RGB still (PNG, BMP) keeps the ISP route: on the copy route
+	// glupload took its single frame and the fade-in dropped to 41-44
+	// steps/s. Moving frames take the copy route (no ISP RGB pass).
+	if (f == "RGB" || f == "BGR") && filename != "" && isStillFile(filename) {
+		return ""
+	}
+	return f
+}
+
+// glPadFormat: the pad's format when fixed, or when its caps name one format
+// only (cutepianimdec's pad is always RGBA, before its size is known); else
+// "RGBA" for a file recorded as having alpha, or the packed RGB format its
+// import metadata names; else "".
+func glPadFormat(caps *gst.Caps, filename string) string {
+	if caps != nil && (caps.IsFixed() || caps.GetSize() == 1) {
 		if f := capsFormat(caps); f != "" {
 			return f
 		}
@@ -253,7 +288,21 @@ func glTailFormat(caps *gst.Caps, filename string) string {
 	if AlphaLookup != nil && filename != "" && AlphaLookup(filename) {
 		return "RGBA"
 	}
+	if CodecLookup != nil && filename != "" {
+		if c := CodecLookup(filename); strings.Contains(c, "/") {
+			if f, ok := ffPackedRGB[c[strings.LastIndex(c, "/")+1:]]; ok {
+				return f
+			}
+		}
+	}
 	return ""
+}
+
+// ffPackedRGB maps FFmpeg pixel formats (import metadata) to the packed RGB
+// formats a decoder will deliver them as, for a pad whose caps are not fixed.
+var ffPackedRGB = map[string]string{
+	"rgb24": "RGB", "bgr24": "BGR", "rgba": "RGBA", "bgra": "BGRA", "argb": "ARGB", "abgr": "ABGR",
+	"rgb0": "RGBx", "bgr0": "BGRx", "0rgb": "xRGB", "0bgr": "xBGR",
 }
 
 // ispInputCaps are the formats the ISP accepts; videoconvert passes a
@@ -281,7 +330,9 @@ func configureGLTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, names
 	case dir != dirIdentity:
 		glConfigureFlip(byFactory, opts, dir, hasAlphaFormat(format))
 	case hasAlphaFormat(format):
-		caps[0].Set("caps", gst.NewCapsFromString("video/x-raw,format=RGBA"))
+		caps[0].Set("caps", gst.NewCapsFromString(glCopyAlphaCaps))
+	case isPackedRGB(format):
+		caps[0].Set("caps", gst.NewCapsFromString(glCopyCaps))
 	default:
 		caps[0].Set("caps", gst.NewCapsFromString(ispInputCaps))
 		caps[1].Set("caps", gst.NewCapsFromString("video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=YU12"))

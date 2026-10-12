@@ -22,6 +22,7 @@ int glwall_is_open(void);
  * negotiates: it answers the decoder's allocation query (video meta and a
  * pool-size hint, without which a V4L2 decoder stalls or the ISP copies). */
 void glwall_prepare_sink(GstElement *appsink, int pool_buffers);
+uint32_t glwall_lin_row_for_test(int format, unsigned char *dst, const unsigned char *src, int w);
 
 /* glwall_layer_attach joins a prerolled cue (its appsink holds a preroll
  * sample) to the wall as a new layer: a bounded appsrc feeding the mixer,

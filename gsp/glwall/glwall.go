@@ -88,6 +88,17 @@ func rampShape(c Curve, t float64) float64 {
 	return float64(C.glwall_ramp_shape(C.int(c), C.double(t)))
 }
 
+// linRow converts one row of w pixels of the named GStreamer format as the
+// copy route does (tests); fourcc 0 if the route doesn't take the format.
+func linRow(format string, src []byte, w int) (dst []byte, fourcc uint32) {
+	cf := C.CString(format)
+	defer C.free(unsafe.Pointer(cf))
+	dst = make([]byte, w*4)
+	fourcc = uint32(C.glwall_lin_row_for_test(C.int(C.gst_video_format_from_string(cf)),
+		(*C.uchar)(unsafe.Pointer(&dst[0])), (*C.uchar)(unsafe.Pointer(&src[0])), C.int(w)))
+	return dst, fourcc
+}
+
 // Now is the wall's clock (the system clock, ns).
 func Now() uint64 { return uint64(C.glwall_now()) }
 

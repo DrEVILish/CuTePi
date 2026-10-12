@@ -49,6 +49,9 @@
 #include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#ifdef __aarch64__
+#include <arm_neon.h>
+#endif
 
 /* Eight scan-out buffers. The pool preallocates nothing (min 0): when a
  * layer attaches, the mixer renegotiates its allocation and the pool is
@@ -178,11 +181,29 @@ struct glwall_layer {
  * to its tiled layout per frame (a TFU job, ~2.4 ms of GPU time) instead of
  * the CPU. A slot is free again when the mixer releases the buffer. Stills
  * keep glupload: they are uploaded once, while a linear texture costs the TFU
- * job on every output frame. */
-#define LIN_SLOTS 4
+ * job on every output frame.
+ *
+ * Any packed 8-bit RGB layout takes this route without a CPU colour pass
+ * before it (videoconvert's ARGB -> RGBA cost 17.7 ms of CPU a 1080p frame
+ * and held qtrle with alpha to 10 fps): RGBA, BGRA, RGBx and BGRx are copied
+ * as they are and imported with the matching DRM format, so the GPU reads
+ * them in order (x formats sample as opaque); ARGB, ABGR, xRGB, xBGR, RGB
+ * and BGR are reordered to RGBA by NEON inside the same copy. */
+/* Slots in flight: one being copied, up to 3 in the layer's appsrc, 2 in its
+ * queue and the mixer's current frame. With 4 the copy waited for the mixer
+ * to release one and the route topped out at ~45 fps (a 50 fps GIF: 43-45,
+ * QuickTime Animation: 45); 6 carries both (50, 59.7). 8 MB each at 1080p. */
+#define LIN_SLOTS 6
+
+typedef enum { LIN_COPY, LIN_TBL, LIN_RGB24, LIN_BGR24 } lin_mode;
 
 typedef struct lin_set {
   int w, h, refs; /* refs: the layer + each buffer out */
+  GstVideoFormat fmt; /* the frames' format, as copied in */
+  uint32_t fourcc;    /* the slots' DRM format */
+  lin_mode mode;
+  uint8_t idx[4];     /* LIN_TBL: source byte for each of R, G, B, A */
+  int opaque;         /* force A to 255 (x formats, 24-bit) */
   struct { uint32_t handle, pitch; int dmafd; unsigned char *map; size_t size; EGLImageKHR img; GLuint tex; int busy; } s[LIN_SLOTS];
   GstVideoInfo vinfo;
   GMutex lock;
@@ -803,7 +824,7 @@ static void pump_lateness(glwall_layer *l, GstBuffer *b, const GstSegment *seg, 
 static void lin_gl_import(GstGLContext *ctx, gpointer d) {
   lin_set *ls = d;
   for (int i = 0; i < LIN_SLOTS; i++) {
-    EGLint ia[] = { EGL_WIDTH, ls->w, EGL_HEIGHT, ls->h, EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ABGR8888,
+    EGLint ia[] = { EGL_WIDTH, ls->w, EGL_HEIGHT, ls->h, EGL_LINUX_DRM_FOURCC_EXT, (EGLint)ls->fourcc,
       EGL_DMA_BUF_PLANE0_FD_EXT, ls->s[i].dmafd, EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0, EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)ls->s[i].pitch,
       EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, 0, EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, 0, EGL_NONE };
     ls->s[i].img = p_mkimg(W.dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, ia);
@@ -836,13 +857,99 @@ static void lin_unref(lin_set *ls) {
   g_free(ls);
 }
 
-/* The slots for a w x h RGBA layer, or NULL (then glupload uploads). */
+/* How frames of format f reach the slots; FALSE if the route can't take it.
+ * DRM formats name the bits of a little-endian word: ABGR8888 is the bytes
+ * R, G, B, A in memory. */
+static gboolean lin_layout(lin_set *ls, GstVideoFormat f) {
+  static const struct { GstVideoFormat f; lin_mode m; uint32_t fourcc; uint8_t idx[4]; int opaque; } t[] = {
+    { GST_VIDEO_FORMAT_RGBA, LIN_COPY, DRM_FORMAT_ABGR8888, { 0 }, 0 },
+    { GST_VIDEO_FORMAT_BGRA, LIN_COPY, DRM_FORMAT_ARGB8888, { 0 }, 0 },
+    { GST_VIDEO_FORMAT_RGBx, LIN_COPY, DRM_FORMAT_XBGR8888, { 0 }, 1 },
+    { GST_VIDEO_FORMAT_BGRx, LIN_COPY, DRM_FORMAT_XRGB8888, { 0 }, 1 },
+    { GST_VIDEO_FORMAT_ARGB, LIN_TBL, DRM_FORMAT_ABGR8888, { 1, 2, 3, 0 }, 0 },
+    { GST_VIDEO_FORMAT_ABGR, LIN_TBL, DRM_FORMAT_ABGR8888, { 3, 2, 1, 0 }, 0 },
+    { GST_VIDEO_FORMAT_xRGB, LIN_TBL, DRM_FORMAT_XBGR8888, { 1, 2, 3, 0 }, 1 },
+    { GST_VIDEO_FORMAT_xBGR, LIN_TBL, DRM_FORMAT_XBGR8888, { 3, 2, 1, 0 }, 1 },
+    { GST_VIDEO_FORMAT_RGB, LIN_RGB24, DRM_FORMAT_XBGR8888, { 0 }, 1 },
+    { GST_VIDEO_FORMAT_BGR, LIN_BGR24, DRM_FORMAT_XBGR8888, { 0 }, 1 },
+  };
+  for (unsigned i = 0; i < G_N_ELEMENTS(t); i++) {
+    if (t[i].f != f) continue;
+    ls->fmt = f; ls->mode = t[i].m; ls->fourcc = t[i].fourcc; ls->opaque = t[i].opaque;
+    memcpy(ls->idx, t[i].idx, 4);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/* One row of w pixels from src (format ls->fmt) into the slot as ls->fourcc. */
+static void lin_row(const lin_set *ls, guint8 *dst, const guint8 *src, int w) {
+  int x = 0;
+  switch (ls->mode) {
+  case LIN_COPY:
+    memcpy(dst, src, (size_t)w * 4);
+    return;
+  case LIN_TBL: {
+#ifdef __aarch64__
+    uint8_t ti[16];
+    for (int p = 0; p < 4; p++) for (int c = 0; c < 4; c++) ti[p * 4 + c] = (uint8_t)(p * 4 + ls->idx[c]);
+    uint8x16_t tbl = vld1q_u8(ti);
+    uint32x4_t amask = vdupq_n_u32(ls->opaque ? 0xff000000u : 0);
+    /* Single-register loads and stores: the 4-register forms (ld1/st1 x4)
+     * ran at 8.4 ms a 1080p frame against memcpy's 3.8; these match it. */
+    for (; x + 16 <= w; x += 16) {
+      for (int k = 0; k < 4; k++) {
+        uint8x16_t v = vqtbl1q_u8(vld1q_u8(src + x * 4 + k * 16), tbl);
+        vst1q_u8(dst + x * 4 + k * 16, vreinterpretq_u8_u32(vorrq_u32(vreinterpretq_u32_u8(v), amask)));
+      }
+    }
+#endif
+    for (; x < w; x++) {
+      const guint8 *p = src + x * 4;
+      guint8 *d = dst + x * 4;
+      d[0] = p[ls->idx[0]]; d[1] = p[ls->idx[1]]; d[2] = p[ls->idx[2]]; d[3] = ls->opaque ? 255 : p[ls->idx[3]];
+    }
+    return;
+  }
+  case LIN_RGB24:
+  case LIN_BGR24: {
+    int swap = ls->mode == LIN_BGR24;
+#ifdef __aarch64__
+    uint8x16_t a = vdupq_n_u8(255);
+    for (; x + 16 <= w; x += 16) {
+      uint8x16x3_t v = vld3q_u8(src + x * 3);
+      uint8x16x4_t o = { { swap ? v.val[2] : v.val[0], v.val[1], swap ? v.val[0] : v.val[2], a } };
+      vst4q_u8(dst + x * 4, o);
+    }
+#endif
+    for (; x < w; x++) {
+      const guint8 *p = src + x * 3;
+      guint8 *d = dst + x * 4;
+      d[0] = p[swap ? 2 : 0]; d[1] = p[1]; d[2] = p[swap ? 0 : 2]; d[3] = 255;
+    }
+    return;
+  }
+  }
+}
+
+/* For tests: convert one row as the copy route does; the slots' DRM format,
+ * or 0 if the route doesn't take the format. */
+uint32_t glwall_lin_row_for_test(int format, guint8 *dst, const guint8 *src, int w) {
+  lin_set ls = { 0 };
+  if (!lin_layout(&ls, (GstVideoFormat)format)) return 0;
+  lin_row(&ls, dst, src, w);
+  return ls.fourcc;
+}
+
+/* The slots for a w x h layer of packed 8-bit RGB frames (lin_layout), or
+ * NULL (then glupload uploads). */
 static lin_set *lin_new(GstCaps *caps) {
   GstVideoInfo vi;
-  if (!W.ctx || !p_mkimg || !gst_video_info_from_caps(&vi, caps) || GST_VIDEO_INFO_FORMAT(&vi) != GST_VIDEO_FORMAT_RGBA) return NULL;
+  if (!W.ctx || !p_mkimg || !gst_video_info_from_caps(&vi, caps)) return NULL;
   GstCapsFeatures *f = gst_caps_get_features(caps, 0);
   if (f && !gst_caps_features_is_equal(f, GST_CAPS_FEATURES_MEMORY_SYSTEM_MEMORY)) return NULL;
   lin_set *ls = g_new0(lin_set, 1);
+  if (!lin_layout(ls, GST_VIDEO_INFO_FORMAT(&vi))) { g_free(ls); return NULL; }
   ls->w = vi.width; ls->h = vi.height; ls->refs = 1;
   g_mutex_init(&ls->lock); g_cond_init(&ls->cond);
   for (int i = 0; i < LIN_SLOTS; i++) {
@@ -886,7 +993,7 @@ static void lin_slot_done(gpointer d) {
 static GstBuffer *lin_copy(glwall_layer *l, GstBuffer *b, GstCaps *caps) {
   lin_set *ls = l->lin;
   GstVideoInfo vi; GstVideoFrame fr;
-  if (!gst_video_info_from_caps(&vi, caps) || vi.width != ls->w || vi.height != ls->h) return NULL;
+  if (!gst_video_info_from_caps(&vi, caps) || vi.width != ls->w || vi.height != ls->h || GST_VIDEO_INFO_FORMAT(&vi) != ls->fmt) return NULL;
   gint64 until = g_get_monotonic_time() + 100 * G_TIME_SPAN_MILLISECOND;
   int i = -1;
   g_mutex_lock(&ls->lock);
@@ -900,8 +1007,8 @@ static GstBuffer *lin_copy(glwall_layer *l, GstBuffer *b, GstCaps *caps) {
   lin_ref *r = g_new0(lin_ref, 1); r->ls = ls; r->i = i;
   if (!gst_video_frame_map(&fr, &vi, b, GST_MAP_READ)) { lin_slot_done(r); return NULL; }
   const guint8 *src = GST_VIDEO_FRAME_PLANE_DATA(&fr, 0);
-  int sstride = GST_VIDEO_FRAME_PLANE_STRIDE(&fr, 0), row = ls->w * 4;
-  for (int y = 0; y < ls->h; y++) memcpy(ls->s[i].map + (size_t)y * ls->s[i].pitch, src + (size_t)y * sstride, row);
+  int sstride = GST_VIDEO_FRAME_PLANE_STRIDE(&fr, 0);
+  for (int y = 0; y < ls->h; y++) lin_row(ls, ls->s[i].map + (size_t)y * ls->s[i].pitch, src + (size_t)y * sstride, ls->w);
   gst_video_frame_unmap(&fr);
   GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_gl_handle(W.ctx, NULL, &ls->vinfo, 0, NULL,
     GST_GL_TEXTURE_TARGET_2D, GST_GL_RGBA, GUINT_TO_POINTER(ls->s[i].tex), r, lin_slot_done);
@@ -990,8 +1097,10 @@ glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, 
     l->still = gst_structure_get_fraction(st, "framerate", &fn, &fd) && fn == 0;
   }
   if (!l->still && (l->lin = lin_new(lc)) != NULL) {
-    /* The layer's frames arrive as GL memory (the slots), not RGBA in RAM. */
+    /* The layer's frames arrive as GL memory (the slots, RGBA), not as the
+     * cue's packed RGB in RAM. */
     gst_caps_set_features(lc, 0, gst_caps_features_new(GST_CAPS_FEATURE_MEMORY_GL_MEMORY, NULL));
+    gst_caps_set_simple(lc, "format", G_TYPE_STRING, "RGBA", NULL);
     gst_caps_set_simple(lc, "texture-target", G_TYPE_STRING, "2D", NULL);
   }
   l->appsink = gst_object_ref(appsink);

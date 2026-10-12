@@ -109,6 +109,9 @@ func TestGLVideoTailShapes(t *testing.T) {
 	}{
 		{"hardware decoder", true, false, true, "", "dmabuf", 1, false, false},
 		{"alpha", false, false, false, "RGBA", "alpha", 1, false, false},
+		{"alpha as ARGB", false, false, false, "ARGB", "alpha", 1, false, false},
+		{"packed RGB (qtrle, BMP)", false, false, false, "RGB", "alpha", 1, false, false},
+		{"packed BGRx", false, false, false, "BGRx", "alpha", 1, false, false},
 		{"software via ISP", false, false, false, "I420", "isp", 2, false, false},
 		{"software turned", false, true, false, "I420", "isp", 2, false, true},
 		{"alpha turned", false, true, false, "RGBA", "alpha", 1, false, true},
@@ -178,6 +181,14 @@ func TestGLTailFormat(t *testing.T) {
 	if got := glTailFormat(unfixed, "plain.mov"); got != "" {
 		t.Errorf("unfixed caps, file without alpha: %q, want \"\" (RGB is only a possibility)", got)
 	}
+	// One format, size not known yet (cutepianimdec): that format.
+	if got := glTailFormat(gst.NewCapsFromString("video/x-raw,format=RGBA,width=[1,32768],height=[1,32768]"), "anim.webp"); got != "RGBA" {
+		t.Errorf("single-format caps: %q, want RGBA", got)
+	}
+	// A 24-bit RGB still keeps the ISP route ("").
+	if got := glTailFormat(gst.NewCapsFromString("video/x-raw,format=RGB,width=64,height=48,framerate=0/1"), "still.png"); got != "" {
+		t.Errorf("RGB still: %q, want \"\"", got)
+	}
 	asked = "-"
 	if got := glTailFormat(nil, ""); got != "" || asked != "-" {
 		t.Errorf("no caps, no filename: %q (lookup asked %q), want \"\" without a lookup", got, asked)
@@ -185,6 +196,17 @@ func TestGLTailFormat(t *testing.T) {
 	AlphaLookup = nil
 	if got := glTailFormat(nil, "alpha.mov"); got != "" {
 		t.Errorf("no lookup installed: %q, want \"\"", got)
+	}
+	// A packed RGB file (qtrle's rgb24) takes the copy route before its pad is fixed.
+	savedCodec := CodecLookup
+	defer func() { CodecLookup = savedCodec }()
+	CodecLookup = func(name string) string {
+		return map[string]string{"anim.mov": "qtrle/rgb24", "argb.mov": "qtrle/argb", "h264.mov": "h264/yuv420p"}[name]
+	}
+	for name, want := range map[string]string{"anim.mov": "RGB", "argb.mov": "ARGB", "h264.mov": "", "none.mov": ""} {
+		if got := glTailFormat(unfixed, name); got != want {
+			t.Errorf("unfixed caps, %s: %q, want %q", name, got, want)
+		}
 	}
 }
 
