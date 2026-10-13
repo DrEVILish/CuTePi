@@ -282,9 +282,10 @@ import with the reason.
 
 ### Open (decisions)
 
-- **WMV / WMA** need GStreamer's ASF demuxer (Debian package `gstreamer1.0-plugins-ugly`); the decoders
-  (`avdec_wmv2`, `avdec_wmav1`) are already installed. Installing it is a deployment decision (AGENTS.md: no extra
-  packages on the test server without approval).
+- ~~**WMV / WMA** need GStreamer's ASF demuxer~~ **Decided 2026-10-13:** `gstreamer1.0-plugins-ugly` approved and
+  installed on the test server. WMV1 in `.asf` and WMV2 in `.wmv` (1080p60, WMA audio): Supported at 60. Its
+  `a52dec` (which would outrank `avdec_ac3`) and `mpeg2dec` are ranked 0; AC-3 and MPEG-2 re-checked on FFmpeg's
+  decoders, Supported.
 - **AVIF and JPEG XL stills** have no GStreamer decoder on this system. Options: install decoder plugins if Debian
   ships them for this GStreamer, or convert such stills losslessly to PNG at import with the Pi's ffmpeg (which reads
   both).

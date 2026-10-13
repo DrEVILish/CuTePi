@@ -21,8 +21,8 @@ import time
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "/root/cutepi-testmedia"
 JSON_OUT = sys.argv[sys.argv.index("--json") + 1] if "--json" in sys.argv else None
-# The same decoder demotions as the service (gsp decoderRankOverrides).
-ENV = dict(os.environ, GST_PLUGIN_FEATURE_RANK="v4l2jpegdec:0,openjpegdec:0", GST_DEBUG="0")
+# The same decoder ranks as the service (gsp decoderRankOverrides; keep in step).
+ENV = dict(os.environ, GST_PLUGIN_FEATURE_RANK="v4l2jpegdec:0,openjpegdec:0,a52dec:0,mpeg2dec:0,avdec_vp8:257", GST_DEBUG="0")
 # State-change debug lines name every element in the pipeline, decodebin's
 # internals included (-v output does not).
 DECODE_ENV = dict(ENV, GST_DEBUG="GST_STATES:4", GST_DEBUG_NO_COLOR="1")

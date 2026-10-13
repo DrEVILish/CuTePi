@@ -58,7 +58,7 @@ video hap               "mov mkv" "-c:v hap" "-c:a pcm_s16le"
 video theora            "mkv"     "-c:v libtheora -q:v 7" "-c:a libvorbis"   # MOV cannot carry Theora
 # VP9, AV1 and FFV1 above are MKV only: ffmpeg's QuickTime writer refuses them in .mov
 # (they travel in MP4/WebM/MKV), as it does Opus and FLAC audio below.
-video wmv2              "mkv"     "-c:v wmv2 -b:v 20M" "-c:a wmav2"          # MOV cannot carry WMV
+video wmv2              "mkv wmv" "-c:v wmv2 -b:v 20M" "-c:a wmav2"          # MOV cannot carry WMV; .wmv (ASF) needs plugins-ugly
 # VP8: no libvpx VP8 encoder in this ffmpeg; GStreamer's vp8enc into MKV (MOV cannot carry VP8).
 f=$V/vp8.mkv
 if [ ! -s "$f" ]; then

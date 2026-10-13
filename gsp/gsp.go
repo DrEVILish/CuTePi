@@ -112,6 +112,11 @@ var (
 //     jpegdec takes over.
 //   - openjpegdec: fails to negotiate JPEG 2000 output on the Pi ("Failed to
 //     negociate OpenJPEG data", codec corpus); avdec_jpeg2000 decodes it.
+//   - a52dec and mpeg2dec (gstreamer1.0-plugins-ugly, installed for its ASF
+//     and RealMedia demuxers): liba52 would outrank FFmpeg's AC-3 decoder
+//     (secondary over marginal) and change the decoder every AC-3 track has
+//     been tested on; libmpeg2 is demoted with it so MPEG-1/2 stays on
+//     avdec_mpeg2video whatever the ranks.
 //
 // and promote one decoder that is faster than the default:
 //   - avdec_vp8 (FFmpeg's VP8) over vp8dec (libvpx, primary): two 1080p60
@@ -119,7 +124,7 @@ var (
 //     spin against each other) and 56 + 56 with FFmpeg's (h264-pi4
 //     OPEN-CODECS.md). WebM with alpha still goes through vp8alphadecodebin,
 //     which ranks above both.
-var decoderRankOverrides = []string{"v4l2jpegdec:0", "openjpegdec:0", "avdec_vp8:257"}
+var decoderRankOverrides = []string{"v4l2jpegdec:0", "openjpegdec:0", "a52dec:0", "mpeg2dec:0", "avdec_vp8:257"}
 
 // applyDecoderRanks sets GST_PLUGIN_FEATURE_RANK before gst.Init reads it,
 // appending each override unless the operator's own value already ranks
