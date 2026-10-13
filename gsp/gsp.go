@@ -3,6 +3,7 @@ package gsp
 import (
 	"CuTePi/gsp/animdec"
 	"CuTePi/gsp/av1dec"
+	"CuTePi/gsp/bobdeint"
 	"CuTePi/gsp/cfhd"
 	"CuTePi/gsp/glwall"
 	"CuTePi/gsp/mjpegdec"
@@ -157,6 +158,8 @@ func gstInit() {
 		if cfhd.Register() {
 			logs.Printf(logs.GSPPipeDebug, "gsp: CineForm decoder: CineForm SDK (cutepicfhddec)")
 		}
+		// Interlaced video to a picture per field (gsp/bobdeint).
+		bobdeint.Register()
 		// Motion JPEG on several cores (gsp/mjpegdec).
 		if mjpegdec.Register() {
 			logs.Printf(logs.GSPPipeDebug, "gsp: Motion JPEG decoder: parallel jpegdec (cutepimjpegdec)")
@@ -2519,7 +2522,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			elementNames = []string{"queue", "audioconvert", "audioresample", "volume", "audiopanorama", "scaletempo", sink}
 		} else if glOpen && !spec.warmSink {
 			// GPU wall: the cue feeds the mixer through an appsink (gllayer.go).
-			dmabufTail := glTailDMABuf(srcPad, spec.opts, spec.isTest)
+			dmabufTail := glUseDMABuf(srcPad, caps, spec.opts, spec.isTest, spec.filename)
 			elementNames = glVideoTail(dmabufTail, glTailFormat(caps, spec.filename),
 				glDirection(spec.opts.Rotation, spec.opts.Flip) != dirIdentity, !spec.isTest && glISPCanTake(srcPad))
 			elementNames = glDeinterlace(elementNames, !dmabufTail && glInterlaced(caps, spec.filename))
@@ -2600,11 +2603,12 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			}
 		}
 		if isVideo && glOpen && !spec.warmSink {
-			if err := configureGLTail(pipeline, byFactory, elementNames, spec.opts, glTailDMABuf(srcPad, spec.opts, spec.isTest), glTailFormat(caps, spec.filename)); err != nil {
+			if err := configureGLTail(pipeline, byFactory, elementNames, spec.opts, glUseDMABuf(srcPad, caps, spec.opts, spec.isTest, spec.filename), glTailFormat(caps, spec.filename)); err != nil {
 				msg := gst.NewErrorMessage(self, gst.NewGError(3, err), "no wall layer", nil)
 				pipeline.GetPipelineBus().Post(msg)
 				return
 			}
+			configureDeinterlace(byFactory, caps, spec.filename)
 		} else if isVideo && kmsWall() != nil {
 			fw, fh := capsSize(caps)
 			if err := configureKMSTail(pipeline, byFactory, spec.opts, fw, fh, !spec.isTest && isStillFile(spec.filename)); err != nil {

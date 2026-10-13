@@ -115,7 +115,9 @@ type MediaVideoInfo struct {
 	Alpha bool `json:",omitempty"`
 	// Interlaced: ffprobe reports a field order (tt, bb, tb, bt): the frames
 	// are two fields woven together and must be deinterlaced to show.
-	Interlaced bool `json:",omitempty"`
+	// FieldOrder is ffprobe's (the second letter is the field shown first).
+	Interlaced bool   `json:",omitempty"`
+	FieldOrder string `json:",omitempty"`
 }
 type MediaAudioInfo struct {
 	Codec      string
@@ -244,6 +246,7 @@ func Probe(path string) (Metadata, error) {
 				Color:      cs,
 				Alpha:      streamHasAlpha(videoStream, path),
 				Interlaced: fieldOrderInterlaced(videoStream.FieldOrder),
+				FieldOrder: interlacedFieldOrder(videoStream.FieldOrder),
 			},
 		}
 	}
@@ -552,6 +555,14 @@ func (i *MediaInfo) HasAlpha() bool {
 		return false
 	}
 	return i.Video.Alpha || (i.Video.Codec != "gif" && PixFmtHasAlpha(i.Video.PixFmt))
+}
+
+// interlacedFieldOrder: ffprobe's field_order when it is interlaced, else "".
+func interlacedFieldOrder(fo string) string {
+	if fieldOrderInterlaced(fo) {
+		return fo
+	}
+	return ""
 }
 
 // fieldOrderInterlaced: ffprobe's field_order for interlaced video (top or

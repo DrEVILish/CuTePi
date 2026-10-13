@@ -3106,18 +3106,23 @@ func MediaHasAlpha(filename string) bool {
 	return info.HasAlpha()
 }
 
-// MediaInterlaced reports whether a media file's video was probed at import
-// as interlaced (a field order).
-func MediaInterlaced(filename string) bool {
+// MediaFieldOrder is a media file's field order as probed at import (ffprobe:
+// "tt", "bb", "tb", "bt"), "" for progressive or unknown video. Files
+// imported before the field order was kept report "i" when they were
+// recorded as interlaced.
+func MediaFieldOrder(filename string) string {
 	var meta string
 	if db.Get(&meta, `SELECT media_meta FROM mediapool WHERE filename = ?`, filename) != nil || meta == "" {
-		return false
+		return ""
 	}
 	var info media.MediaInfo
-	if json.Unmarshal([]byte(meta), &info) != nil || info.Video == nil {
-		return false
+	if json.Unmarshal([]byte(meta), &info) != nil || info.Video == nil || !info.Video.Interlaced {
+		return ""
 	}
-	return info.Video.Interlaced
+	if info.Video.FieldOrder != "" {
+		return info.Video.FieldOrder
+	}
+	return "i"
 }
 
 // MediaVideoCodec is a media file's video codec and pixel format as probed

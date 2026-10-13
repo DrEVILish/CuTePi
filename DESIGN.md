@@ -1662,13 +1662,19 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   software routes. On the KMS wall ProRes 422/HQ/LT/Proxy went from 0.3-1.4 fps to 37-54 and DNxHR from 20-27 to
   60 (kmssink cannot allocate 4:2:2 buffers, so these went to RGB before).
 - **VP8:** `avdec_vp8` promoted over `vp8dec` (decoder ranks above).
-- **Interlaced video** (2026-10-13): the import records ffprobe's field order (`MediaVideoInfo.Interlaced`), and on
-  the GPU wall a software tail of interlaced video (by its caps or that metadata) gets `deinterlace method=linear
-  fields=all mode=auto` before its first `videoconvert`: each field becomes a frame, so 1080i shows as 60 frames a
-  second without combing. Before, interlaced frames reached the wall woven (combed, half motion rate). `greedyh` (the
-  element's default) cost 32 ms a frame; the VideoCore deinterlacer (`v4l2video18convert`) cannot be driven 1:2 by
-  GStreamer's converter and returned the frames combed. Hardware (DMABuf) tails are not deinterlaced yet. 1080i
-  MPEG-2, 4:2:0 25 Mbit/s and 4:2:2 50 Mbit/s: Supported (support corpus `mpeg2_1080i`).
+- **Interlaced video** (2026-10-13): the import records ffprobe's field order (`MediaVideoInfo.Interlaced`,
+  `FieldOrder`), and on the GPU wall interlaced video (by its caps or that metadata) takes the software tail with
+  `cutepibob` (`gsp/bobdeint`) before its first `videoconvert`: each field becomes a frame (line-average bob, ±1 of
+  `deinterlace method=linear fields=all`), so 1080i shows as 60 frames a second without combing. The metadata decides
+  even when the decoder's caps say progressive (`v4l2h264dec` labels 1080i H.264 so); its field order sets `tff`.
+  `cutepibob` is one NEON pass that reads each source row once into a cached three-row ring and accepts the decoder's
+  buffers without a copy (allocation query with video meta); `deinterlace method=linear` read the uncached decoder
+  frames twice and held H.264 1080i to 30.8 fps steady. Before, interlaced frames reached the wall woven (combed, half
+  motion rate). `greedyh` cost 32 ms a frame; the VideoCore deinterlacer (`v4l2video18convert`) cannot be driven 1:2
+  by GStreamer's converter and returned the frames combed; a GPU bob on the wall overloaded the V3D (16 presented/s).
+  1080i MPEG-2, 4:2:0 25 Mbit/s and 4:2:2 50 Mbit/s: Supported (support corpus `mpeg2_1080i`). 1080i H.264 on the
+  hardware decoder: 55 fps steady (81.7 flat out standalone), so not yet Supported: the ISP's two conversions a frame
+  and the H.264 decoder share the VideoCore.
 - **PNG video: `cutepipngvdec`** (`gsp/pngvdec`, 2026-10-13): PNG frames in MOV/MKV decoded by four workers with
   libpng's simplified API straight into the output buffers (straight-alpha RGBA), finished in order; byte-identical
   to `pngdec`, which decoded one frame at a time (21-22 ms at 1080p RGBA, 33-39 fps on the wall). Moving pictures

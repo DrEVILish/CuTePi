@@ -97,7 +97,7 @@ func main() {
 	}
 	defer ctp.CloseDB()
 	gsp.AlphaLookup = ctp.MediaHasAlpha
-	gsp.InterlacedLookup = ctp.MediaInterlaced
+	gsp.FieldOrderLookup = ctp.MediaFieldOrder
 	gsp.CodecLookup = ctp.MediaVideoCodec
 
 	// One-time scan flags media whose source files are missing on disk; cues

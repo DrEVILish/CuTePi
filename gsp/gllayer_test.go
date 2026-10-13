@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 
+	"CuTePi/gsp/bobdeint"
 	"CuTePi/gsp/glwall"
 )
 
@@ -309,28 +310,31 @@ func TestFadeLandAndAudioSyncOffWall(t *testing.T) {
 	}
 }
 
-// An interlaced cue's software tail gets a deinterlacer before its first
-// videoconvert; progressive ones and hardware (DMABuf) tails do not.
+// An interlaced cue's software tail gets cutepibob and a queue before its
+// first videoconvert; progressive tails are left alone, and an interlaced
+// file leaves the DMABuf route.
 func TestGLDeinterlace(t *testing.T) {
 	gst.Init(nil)
 	sw := glVideoTail(false, "I420", false, false)
 	got := glDeinterlace(sw, true)
-	di, vc := indexOfName(got, "deinterlace"), indexOfName(got, "videoconvert")
-	if di < 0 || vc != di+1 {
-		t.Errorf("interlaced software tail %v: want deinterlace right before videoconvert", got)
+	di, vc := indexOfName(got, "cutepibob"), indexOfName(got, "videoconvert")
+	if di < 0 || vc != di+2 || got[di+1] != "queue" {
+		t.Errorf("interlaced software tail %v: want cutepibob, queue right before videoconvert", got)
 	}
 	if p := indexOfName(got, "cutepiyuvpack"); p >= 0 && p > di {
-		t.Errorf("deinterlace %d before the packer %d in %v", di, p, got)
+		t.Errorf("deinterlacer %d before the packer %d in %v", di, p, got)
 	}
-	if got := glDeinterlace(sw, false); indexOfName(got, "deinterlace") >= 0 {
+	if got := glDeinterlace(sw, false); indexOfName(got, "cutepibob") >= 0 {
 		t.Errorf("progressive tail got a deinterlacer: %v", got)
 	}
-	if got := glDeinterlace(glVideoTail(true, "", false, false), true); indexOfName(got, "deinterlace") >= 0 {
-		t.Errorf("DMABuf tail got a deinterlacer: %v", got)
+	saved := FieldOrderLookup
+	defer func() { FieldOrderLookup = saved }()
+	FieldOrderLookup = func(name string) string {
+		if name == "i.mov" {
+			return "tt"
+		}
+		return ""
 	}
-	saved := InterlacedLookup
-	defer func() { InterlacedLookup = saved }()
-	InterlacedLookup = func(name string) bool { return name == "i.mov" }
 	if !glInterlaced(nil, "i.mov") || glInterlaced(nil, "p.mov") {
 		t.Errorf("metadata lookup not used")
 	}
@@ -339,5 +343,32 @@ func TestGLDeinterlace(t *testing.T) {
 	}
 	if glInterlaced(gst.NewCapsFromString("video/x-raw,interlace-mode=progressive"), "p.mov") {
 		t.Errorf("progressive caps seen as interlaced")
+	}
+}
+
+// The deinterlacer's field order comes from the import metadata (second
+// letter of ffprobe's field order), else the caps' field-order, else top first.
+func TestConfigureDeinterlace(t *testing.T) {
+	gst.Init(nil)
+	if !bobdeint.Register() {
+		t.Skip("cutepibob not registered")
+	}
+	saved := FieldOrderLookup
+	defer func() { FieldOrderLookup = saved }()
+	FieldOrderLookup = func(name string) string { return map[string]string{"t.mov": "tt", "b.mov": "tb", "bt.mov": "bt"}[name] }
+	bff := gst.NewCapsFromString("video/x-raw,interlace-mode=interleaved,field-order=bottom-field-first")
+	for _, c := range []struct {
+		file string
+		caps *gst.Caps
+		tff  bool
+	}{{"t.mov", nil, true}, {"b.mov", nil, false}, {"bt.mov", nil, true}, {"p.mov", bff, false}, {"p.mov", nil, true}} {
+		f, err := gst.NewElement("cutepibob")
+		if err != nil {
+			t.Fatal(err)
+		}
+		configureDeinterlace(map[string][]*gst.Element{"cutepibob": {f}}, c.caps, c.file)
+		if v, _ := f.GetProperty("tff"); v != c.tff {
+			t.Errorf("%s (caps %v): tff %v, want %v", c.file, c.caps, v, c.tff)
+		}
 	}
 }

@@ -255,14 +255,20 @@ func glTailDMABuf(srcPad *gst.Pad, opts LoadOpts, isTest bool) bool {
 // video would take the ISP route, which has no alpha.
 var AlphaLookup func(filename string) bool
 
-// InterlacedLookup reports whether a media file's video was probed at import
-// as interlaced (set by main once the database is open).
-var InterlacedLookup func(filename string) bool
+// FieldOrderLookup is a media file's field order as probed at import
+// ("tt", "bb", "tb", "bt"; "" progressive), set by main once the database is
+// open.
+var FieldOrderLookup func(filename string) string
 
-// glInterlaced: the cue's frames are interlaced, from its pad's caps when they
-// say so, else from its import metadata (decodebin3 exposes a software
-// decoder's pad before its caps are fixed).
+// glInterlaced: the cue's frames are interlaced, by its pad's caps or its
+// import metadata (decodebin3 exposes a software decoder's pad before its
+// caps are fixed, and the Pi's hardware H.264 decoder labels 1080i frames
+// progressive).
 func glInterlaced(caps *gst.Caps, filename string) bool {
+	return capsInterlaced(caps) || (FieldOrderLookup != nil && filename != "" && FieldOrderLookup(filename) != "")
+}
+
+func capsInterlaced(caps *gst.Caps) bool {
 	if caps != nil && caps.GetSize() > 0 {
 		if v, err := caps.GetStructureAt(0).GetValue("interlace-mode"); err == nil {
 			if m, ok := v.(string); ok && m != "progressive" {
@@ -270,35 +276,61 @@ func glInterlaced(caps *gst.Caps, filename string) bool {
 			}
 		}
 	}
-	return InterlacedLookup != nil && filename != "" && InterlacedLookup(filename)
+	return false
 }
 
 // glDeinterlace puts a deinterlacer into a software tail of interlaced video,
-// ahead of its first videoconvert (after the NEON packer, so it sees I420):
-// every field becomes a frame (1080i30 shows as 60 frames a second, without
-// combing on moving edges). Hardware tails (DMABuf) are left as they are.
-// "linear" (line interpolation of each field) costs ~4 ms a 1080 field here;
-// greedyh, the element's default, cost 32 ms and could not keep up.
+// ahead of its first videoconvert (after the NEON packer, so it sees I420),
+// with a queue after it so the ISP's copy-in runs on another thread:
+// cutepibob (gsp/bobdeint) makes one picture per field, the rows between
+// line-interpolated, in one NEON pass that reads each input row once. 1080i
+// shows as 60 pictures a second without combing.
+//
+// What did not work, 1080i H.264 from the hardware decoder (its frames sit in
+// uncached memory): GStreamer's deinterlace (linear, the only method fast
+// enough; greedyh cost 32 ms a frame) read each frame twice and held a whole
+// core at 38-41 pictures a second in the service; a GPU bob in the wall's
+// layer chain (two extra full-screen passes a frame) took the V3D past its
+// budget and the whole wall fell to 16 presented frames a second.
 func glDeinterlace(names []string, interlaced bool) []string {
 	if !interlaced {
 		return names
 	}
 	for i, n := range names {
 		if n == "videoconvert" {
-			out := append(append(append([]string{}, names[:i]...), "deinterlace"), names[i:]...)
-			return out
+			return append(append(append([]string{}, names[:i]...), "cutepibob", "queue"), names[i:]...)
 		}
 	}
 	return names
 }
 
-// configureDeinterlace sets the tail's deinterlacer: line interpolation of
-// every field, only where the frames are interlaced (mode auto).
-func configureDeinterlace(byFactory map[string][]*gst.Element) {
-	for _, d := range byFactory["deinterlace"] {
-		d.SetArg("method", "linear")
-		d.SetArg("fields", "all")
-		d.SetArg("mode", "auto")
+// glUseDMABuf: the tail takes the decoder's DMABufs (glTailDMABuf), unless
+// the video is interlaced: it then takes the software tail, where it is
+// deinterlaced (the DMABufs would reach the wall woven: 30 combed frames a
+// second for 1080i).
+func glUseDMABuf(srcPad *gst.Pad, caps *gst.Caps, opts LoadOpts, isTest bool, filename string) bool {
+	return glTailDMABuf(srcPad, opts, isTest) && !glInterlaced(caps, filename)
+}
+
+// configureDeinterlace sets the deinterlacer's field order: the import
+// metadata's (the second letter of ffprobe's field order is the field shown
+// first), else the caps' field-order, else top field first.
+func configureDeinterlace(byFactory map[string][]*gst.Element, caps *gst.Caps, filename string) {
+	fo := ""
+	if FieldOrderLookup != nil && filename != "" {
+		fo = FieldOrderLookup(filename)
+	}
+	tff := true
+	switch {
+	case fo == "bb" || fo == "tb":
+		tff = false
+	case fo == "" && caps != nil && caps.GetSize() > 0:
+		if v, err := caps.GetStructureAt(0).GetValue("field-order"); err == nil {
+			tff = v != "bottom-field-first"
+		}
+	}
+	for _, f := range byFactory["cutepibob"] {
+		f.Set("tff", tff)
 	}
 }
 
@@ -390,7 +422,7 @@ func configureGLTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, names
 	if conv := firstByFactory(byFactory, "videoconvert"); conv != nil {
 		conv.Set("n-threads", uint(4))
 	}
-	configureDeinterlace(byFactory)
+
 	glwall.PrepareSink(sink, glDecoderPool)
 	logs.Printf(logs.GSPPipeDebug, "gsp: GL wall tail %v (dmabuf=%v format=%q)", names, dmabuf, format)
 	return nil
