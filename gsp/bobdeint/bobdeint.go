@@ -4,7 +4,7 @@
 package bobdeint
 
 /*
-#cgo pkg-config: gstreamer-1.0 gstreamer-video-1.0
+#cgo pkg-config: gstreamer-1.0 gstreamer-video-1.0 gstreamer-allocators-1.0
 #include <gst/gst.h>
 int cutepi_bob_register(void);
 */

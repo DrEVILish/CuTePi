@@ -71,3 +71,78 @@ func TestMatchesLinearDeinterlace(t *testing.T) {
 		}
 	}
 }
+
+// With dmabuf=true the pictures leave as DMA_DRM DMABufs (strides on 64
+// bytes for luma, 32 for chroma) holding the same pixels as system-memory
+// output.
+func TestDMABufOutput(t *testing.T) {
+	gst.Init(nil)
+	if !Register() {
+		t.Fatal("not registered")
+	}
+	for _, c := range []struct {
+		format, drm string
+		w           int
+		stride      int // padded luma stride
+	}{{"I420", "YU12", 1920, 1920}, {"I420", "YU12", 720, 768}, {"NV12", "NV12", 720, 768}} {
+		src := fmt.Sprintf("videotestsrc pattern=ball num-buffers=3 ! video/x-raw,format=%s,width=%d,height=48,framerate=25/1,interlace-mode=interleaved,field-order=top-field-first", c.format, c.w)
+		want, _ := pull(t, src+" ! cutepibob ! appsink name=k sync=false")
+		pipe, err := gst.NewPipelineFromString(src + " ! cutepibob dmabuf=true ! appsink name=k sync=false")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ke, _ := pipe.GetElementByName("k")
+		sink := app.SinkFromElement(ke)
+		pipe.SetState(gst.StatePlaying)
+		name := fmt.Sprintf("%s %d", c.format, c.w)
+		var got [][]byte
+		for {
+			s := sink.TryPullSample(gst.ClockTime(5 * time.Second))
+			if s == nil {
+				break
+			}
+			if len(got) == 0 {
+				caps := s.GetCaps()
+				st := caps.GetStructureAt(0)
+				if f, _ := st.GetValue("drm-format"); f != c.drm || !caps.GetFeaturesAt(0).Contains("memory:DMABuf") {
+					t.Errorf("%s: caps %s", name, caps)
+				}
+			}
+			b := s.GetBuffer()
+			m := b.Map(gst.MapRead)
+			got = append(got, append([]byte(nil), m.Bytes()...))
+			b.Unmap()
+		}
+		pipe.SetState(gst.StateNull)
+		if len(got) != len(want) || len(got) != 6 {
+			t.Fatalf("%s: %d pictures, system memory %d, want 6", name, len(got), len(want))
+		}
+		// Compare row by row: luma rows, then the chroma plane(s).
+		h, cw := 48, c.w/2
+		for i := range want {
+			type plane struct{ srcOff, srcStride, dstOff, dstStride, n, rows int }
+			var planes []plane
+			ys := c.stride * h
+			if c.format == "I420" {
+				cs := c.stride / 2
+				planes = []plane{{0, c.w, 0, c.stride, c.w, h},
+					{c.w * h, cw, ys, cs, cw, h / 2},
+					{c.w*h + cw*h/2, cw, ys + cs*h/2, cs, cw, h / 2}}
+			} else {
+				planes = []plane{{0, c.w, 0, c.stride, c.w, h}, {c.w * h, c.w, ys, c.stride, c.w, h / 2}}
+			}
+			for pi, p := range planes {
+				for y := 0; y < p.rows; y++ {
+					a := want[i][p.srcOff+y*p.srcStride:][:p.n]
+					d := p.dstOff + y*p.dstStride
+					if d+p.n > len(got[i]) {
+						t.Fatalf("%s picture %d: %d bytes, too small for the layout", name, i, len(got[i]))
+					}
+					if string(a) != string(got[i][d:d+p.n]) {
+						t.Fatalf("%s picture %d plane %d row %d differs", name, i, pi, y)
+					}
+				}
+			}
+		}
+	}
+}

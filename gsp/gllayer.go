@@ -44,6 +44,8 @@ func glRoute(names []string) string {
 		switch names[i] {
 		case "v4l2convert":
 			return "isp"
+		case "cutepibob":
+			return "bob"
 		case "videoconvert", "videoflip", "videoscale":
 			return "alpha"
 		}
@@ -279,12 +281,14 @@ func capsInterlaced(caps *gst.Caps) bool {
 	return false
 }
 
-// glDeinterlace puts a deinterlacer into a software tail of interlaced video,
-// ahead of its first videoconvert (after the NEON packer, so it sees I420),
-// with a queue after it so the ISP's copy-in runs on another thread:
+// glDeinterlace puts a deinterlacer into a software tail of interlaced video:
 // cutepibob (gsp/bobdeint) makes one picture per field, the rows between
 // line-interpolated, in one NEON pass that reads each input row once. 1080i
-// shows as 60 pictures a second without combing.
+// shows as 60 pictures a second without combing. In the plain tail it
+// replaces the ISP: it writes its pictures into CMA DMABufs the GPU samples
+// directly (configureGLTail sets dmabuf), behind videoconvert (after the
+// NEON packer), which passes 4:2:0 through. In a turning tail it goes ahead
+// of the first videoconvert, with a queue after it.
 //
 // What did not work, 1080i H.264 from the hardware decoder (its frames sit in
 // uncached memory): GStreamer's deinterlace (linear, the only method fast
@@ -295,6 +299,14 @@ func capsInterlaced(caps *gst.Caps) bool {
 func glDeinterlace(names []string, interlaced bool) []string {
 	if !interlaced {
 		return names
+	}
+	// The plain ISP tail (no turning): cutepibob writes DMABufs the GPU
+	// samples itself, so the ISP's copy into DMABufs (one per picture, 60 a
+	// second on the VideoCore beside the hardware decoder) goes. videoconvert
+	// passes 4:2:0 through untouched (and the decoder's frames uncopied).
+	if i := indexOfName(names, "v4l2convert"); i > 0 && indexOfName(names, "videoflip") < 0 && names[i-1] == "capsfilter" {
+		out := append([]string{}, names[:i-1]...) // up to and with videoconvert
+		return append(out, "cutepibob", "queue", "capsfilter", "appsink")
 	}
 	for i, n := range names {
 		if n == "videoconvert" {
@@ -406,6 +418,10 @@ func configureGLTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, names
 	switch {
 	case dmabuf:
 		caps[0].Set("caps", gst.NewCapsFromString("video/x-raw(memory:DMABuf)"))
+	case len(byFactory["cutepibob"]) > 0 && len(byFactory["v4l2convert"]) == 0 && dir == dirIdentity:
+		// glDeinterlace's DMABuf tail: 4:2:0 into cutepibob, DMABufs out.
+		caps[0].Set("caps", gst.NewCapsFromString("video/x-raw(memory:DMABuf),format=DMA_DRM"))
+		byFactory["cutepibob"][0].Set("dmabuf", true)
 	case dir != dirIdentity:
 		glConfigureFlip(byFactory, opts, dir, hasAlphaFormat(format))
 	case hasAlphaFormat(format):

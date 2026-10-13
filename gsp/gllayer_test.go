@@ -2,6 +2,7 @@ package gsp
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,19 +311,29 @@ func TestFadeLandAndAudioSyncOffWall(t *testing.T) {
 	}
 }
 
-// An interlaced cue's software tail gets cutepibob and a queue before its
-// first videoconvert; progressive tails are left alone, and an interlaced
-// file leaves the DMABuf route.
+// An interlaced cue's plain software tail becomes videoconvert → cutepibob
+// (DMABufs out) → queue → appsink, without the ISP; a turning tail gets
+// cutepibob and a queue before its first videoconvert; progressive tails are
+// left alone, and an interlaced file leaves the DMABuf route.
 func TestGLDeinterlace(t *testing.T) {
 	gst.Init(nil)
 	sw := glVideoTail(false, "I420", false, false)
 	got := glDeinterlace(sw, true)
 	di, vc := indexOfName(got, "cutepibob"), indexOfName(got, "videoconvert")
-	if di < 0 || vc != di+2 || got[di+1] != "queue" {
-		t.Errorf("interlaced software tail %v: want cutepibob, queue right before videoconvert", got)
+	if di < 0 || vc != di-1 || indexOfName(got, "v4l2convert") >= 0 ||
+		strings.Join(got[di:], " ") != "cutepibob queue capsfilter appsink" {
+		t.Errorf("interlaced software tail %v: want videoconvert cutepibob queue capsfilter appsink, no ISP", got)
 	}
 	if p := indexOfName(got, "cutepiyuvpack"); p >= 0 && p > di {
 		t.Errorf("deinterlacer %d before the packer %d in %v", di, p, got)
+	}
+	if r := glRoute(got); r != "bob" {
+		t.Errorf("route %q, want bob", r)
+	}
+	flip := glDeinterlace(glVideoTail(false, "I420", true, false), true)
+	di, vc = indexOfName(flip, "cutepibob"), indexOfName(flip, "videoconvert")
+	if di < 0 || vc != di+2 || flip[di+1] != "queue" {
+		t.Errorf("interlaced turning tail %v: want cutepibob, queue right before videoconvert", flip)
 	}
 	if got := glDeinterlace(sw, false); indexOfName(got, "cutepibob") >= 0 {
 		t.Errorf("progressive tail got a deinterlacer: %v", got)

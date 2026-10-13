@@ -1672,9 +1672,11 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   frames twice and held H.264 1080i to 30.8 fps steady. Before, interlaced frames reached the wall woven (combed, half
   motion rate). `greedyh` cost 32 ms a frame; the VideoCore deinterlacer (`v4l2video18convert`) cannot be driven 1:2
   by GStreamer's converter and returned the frames combed; a GPU bob on the wall overloaded the V3D (16 presented/s).
-  1080i MPEG-2, 4:2:0 25 Mbit/s and 4:2:2 50 Mbit/s: Supported (support corpus `mpeg2_1080i`). 1080i H.264 on the
-  hardware decoder: 55 fps steady (81.7 flat out standalone), so not yet Supported: the ISP's two conversions a frame
-  and the H.264 decoder share the VideoCore.
+  In the plain (unturned) tail `cutepibob dmabuf=true` writes its pictures into its own CMA dma-heap buffers
+  (cached, synced on map; luma rows on 64 bytes, chroma on 32) and they leave as DMA_DRM DMABufs the GPU samples
+  directly: no ISP. With the ISP copying each picture into a DMABuf (60 a second on the VideoCore beside the
+  hardware decoder) 1080i H.264 held at 55 fps steady (fade out 51.6). 1080i MPEG-2, 4:2:0 25 Mbit/s and 4:2:2
+  50 Mbit/s, and 1080i H.264 on the hardware decoder: Supported (support corpus `mpeg2_1080i`, `h264_1080i`).
 - **PNG video: `cutepipngvdec`** (`gsp/pngvdec`, 2026-10-13): PNG frames in MOV/MKV decoded by four workers with
   libpng's simplified API straight into the output buffers (straight-alpha RGBA), finished in order; byte-identical
   to `pngdec`, which decoded one frame at a time (21-22 ms at 1080p RGBA, 33-39 fps on the wall). Moving pictures
