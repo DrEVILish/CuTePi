@@ -1688,6 +1688,20 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   to `pngdec`, which decoded one frame at a time (21-22 ms at 1080p RGBA, 33-39 fps on the wall). Moving pictures
   only: PNG stills keep `pngdec`. 1080p RGBA 45.8 → 145 fps flat out; `png_alpha.mov` Supported (60), `.mkv` at the
   edge (fades 57.8-60): the wall's copy of each RAM frame into its upload slots (8 MB a frame) is the limit there.
+- **QuickTime codecs in Matroska: `cutepiqtmkvparse`** (`gsp/qtmkv`, 2026-10-13): Matroska carries HAP and
+  QuickTime Animation as `V_QUICKTIME` tracks (CodecPrivate: the QuickTime sample description). `matroskademux`
+  exposes them as `video/x-unknown` with no fourcc or size, so nothing decoded them and the import refused the file.
+  The parser is autoplugged on those pads: it takes the track number from the stream-id, asks upstream for the
+  file's URI, reads that track's header (Tracks only) and sets the caps qtdemux gives the same stream in a MOV
+  (`video/x-hap, variant=Hap1/Hap5/…`, `video/x-rle, layout=quicktime, depth`). HAP and HAP-alpha MKV: same frames
+  as the MOV (unit test), `hap.mkv` 59.6 fps on the wall. QuickTime Animation MKVs written by FFmpeg stay refused:
+  its muxer zeroes the description after the fourcc (no depth, so RGB and ARGB cannot be told apart), and ffprobe
+  rejects them at import (upstream report in the codec workspace).
+- **Import tools at background priority** (2026-10-13): ffprobe/ffmpeg/yt-dlp run under `nice -n 19 ionice -c 2
+  -n 7` (`media.BackgroundCommand`), and while something plays the import's video decodes (playability check,
+  thumbnail) use one thread. Before, an upload's ffmpeg took all four cores at the decoders' priority and video
+  already playing fell to 12-45 fps for several seconds (the wall's QoS feedback then made decoders drop more).
+  Support runs (which upload just before playing): VP9 41.6 → 60 steady, AV1 31 → 48.5, HAP 56.5 → 59.3.
 - **Motion JPEG: `cutepimjpegdec`** (`gsp/mjpegdec`, 2026-10-13): every MJPEG frame is a complete JPEG, so three
   `jpegdec` instances (each in a small in-process pipeline) decode frames in parallel and the element finishes them in
   order, passing `jpegdec`'s buffers on without a copy; byte-identical to `jpegdec`. Moving pictures only (its caps

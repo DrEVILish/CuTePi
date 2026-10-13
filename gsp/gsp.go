@@ -9,6 +9,7 @@ import (
 	"CuTePi/gsp/mjpegdec"
 	"CuTePi/gsp/planewall"
 	"CuTePi/gsp/pngvdec"
+	"CuTePi/gsp/qtmkv"
 	"CuTePi/gsp/scanout"
 	"errors"
 	"fmt"
@@ -165,6 +166,8 @@ func gstInit() {
 		}
 		// Interlaced video to a picture per field (gsp/bobdeint).
 		bobdeint.Register()
+		// HAP and QuickTime Animation in Matroska (gsp/qtmkv).
+		qtmkv.Register()
 		// Motion JPEG on several cores (gsp/mjpegdec).
 		if mjpegdec.Register() {
 			logs.Printf(logs.GSPPipeDebug, "gsp: Motion JPEG decoder: parallel jpegdec (cutepimjpegdec)")
