@@ -287,9 +287,9 @@ func capsInterlaced(caps *gst.Caps) bool {
 // shows as 60 pictures a second without combing. In the plain tail it
 // replaces the ISP: it writes its pictures into CMA DMABufs the GPU samples
 // directly (configureGLTail sets dmabuf), behind videoconvert (after the
-// NEON packer), which passes I420 through. In the software turning tail it
-// goes ahead of the tail's videoconvert, with a queue after it. Other tails
-// (alpha, packed RGB, turned hardware video) are left woven.
+// NEON packer), which passes I420 through. In the other software tails
+// (turning, alpha, packed RGB) it goes ahead of the tail's first videoconvert,
+// with a queue after it. The turned hardware tail is left woven.
 //
 // What did not work, 1080i H.264 from the hardware decoder (its frames sit in
 // uncached memory): GStreamer's deinterlace (linear, the only method fast
@@ -310,12 +310,13 @@ func glDeinterlace(names []string, interlaced bool) []string {
 		out := append([]string{}, names[:isp-1]...) // up to and with videoconvert
 		return append(out, "cutepibob", "queue", "capsfilter", "appsink")
 	}
-	// The turning tail that scales on the CPU and ends in the ISP: a
-	// videoconvert ahead of cutepibob (YUV passes through) in front of the
-	// tail's own. Alpha and packed-RGB tails and the turned hardware tail
-	// (ISP download first) stay woven: cutepibob takes planar YUV only, and
-	// combed pictures beat a cue that does not link.
-	if isp > flip && flip > 0 && indexOfName(names, "identity") < 0 {
+	// Every other software tail (turning, alpha, packed RGB): a videoconvert
+	// (which passes cutepibob's formats through, alpha and packed RGB
+	// included), cutepibob and a queue ahead of the tail's first
+	// videoconvert. The turned hardware tail (identity: the ISP downloads and
+	// scales first, its first videoconvert works on the turned RGBA) stays
+	// woven.
+	if indexOfName(names, "identity") < 0 {
 		if i := indexOfName(names, "videoconvert"); i >= 0 {
 			return append(append(append([]string{}, names[:i]...), "videoconvert", "cutepibob", "queue"), names[i:]...)
 		}

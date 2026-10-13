@@ -10,8 +10,10 @@
  * and topped out at 60 pictures a second on a whole core) and both pictures
  * are written from it.
  *
- * Planar 8-bit formats; for 4:2:0 the chroma rows alternate between the fields
- * like the luma rows, so every plane is treated the same way.
+ * 8-bit formats, planar or packed, alpha included: each plane is rows of
+ * bytes (a packed row is all its pixels' bytes), and for 4:2:0 the chroma rows
+ * alternate between the fields like the luma rows, so every plane is treated
+ * the same way.
  *
  * With dmabuf=true (the GPU wall) the pictures are written into the element's
  * own CMA dma-heap buffers (cached; the allocator syncs the cache on map and
@@ -48,7 +50,8 @@ G_DEFINE_TYPE (CutepiBob, cutepi_bob, GST_TYPE_ELEMENT);
 
 enum { PROP_0, PROP_TFF, PROP_DMABUF };
 
-#define FORMATS "{ I420, YV12, Y42B, Y444, NV12, NV21, GRAY8 }"
+#define FORMATS "{ I420, YV12, Y42B, Y444, NV12, NV21, GRAY8, A420, A444, GBR, GBRA, AYUV, " \
+  "RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, YUY2, UYVY, YVYU }"
 static GstStaticPadTemplate sink_t = GST_STATIC_PAD_TEMPLATE ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (FORMATS)));
 static GstStaticPadTemplate src_t = GST_STATIC_PAD_TEMPLATE ("src", GST_PAD_SRC, GST_PAD_ALWAYS,

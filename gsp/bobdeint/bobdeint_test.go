@@ -35,13 +35,14 @@ func pull(t *testing.T, desc string) (frames [][]byte, pts []time.Duration) {
 
 // cutepibob gives what GStreamer's linear deinterlacer gives (one picture
 // per field, the rows between the mean of their neighbours), in both field
-// orders and for planar and semi-planar 4:2:0, with field-rate timestamps.
+// orders, for planar and semi-planar 4:2:0, 4:4:4, packed RGB and packed
+// YUV with and without alpha, with field-rate timestamps.
 func TestMatchesLinearDeinterlace(t *testing.T) {
 	gst.Init(nil)
 	if !Register() {
 		t.Fatal("not registered")
 	}
-	for _, fmtName := range []string{"I420", "NV12"} {
+	for _, fmtName := range []string{"I420", "NV12", "RGBA", "BGRx", "RGB", "AYUV", "YUY2", "Y444"} {
 		for _, tff := range []bool{true, false} {
 			order, deintTff := "top-field-first", "tff"
 			if !tff {
@@ -142,6 +143,39 @@ func TestDMABufOutput(t *testing.T) {
 						t.Fatalf("%s picture %d plane %d row %d differs", name, i, pi, y)
 					}
 				}
+			}
+		}
+	}
+}
+
+// A420 (4:2:0 with an alpha plane, which deinterlace does not take): the
+// colour planes come out as for I420 and the alpha plane is deinterlaced the
+// same way (opaque here: it stays 255).
+func TestA420(t *testing.T) {
+	gst.Init(nil)
+	if !Register() {
+		t.Fatal("not registered")
+	}
+	src := func(f string) string {
+		return fmt.Sprintf("videotestsrc pattern=ball num-buffers=4 ! video/x-raw,format=%s,width=64,height=48,framerate=25/1,interlace-mode=interleaved,field-order=top-field-first", f)
+	}
+	i420, _ := pull(t, src("I420")+" ! cutepibob ! appsink name=k sync=false")
+	a420, _ := pull(t, src("A420")+" ! cutepibob ! appsink name=k sync=false")
+	// The alpha plane through bob as a GRAY8 picture of the same rows.
+	if len(i420) != 8 || len(a420) != 8 {
+		t.Fatalf("%d I420 and %d A420 pictures, want 8", len(i420), len(a420))
+	}
+	n := 64*48 + 2*32*24
+	for i := range i420 {
+		if len(a420[i]) != n+64*48 {
+			t.Fatalf("A420 picture %d: %d bytes, want %d", i, len(a420[i]), n+64*48)
+		}
+		if string(a420[i][:n]) != string(i420[i][:n]) {
+			t.Errorf("A420 picture %d: colour planes differ from I420", i)
+		}
+		for _, a := range a420[i][n:] {
+			if a != 255 {
+				t.Fatalf("A420 picture %d: alpha %d, want 255 (opaque source)", i, a)
 			}
 		}
 	}

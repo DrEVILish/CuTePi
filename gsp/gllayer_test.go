@@ -313,10 +313,10 @@ func TestFadeLandAndAudioSyncOffWall(t *testing.T) {
 
 // An interlaced cue's plain software tail becomes videoconvert → cutepibob
 // (DMABufs out) → queue → appsink, without the ISP; the software turning
-// tail gets videoconvert, cutepibob and a queue before its own videoconvert;
-// alpha, packed-RGB and turned hardware tails stay woven (cutepibob takes
-// planar YUV only); progressive tails are left alone, and an interlaced file
-// leaves the DMABuf route.
+// tail and the alpha and packed-RGB tails get videoconvert, cutepibob and a
+// queue before their first videoconvert; the turned hardware tail stays
+// woven; progressive tails are left alone, and an interlaced file leaves the
+// DMABuf route.
 func TestGLDeinterlace(t *testing.T) {
 	gst.Init(nil)
 	sw := glVideoTail(false, "I420", false, false)
@@ -333,8 +333,9 @@ func TestGLDeinterlace(t *testing.T) {
 		t.Errorf("route %q, want bob", r)
 	}
 	for _, f := range []string{"RGBA", "BGRx", "A420"} {
-		if got := glDeinterlace(glVideoTail(false, f, false, false), true); indexOfName(got, "cutepibob") >= 0 {
-			t.Errorf("%s tail %v: cutepibob takes planar YUV only; the cue would not link", f, got)
+		got := glDeinterlace(glVideoTail(false, f, false, false), true)
+		if strings.Join(got, " ") != "queue videoconvert cutepibob queue videoconvert capsfilter appsink" {
+			t.Errorf("%s tail %v: want videoconvert, cutepibob, queue ahead of the tail's videoconvert", f, got)
 		}
 	}
 	flip := glDeinterlace(glVideoTail(false, "I420", true, false), true)
@@ -342,13 +343,12 @@ func TestGLDeinterlace(t *testing.T) {
 	if di < 1 || vc != di-1 || flip[di+1] != "queue" || flip[di+2] != "videoconvert" {
 		t.Errorf("interlaced turning tail %v: want videoconvert, cutepibob, queue, videoconvert", flip)
 	}
-	for _, c := range []struct {
-		format string
-		hw     bool
-	}{{"RGBA", false}, {"I420", true}} {
-		tail := glVideoTail(false, c.format, true, c.hw)
+	if alpha := glDeinterlace(glVideoTail(false, "RGBA", true, false), true); indexOfName(alpha, "cutepibob") < 0 {
+		t.Errorf("turning RGBA tail %v: no deinterlacer", alpha)
+	}
+	if tail := glVideoTail(false, "I420", true, true); indexOfName(tail, "identity") >= 0 {
 		if got := glDeinterlace(tail, true); strings.Join(got, " ") != strings.Join(tail, " ") {
-			t.Errorf("turning %s tail (hw %v) %v: want it left woven, got %v", c.format, c.hw, tail, got)
+			t.Errorf("turned hardware tail %v: want it left woven, got %v", tail, got)
 		}
 	}
 	if got := glDeinterlace(sw, false); indexOfName(got, "cutepibob") >= 0 {
