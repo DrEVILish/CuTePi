@@ -84,7 +84,7 @@ func TestDMABufOutput(t *testing.T) {
 		format, drm string
 		w           int
 		stride      int // padded luma stride
-	}{{"I420", "YU12", 1920, 1920}, {"I420", "YU12", 720, 768}, {"NV12", "NV12", 720, 768}} {
+	}{{"I420", "YU12", 1920, 1920}, {"I420", "YU12", 720, 768}} {
 		src := fmt.Sprintf("videotestsrc pattern=ball num-buffers=3 ! video/x-raw,format=%s,width=%d,height=48,framerate=25/1,interlace-mode=interleaved,field-order=top-field-first", c.format, c.w)
 		want, _ := pull(t, src+" ! cutepibob ! appsink name=k sync=false")
 		pipe, err := gst.NewPipelineFromString(src + " ! cutepibob dmabuf=true ! appsink name=k sync=false")

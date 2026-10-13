@@ -18,7 +18,7 @@
  * unmap) and leave as DMA_DRM DMABufs the GPU samples directly. Before, the
  * ISP copied every picture from system memory into a DMABuf: 60 copies a
  * second on the VideoCore beside the H.264 decoder, which held 1080i H.264 at
- * 55 pictures a second. 4:2:0 only (I420, YV12, NV12, NV21) in that mode. */
+ * 55 pictures a second. I420 only in that mode. */
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/allocators/gstdmabuf.h>
@@ -55,7 +55,9 @@ static GstStaticPadTemplate src_t = GST_STATIC_PAD_TEMPLATE ("src", GST_PAD_SRC,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (FORMATS) ";"
         GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF, "DMA_DRM")));
 /* What the sink takes in dmabuf mode. */
-static GstStaticCaps dmabuf_in = GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("{ I420, YV12, NV12, NV21 }"));
+/* What the sink takes in dmabuf mode: I420 (YU12), the layout the ISP gave
+ * the wall before; a converter ahead normalises the rest. */
+static GstStaticCaps dmabuf_in = GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("I420"));
 
 /* ---- a pool of CMA dma-heap buffers --------------------------------------- */
 typedef struct {
@@ -370,7 +372,7 @@ cutepi_bob_class_init (CutepiBobClass * k)
   g_object_class_install_property (ok, PROP_TFF, g_param_spec_boolean ("tff", "Top field first",
           "The top field is shown first", TRUE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (ok, PROP_DMABUF, g_param_spec_boolean ("dmabuf", "DMABuf output",
-          "Write the pictures into CMA dma-heap buffers and pass them on as DMA_DRM DMABufs (4:2:0 only)", FALSE,
+          "Write the pictures into CMA dma-heap buffers and pass them on as DMA_DRM DMABufs (I420 only)", FALSE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   GST_ELEMENT_CLASS (k)->change_state = bob_change_state;
   gst_element_class_add_static_pad_template (GST_ELEMENT_CLASS (k), &sink_t);

@@ -287,8 +287,9 @@ func capsInterlaced(caps *gst.Caps) bool {
 // shows as 60 pictures a second without combing. In the plain tail it
 // replaces the ISP: it writes its pictures into CMA DMABufs the GPU samples
 // directly (configureGLTail sets dmabuf), behind videoconvert (after the
-// NEON packer), which passes 4:2:0 through. In a turning tail it goes ahead
-// of the first videoconvert, with a queue after it.
+// NEON packer), which passes I420 through. In the software turning tail it
+// goes ahead of the tail's videoconvert, with a queue after it. Other tails
+// (alpha, packed RGB, turned hardware video) are left woven.
 //
 // What did not work, 1080i H.264 from the hardware decoder (its frames sit in
 // uncached memory): GStreamer's deinterlace (linear, the only method fast
@@ -303,14 +304,20 @@ func glDeinterlace(names []string, interlaced bool) []string {
 	// The plain ISP tail (no turning): cutepibob writes DMABufs the GPU
 	// samples itself, so the ISP's copy into DMABufs (one per picture, 60 a
 	// second on the VideoCore beside the hardware decoder) goes. videoconvert
-	// passes 4:2:0 through untouched (and the decoder's frames uncopied).
-	if i := indexOfName(names, "v4l2convert"); i > 0 && indexOfName(names, "videoflip") < 0 && names[i-1] == "capsfilter" {
-		out := append([]string{}, names[:i-1]...) // up to and with videoconvert
+	// passes I420 through untouched (and the decoder's frames uncopied).
+	isp, flip := indexOfName(names, "v4l2convert"), indexOfName(names, "videoflip")
+	if isp > 0 && flip < 0 && names[isp-1] == "capsfilter" {
+		out := append([]string{}, names[:isp-1]...) // up to and with videoconvert
 		return append(out, "cutepibob", "queue", "capsfilter", "appsink")
 	}
-	for i, n := range names {
-		if n == "videoconvert" {
-			return append(append(append([]string{}, names[:i]...), "cutepibob", "queue"), names[i:]...)
+	// The turning tail that scales on the CPU and ends in the ISP: a
+	// videoconvert ahead of cutepibob (YUV passes through) in front of the
+	// tail's own. Alpha and packed-RGB tails and the turned hardware tail
+	// (ISP download first) stay woven: cutepibob takes planar YUV only, and
+	// combed pictures beat a cue that does not link.
+	if isp > flip && flip > 0 && indexOfName(names, "identity") < 0 {
+		if i := indexOfName(names, "videoconvert"); i >= 0 {
+			return append(append(append([]string{}, names[:i]...), "videoconvert", "cutepibob", "queue"), names[i:]...)
 		}
 	}
 	return names
