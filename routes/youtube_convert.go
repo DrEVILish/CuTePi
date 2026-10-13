@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"CuTePi/gsp"
 	"CuTePi/logs"
+	"CuTePi/media"
 	"CuTePi/ws"
 )
 
@@ -77,7 +77,7 @@ var ytEncodeTimeout = 24 * time.Hour
 // probeVideoCodec returns the codec name of the file's first video stream
 // ("" for none).
 func probeVideoCodec(ctx context.Context, path string) (string, error) {
-	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
+	out, err := media.BackgroundCommand(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
 		"-show_entries", "stream=codec_name", "-of", "default=nw=1:nk=1", "--", path).Output()
 	return strings.TrimSpace(string(out)), err
 }
@@ -85,7 +85,7 @@ func probeVideoCodec(ctx context.Context, path string) (string, error) {
 // probeVideo returns the duration in seconds and whether the first video
 // stream has more than 8 bits per sample.
 func probeVideo(ctx context.Context, path string) (float64, bool) {
-	out, _ := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
+	out, _ := media.BackgroundCommand(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
 		"-show_entries", "stream=pix_fmt:format=duration", "-of", "default=nw=1", "--", path).Output()
 	var dur float64
 	deep := false
@@ -168,7 +168,7 @@ func runConversion(j *convJob) {
 	args := append([]string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", j.src,
 		"-map", "0:v:0", "-map", "0:a?", "-map", "0:s?"}, vargs...)
 	args = append(args, "-c:a", "copy", "-c:s", "copy", "-progress", "pipe:1", "-nostats", dst)
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := media.BackgroundCommand(ctx, "ffmpeg", args...)
 	stdout, err := cmd.StdoutPipe()
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -208,9 +207,10 @@ const ytDlpSort = "res:1080,fps"
 // downloadWithYtDlp shells out to yt-dlp to fetch url, using yt-dlp's own
 // filename templating, and returns the temp dir holding the download plus
 // the resulting filename (relative to that dir), resolved via --print
-// filename. Both invocations run under exec.CommandContext so a hung
-// yt-dlp (network black hole, spinner) fails the request after the timeout
-// instead of pinning the HTTP handler forever. The download lands in a
+// filename. Both invocations run under a context (media.BackgroundCommand,
+// at background priority) so a hung yt-dlp (network black hole, spinner)
+// fails the request after the timeout instead of pinning the HTTP handler
+// forever. The download lands in a
 // temp subdir - never directly over an existing media file. Every progress
 // line from the second (download) invocation is passed to onLine, so a
 // streaming handler can mirror yt-dlp's own percentage/speed/ETA.
@@ -246,7 +246,7 @@ func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) 
 	defer cancel()
 	printArgs := append([]string{}, formatArgs...)
 	printArgs = append(printArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "-o", outputTemplate, "--print", "filename", "--", url)
-	printCmd := exec.CommandContext(ctx, "yt-dlp", printArgs...)
+	printCmd := media.BackgroundCommand(ctx, "yt-dlp", printArgs...)
 	printCmd.Dir = tmpDir
 	// stdout only: anything yt-dlp says on stderr (notices, deprecation
 	// warnings) must not end up in the filename.
@@ -277,7 +277,7 @@ func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) 
 	defer cancel()
 	dlArgs := append([]string{}, formatArgs...)
 	dlArgs = append(dlArgs, "--restrict-filenames", "--no-playlist", "--no-warnings", "--newline", "--progress", "-o", outputTemplate, "--", url)
-	dlCmd := exec.CommandContext(ctx, "yt-dlp", dlArgs...)
+	dlCmd := media.BackgroundCommand(ctx, "yt-dlp", dlArgs...)
 	dlCmd.Dir = tmpDir
 
 	// One line-writer per stream so a partial line in stdout can never be

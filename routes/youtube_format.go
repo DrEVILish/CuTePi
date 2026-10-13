@@ -3,11 +3,11 @@ package routes
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"strings"
 
 	"CuTePi/gsp"
 	"CuTePi/logs"
+	"CuTePi/media"
 )
 
 // ytFormat is one stream of yt-dlp's format list (-J).
@@ -69,7 +69,7 @@ func chooseFormat(formats []ytFormat, maxHeight int, gpuWall bool) string {
 func pickNativeFormat(ctx context.Context, url string) string {
 	ctx, cancel := context.WithTimeout(ctx, ytDlpResolveTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "yt-dlp", "-J", "--no-playlist", "--no-warnings", "--", url).Output()
+	out, err := media.BackgroundCommand(ctx, "yt-dlp", "-J", "--no-playlist", "--no-warnings", "--", url).Output()
 	if err != nil {
 		return ""
 	}

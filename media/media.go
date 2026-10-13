@@ -28,14 +28,58 @@ var (
 	WindowTimeout    = 30 * time.Second // one on-demand waveform window (HTTP)
 )
 
-// toolCmd builds a subprocess killed after timeout. WaitDelay bounds Wait
-// even if the killed tool leaves an inherited pipe open. The caller must
-// call cancel once the command has finished.
+// toolCmd builds a subprocess killed after timeout, at background priority
+// (BackgroundCommand). WaitDelay bounds Wait even if the killed tool leaves
+// an inherited pipe open. The caller must call cancel once the command has
+// finished.
 func toolCmd(timeout time.Duration, name string, args ...string) (*exec.Cmd, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := BackgroundCommand(ctx, name, args...)
 	cmd.WaitDelay = 2 * time.Second
 	return cmd, cancel
+}
+
+// BackgroundCommand is exec.CommandContext for import and conversion tools
+// (ffprobe, ffmpeg, yt-dlp): the tool runs at the lowest CPU priority (nice
+// 19) and the lowest best-effort I/O priority, so a running show's decoders
+// keep the cores. An import's ffmpeg (playability check, thumbnail) took all
+// four cores for about half a second at the decoders' own priority, and
+// video playing at the time fell from 60 to 25-45 frames a second for
+// several seconds (VP9, AV1, Theora; the wall's lateness feedback then made
+// the decoders drop more). nice and ionice exec the tool in place, so the
+// PID is the tool's (the context's kill reaches it) and every thread it
+// starts inherits the priority. Without them the tool runs as is.
+func BackgroundCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	if bgNice != "" && bgIonice != "" {
+		return exec.CommandContext(ctx, bgNice, append([]string{"-n", "19", bgIonice, "-c", "2", "-n", "7", "--", name}, args...)...)
+	}
+	return exec.CommandContext(ctx, name, args...)
+}
+
+var bgNice, bgIonice = lookPath("nice"), lookPath("ionice")
+
+// PlaybackBusy reports that something is playing (set by main). While it is,
+// the import's video decodes (playability check, thumbnail) run on one
+// thread: at the lowest priority they still took every idle core and the
+// memory bandwidth the show's decoders need (an AV1 thumbnail: 6 s of CPU
+// over four threads, 4.7 s on one).
+var PlaybackBusy func() bool
+
+// busyThreads are the ffmpeg options that keep a decode to one thread while
+// something plays (none otherwise).
+func busyThreads() []string {
+	if PlaybackBusy != nil && PlaybackBusy() {
+		return []string{"-threads", "1", "-filter_threads", "1"}
+	}
+	return nil
+}
+
+func lookPath(name string) string {
+	p, err := exec.LookPath(name)
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 // Kind classifies a media file for thumbnailing/UI purposes.
@@ -326,7 +370,7 @@ func MeasureLoudness(path string) (float64, error) {
 // decodes just enough data to prove the pipeline could play, without writing
 // output (-f null discards it). Verified only for video/audio.
 func VerifyPlayable(path string) error {
-	cmd, cancel := toolCmd(VerifyTimeout, "ffmpeg", "-v", "error", "-nostdin", "-i", path, "-t", "1", "-f", "null", "-")
+	cmd, cancel := toolCmd(VerifyTimeout, "ffmpeg", append(busyThreads(), "-v", "error", "-nostdin", "-i", path, "-t", "1", "-f", "null", "-")...)
 	defer cancel()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("media: playability probe failed for %q: %w: %s", path, err, out)
@@ -383,6 +427,9 @@ func GenerateThumbnail(srcPath string, kind Kind, duration float64, outPath stri
 			"showwavespic=s=640x360:colors=#a855f7,drawbox=y=(ih/2)-1:w=iw:h=2:color=#6b2fa0:t=fill,format=yuvj420p", "-frames:v", "1", outPath}
 	default:
 		return fmt.Errorf("media: unknown kind %q for %q", kind, srcPath)
+	}
+	if kind != KindAudio {
+		args = append(busyThreads(), args...)
 	}
 	cmd, cancel := toolCmd(ThumbnailTimeout, "ffmpeg", args...)
 	defer cancel()

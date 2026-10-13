@@ -19,6 +19,7 @@ import (
 	"CuTePi/gsp"
 	"CuTePi/gsp/scanout"
 	"CuTePi/gsp/webcache"
+	"CuTePi/media"
 	"CuTePi/routes"
 	"CuTePi/worker"
 )
@@ -99,6 +100,7 @@ func main() {
 	gsp.AlphaLookup = ctp.MediaHasAlpha
 	gsp.FieldOrderLookup = ctp.MediaFieldOrder
 	gsp.CodecLookup = ctp.MediaVideoCodec
+	media.PlaybackBusy = func() bool { return !gsp.WallIdle() || len(gsp.RunningCues()) > 0 }
 
 	// One-time scan flags media whose source files are missing on disk; cues
 	// and pool tiles then surface a warning (see the Missing flag).
