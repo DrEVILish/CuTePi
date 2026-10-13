@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-gst/go-gst/gst"
 )
 
 // A real (if tiny) WAV decodes; bytes that are no media at all are refused
@@ -81,5 +83,33 @@ func TestDecodeCheckAnimatedDuration(t *testing.T) {
 		if diff := d - c.want; diff < -5*time.Millisecond || diff > 5*time.Millisecond {
 			t.Errorf("%s: duration %v, want %v", c.name, d, c.want)
 		}
+	}
+}
+
+// The import's decode check runs its decoders on one thread (it prerolls
+// one frame, inside the service, beside playback); audio decoders, which
+// have no thread setting, are left alone.
+func TestDecodeCheckOneThread(t *testing.T) {
+	gstInit()
+	for _, c := range []struct {
+		factory, prop string
+		want          any
+	}{
+		{"cutepidav1ddec", "n-threads", 1}, {"cutepidav1ddec", "max-frame-delay", 1},
+		{"avdec_h264", "max-threads", 1}, {"vp9dec", "threads", uint(1)},
+		{"cutepimjpegdec", "n-workers", 1}, {"cutepipngvdec", "n-workers", 1},
+	} {
+		e, err := gst.NewElement(c.factory)
+		if err != nil {
+			t.Logf("%s not installed", c.factory)
+			continue
+		}
+		oneDecodeThread(e)
+		if v, _ := e.GetProperty(c.prop); v != c.want {
+			t.Errorf("%s %s = %v, want %v", c.factory, c.prop, v, c.want)
+		}
+	}
+	if e, err := gst.NewElement("avdec_aac"); err == nil {
+		oneDecodeThread(e) // must not touch a property it lacks
 	}
 }

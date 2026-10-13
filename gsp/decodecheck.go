@@ -52,6 +52,11 @@ func DecodeCheck(path string) (time.Duration, error) {
 		p.Set(prop, sink)
 	}
 	p.Set("uri", (&url.URL{Scheme: "file", Path: abs}).String())
+	p.Connect("deep-element-added", func(_, _, e any) {
+		if el, ok := e.(*gst.Element); ok {
+			oneDecodeThread(el)
+		}
+	})
 	defer p.SetState(gst.StateNull)
 	bus := p.GetBus()
 	p.SetState(gst.StatePaused)
@@ -114,4 +119,27 @@ func missingPluginText(st *gst.Structure) string {
 		}
 	}
 	return what + " for " + d
+}
+
+// oneDecodeThread keeps a decoder in the check to one thread. The check runs
+// inside the service at the playback's own priority (its threads are not
+// niced like the import's ffmpeg), and a preroll needs only the first frame:
+// dav1d started a worker per core here, beside whatever the wall was playing.
+func oneDecodeThread(e *gst.Element) {
+	f := e.GetFactory()
+	if f == nil {
+		return
+	}
+	name := f.GetName()
+	switch {
+	case name == "cutepidav1ddec":
+		e.Set("n-threads", 1)
+		e.Set("max-frame-delay", 1)
+	case name == "cutepimjpegdec" || name == "cutepipngvdec" || name == "cutepicfhddec":
+		e.Set("n-workers", 1)
+	case name == "vp8dec" || name == "vp9dec":
+		e.Set("threads", uint(1))
+	case strings.HasPrefix(name, "avdec_") && strings.Contains(f.GetMetadata("klass"), "Video"):
+		e.Set("max-threads", 1)
+	}
 }
