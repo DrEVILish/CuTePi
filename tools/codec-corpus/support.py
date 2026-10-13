@@ -91,6 +91,11 @@ counters, the frames and fade steps that reached the screen.
   --base URL        service URL (default http://127.0.0.1)
   --db PATH         the service's ctp.db (default: from cutepi.service's
                     WORKING_DIR, else /var/lib/cutepi/config/ctp.db)
+  --settle SEC      wait SEC seconds after the upload before playing, so the
+                    import's background work (playability check, thumbnail,
+                    waveform) has finished: a show whose media was imported
+                    beforehand. Default 0: play at once, as an upload during a
+                    show
   --soak MIN        soak test instead: cycle the selected files (use --only)
                     for MIN minutes (play, steady, fade out, stop), recording
                     per-cycle frame rate and frame intervals, the service's
@@ -115,6 +120,7 @@ SECTION = opt("--section", "")   # README marker suffix, e.g. "gl" -> <!-- codec
 JSON_OUT = opt("--json")
 ONLY = [o for o in (opt("--only") or "").split(",") if o]  # comma-separated name substrings
 BASE = opt("--base", "http://127.0.0.1")
+SETTLE = float(opt("--settle", "0"))
 def service_db():
     """The running service's DB: WORKING_DIR from cutepi.service, else the default data dir."""
     try:
@@ -564,6 +570,8 @@ def run(path, mdl, keep=False):
             res["error"] = "import refused: " + (body.strip().splitlines() or [""])[-1][:140]
             res["status"] = mdl + " - unsupported"
             return res
+        if SETTLE > 0:
+            time.sleep(SETTLE)
     try:
         if not pos:
             call("POST", "/api/cue/add/" + urllib.parse.quote(name))
