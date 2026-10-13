@@ -443,7 +443,9 @@ func configureGLTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, names
 			vc.SetArg("capture-io-mode", "dmabuf")
 		}
 	}
-	if conv := firstByFactory(byFactory, "videoconvert"); conv != nil {
+	// Every converter (a deinterlaced tail has a pass-through one ahead of
+	// cutepibob and the working one after it).
+	for _, conv := range byFactory["videoconvert"] {
 		conv.Set("n-threads", uint(4))
 	}
 

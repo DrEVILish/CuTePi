@@ -20,7 +20,9 @@ selection, settings).
   their own container (`.wmv`, `.wma`, `.asf`) and RealMedia need the ASF and
   RealMedia demuxers from `gstreamer1.0-plugins-ugly` (installed on the test Pi
   2026-10-13); its `a52dec` and `mpeg2dec` are ranked out so AC-3 and MPEG-2
-  stay on FFmpeg's decoders (`decoderRankOverrides`).
+  stay on FFmpeg's decoders (`decoderRankOverrides`). It also adds `dvdlpcmdec`,
+  the only DVD LPCM decoder here (LPCM audio in `.vob` now decodes);
+  `dvdsubdec` has rank none and is never autoplugged.
 - **DB**: SQLite3 via `sqlx`
 - **Config/defaults**: `~/cutepi/config/config.json` (env-overridable), port
   3001 default in dev, port 80 in production and test, media in
