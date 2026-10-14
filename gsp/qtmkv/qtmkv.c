@@ -1,6 +1,6 @@
 /* cutepiqtmkvparse: QuickTime codecs in Matroska (DESIGN §12.16).
  *
- * Matroska carries QuickTime-only codecs (HAP, QuickTime Animation) as
+ * Matroska carries QuickTime codecs (HAP, DNxHR/DNxHD, QuickTime Animation) as
  * V_QUICKTIME tracks whose CodecPrivate is the QuickTime sample description.
  * GStreamer's matroskademux does not map them: their pads say only
  * video/x-unknown, codec-id=V_QUICKTIME, without the fourcc, size or frame
@@ -31,7 +31,7 @@ G_DEFINE_TYPE (CutepiQtMkv, cutepi_qtmkv, GST_TYPE_ELEMENT);
 static GstStaticPadTemplate sink_t = GST_STATIC_PAD_TEMPLATE ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-unknown, codec-id=(string)V_QUICKTIME"));
 static GstStaticPadTemplate src_t = GST_STATIC_PAD_TEMPLATE ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-hap; video/x-rle, layout=(string)quicktime"));
+    GST_STATIC_CAPS ("video/x-hap; video/x-dnxhd; video/x-rle, layout=(string)quicktime"));
 
 /* ---- a minimal EBML reader -------------------------------------------------- */
 
@@ -131,6 +131,8 @@ caps_for (const Track * t)
   GstCaps *c = NULL;
   if (g_str_has_prefix (fourcc, "Hap"))
     c = gst_caps_new_simple ("video/x-hap", "variant", G_TYPE_STRING, fourcc, NULL);
+  else if (strcmp (fourcc, "AVdh") == 0 || strcmp (fourcc, "AVdn") == 0)
+    c = gst_caps_new_empty_simple ("video/x-dnxhd");   /* DNxHR / DNxHD */
   else if (strcmp (fourcc, "rle ") == 0) {
     /* depth: 78 bytes into the description (after the fourcc). */
     /* FFmpeg's Matroska muxer writes the description zeroed after the
@@ -270,7 +272,7 @@ cutepi_qtmkv_class_init (CutepiQtMkvClass * k)
   gst_element_class_add_static_pad_template (GST_ELEMENT_CLASS (k), &sink_t);
   gst_element_class_add_static_pad_template (GST_ELEMENT_CLASS (k), &src_t);
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (k), "CuTePi QuickTime-in-Matroska parser",
-      "Codec/Parser/Video", "Caps for Matroska V_QUICKTIME tracks (HAP, QuickTime Animation) from the track header",
+      "Codec/Parser/Video", "Caps for Matroska V_QUICKTIME tracks (HAP, DNxHR, QuickTime Animation) from the track header",
       "CuTePi");
 }
 

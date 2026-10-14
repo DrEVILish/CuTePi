@@ -1,5 +1,5 @@
 // Package qtmkv registers cutepiqtmkvparse (qtmkv.c): caps for QuickTime
-// codecs carried in Matroska (V_QUICKTIME: HAP, QuickTime Animation), read
+// codecs carried in Matroska (V_QUICKTIME: HAP, DNxHR, QuickTime Animation), read
 // from the file's track header, so their decoders are plugged.
 package qtmkv
 

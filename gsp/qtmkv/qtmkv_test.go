@@ -45,7 +45,7 @@ func decode(t *testing.T, uri string) (frames [][]byte, caps string, plugged boo
 	return frames, caps, plugged
 }
 
-// HAP (with and without alpha) and QuickTime Animation in MKV decode, through
+// HAP (with and without alpha), DNxHR and QuickTime Animation in MKV decode, through
 // autoplugging, to the same frames as the same streams in MOV.
 func TestQuickTimeInMatroska(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
@@ -58,10 +58,11 @@ func TestQuickTimeInMatroska(t *testing.T) {
 	dir := t.TempDir()
 	for _, c := range []struct{ name, args string }{
 		{"hap", "-c:v hap"}, {"hap_alpha", "-c:v hap -format hap_alpha -pix_fmt rgba"}, {"qtrle", "-c:v qtrle"},
+		{"dnxhr", "-c:v dnxhd -profile:v dnxhr_lb -pix_fmt yuv422p"},
 	} {
 		for _, ext := range []string{"mov", "mkv"} {
 			out := filepath.Join(dir, c.name+"."+ext)
-			args := append([]string{"-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=25", "-frames:v", "10"},
+			args := append([]string{"-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=256x144:rate=25", "-frames:v", "10"},
 				append(splitArgs(c.args), out)...)
 			if b, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
 				t.Fatalf("%s: ffmpeg: %v %s", out, err, b)
