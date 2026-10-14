@@ -77,7 +77,7 @@ func needsWaveformRebuild(m ctp.Media) bool {
 var rebuildOnce sync.Once
 
 func processOne(m ctp.Media) {
-	kind := media.KindFromExtension(m.Filename)
+	kind := media.KindOf(m.Filename, m.Mimetype)
 	srcPath := filepath.Join(config.MediaLocation(), m.Filename)
 	outPath := filepath.Join(config.ThumbnailLocation(), m.Filename+".jpg")
 

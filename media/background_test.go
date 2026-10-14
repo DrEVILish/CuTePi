@@ -50,3 +50,19 @@ func TestBusyThreads(t *testing.T) {
 		t.Errorf("playing: %q", a)
 	}
 }
+
+// A stored file's kind follows its probed mimetype, else its extension.
+func TestKindOf(t *testing.T) {
+	for _, c := range []struct {
+		name, mime string
+		want       Kind
+	}{
+		{"a.mkv", "audio/matroska,webm", KindAudio}, {"a.mov", "audio/mov,mp4,m4a,3gp,3g2,mj2", KindAudio},
+		{"v.mkv", "video/matroska,webm", KindVideo}, {"v.mkv", "", KindVideo},
+		{"x.wav", "", KindAudio}, {"p.png", "image/png", KindImage},
+	} {
+		if got := KindOf(c.name, c.mime); got != c.want {
+			t.Errorf("KindOf(%q, %q) = %v, want %v", c.name, c.mime, got, c.want)
+		}
+	}
+}

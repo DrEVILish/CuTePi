@@ -550,6 +550,23 @@ func samplesToPeaks(raw []byte, peakBuckets int) []float64 {
 // for files whose container does not say (an AVIF still reports as an MP4
 // family container) and for choosing thumbnail and still handling before
 // metadata exists. Unknown extensions return KindUnknown.
+// KindOf is a stored file's kind: from its probed mimetype ("video/…",
+// "audio/…", "image/…", set by Probe) when there is one, else from its
+// extension. An audio-only MKV or MOV is audio: by extension it was video,
+// and its thumbnail (a video frame grab) failed with "Output file does not
+// contain any stream" instead of drawing its waveform.
+func KindOf(filename, mimetype string) Kind {
+	switch {
+	case strings.HasPrefix(mimetype, "video/"):
+		return KindVideo
+	case strings.HasPrefix(mimetype, "audio/"):
+		return KindAudio
+	case strings.HasPrefix(mimetype, "image/"):
+		return KindImage
+	}
+	return KindFromExtension(filename)
+}
+
 func KindFromExtension(filename string) Kind {
 	switch strings.ToLower(filepath.Ext(filename)) {
 	case ".mp4", ".m4v", ".mkv", ".mov", ".qt", ".avi", ".webm", ".ts", ".m2ts", ".mts", ".m2t", ".mpg", ".mpeg",
