@@ -139,7 +139,15 @@ func oneDecodeThread(e *gst.Element) {
 		e.Set("n-workers", 1)
 	case name == "vp8dec" || name == "vp9dec":
 		e.Set("threads", uint(1))
-	case strings.HasPrefix(name, "avdec_") && strings.Contains(f.GetMetadata("klass"), "Video"):
-		e.Set("max-threads", 1)
+	case strings.HasPrefix(name, "avdec_"):
+		// Video decoders have max-threads, audio decoders do not. Not by
+		// the factory's klass: go-gst's ElementFactory.GetMetadata frees
+		// the string GStreamer still owns, corrupting the factory's
+		// metadata, after which decodebin no longer plugged FFmpeg's
+		// decoders in this process (every ProRes, HAP and AC-3 import was
+		// refused).
+		if _, err := e.GetPropertyType("max-threads"); err == nil {
+			e.Set("max-threads", 1)
+		}
 	}
 }

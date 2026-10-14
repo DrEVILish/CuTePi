@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -111,5 +112,36 @@ func TestDecodeCheckOneThread(t *testing.T) {
 	}
 	if e, err := gst.NewElement("avdec_aac"); err == nil {
 		oneDecodeThread(e) // must not touch a property it lacks
+	}
+}
+
+// Repeated checks keep finding FFmpeg's decoders. A one-thread hook that read
+// each factory's klass through go-gst's GetMetadata (which frees a string
+// GStreamer owns) corrupted the factories: from the second check on, ProRes,
+// HAP and AC-3 had "no GStreamer decoder" until the service restarted.
+func TestDecodeCheckRepeated(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("no ffmpeg")
+	}
+	gstInit()
+	dir := t.TempDir()
+	files := map[string][]string{
+		"p.mov": {"-f", "lavfi", "-i", "testsrc2=size=64x48:rate=25", "-frames:v", "5", "-c:v", "prores_ks"},
+		"h.mov": {"-f", "lavfi", "-i", "testsrc2=size=64x48:rate=25", "-frames:v", "5", "-c:v", "hap"},
+		"a.mkv": {"-f", "lavfi", "-i", "sine=duration=1", "-c:a", "ac3"},
+	}
+	for name, args := range files {
+		out := filepath.Join(dir, name)
+		if b, err := exec.Command("ffmpeg", append(append([]string{"-v", "error", "-y"}, args...), out)...).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v %s", name, err, b)
+		}
+	}
+	for i := 0; i < 4; i++ {
+		for name := range files {
+			if err := CheckDecodable(filepath.Join(dir, name)); err != nil {
+				t.Fatalf("check %d of %s: %v", i+1, name, err)
+			}
+		}
+		runtime.GC()
 	}
 }
