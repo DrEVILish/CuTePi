@@ -563,7 +563,7 @@ wall pipeline (always running)                                    ▼
   `videoconvert n-threads=4` only when the decoder's format is not one the ISP takes (10-bit, planar 4:2:2) →
   `v4l2convert` (ISP) writing **YU12 into DMABufs** (`video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=YU12`; YU12
   is the one linear format the GL driver imports directly as an external-OES texture, NV12 and RGB are not) →
-  `glupload` imports the DMABuf without a copy and the mixer samples it. The bridge's allocation answer asks the ISP
+  `glupload` imports the DMABuf without a copy, as an external-OES texture, and `glcolorconvert` renders it to a 2D texture the mixer samples (the layer's caps ask for `texture-target=2D`: an external-OES texture passed through reached the mixer, which skipped it, and every DMABuf layer was black on HDMI until 2026-10-19). The ISP's output carries no colorimetry: YUV it passes through is read as BT.709 limited range, and RGB it converts comes out full range BT.601 and is read as that (`glISPRGBColorimetry`). The bridge's allocation answer asks the ISP
   for **16** capture buffers (8–31 work; 32 makes `v4l2convert` copy every frame into system memory) and sets
   `colorimetry=bt709` on the layer caps when the source has none (`glcolorconvert` refuses an external YUV input
   without a colour matrix). Measured on HDMI through the whole chain (TEST_REPORT "Software video through the

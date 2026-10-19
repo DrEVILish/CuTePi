@@ -30,6 +30,7 @@ type glLayer struct {
 	level   float64
 	seq     uint64 // attach order (newest highest)
 	route   string // "dmabuf" (hardware), "alpha" (RGBA upload) or "isp"
+	ispRGB  bool   // the ISP is fed packed RGB (glISPRGBColorimetry)
 	caps    string // the frames' caps at the bridge, once attached
 	srcW    int    // the cue's picture size (before any flip), once attached
 	srcH    int
@@ -457,7 +458,7 @@ func configureGLTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, names
 // glRegister records the cue's layer once its tail is in the pipeline and
 // synced to its state (showLayer may be waiting for it; an appsink still in
 // NULL would answer the preroll pull with nothing).
-func glRegister(p *gst.Pipeline, byFactory map[string][]*gst.Element, names []string, opts LoadOpts) {
+func glRegister(p *gst.Pipeline, byFactory map[string][]*gst.Element, names []string, opts LoadOpts, rgbSource bool) {
 	sink := firstByFactory(byFactory, "appsink")
 	if sink == nil {
 		return
@@ -470,9 +471,19 @@ func glRegister(p *gst.Pipeline, byFactory map[string][]*gst.Element, names []st
 		glMu.Unlock()
 		return
 	}
-	glLayers[p] = &glLayer{appsink: sink, opts: opts, opacity: opacityOf(opts), level: 1, route: glRoute(names)}
+	glLayers[p] = &glLayer{appsink: sink, opts: opts, opacity: opacityOf(opts), level: 1, route: glRoute(names),
+		ispRGB: rgbSource && glRoute(names) == "isp"}
 	glMu.Unlock()
 }
+
+// glISPRGBColorimetry is how the wall reads the ISP's output when the ISP
+// is fed packed RGB (videoconvert passes RGB, BGR and BGRx to it as they
+// are): its YUV then comes out full range with the BT.601 matrix, and
+// unlabelled. Read as the default (BT.709, limited range) the SMPTE bars'
+// grey 189 showed as 200 and green 189 as 167. Full range (1), BT.601 (4),
+// transfer and primaries unknown. YUV the ISP passes through as it came,
+// and the default holds for HD sources.
+const glISPRGBColorimetry = "1:4:0:0"
 
 // glLayerWait is how long showLayer waits for a cue's tail to exist:
 // decodebin3 adds its pads after the pipeline reports PAUSED, so the tail
@@ -501,7 +512,11 @@ func glAttachLocked(p *gst.Pipeline, l *glLayer) bool {
 		return true
 	}
 	dir := glDirection(l.opts.Rotation, l.opts.Flip)
-	layer, err := glwall.Attach(l.appsink, "bt709")
+	colorimetry := "bt709"
+	if l.ispRGB {
+		colorimetry = glISPRGBColorimetry
+	}
+	layer, err := glwall.Attach(l.appsink, colorimetry)
 	if err != nil {
 		logs.Printf(logs.GSPPipeDebug, "gsp: GL wall layer: %v", err)
 		return false

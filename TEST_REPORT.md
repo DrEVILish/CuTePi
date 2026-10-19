@@ -46,6 +46,14 @@ Each entry gives:
 3. The fix for the most likely cause.
 4. Related issues to check.
 
+### P2 — GPU wall: HDMI black, every DMABuf layer undrawn (fixed 2026-10-19)
+
+- **Found:** the user saw no video on HDMI. Reading back the framebuffer the wall plane scans out (`tools/screen/scanout.py`: GETFB2, MAP_DUMB, mmap, as root, read-only) gave 0 of 2025 samples non-black with the SMPTE still (ISP route) and H.264 (hardware route) visible at level 1, while the wall's counters showed 60 frames/s presented and the cues' frames shown. Builds of 10 Oct (e5531b1) and e391389 were black too. The KMS plane wall showed the bars. The readback itself was checked on a dumb buffer the GPU cleared to red through an EGLImage.
+- **Cause:** `glupload` imports a DMABuf as an external-OES RGBA texture; the layer's capsfilter did not ask for a 2D target, so `glcolorconvert` passed it through and `glvideomixer` skipped the pad ("skipping texture:0 … alpha:1.000000" with `GST_DEBUG=glvideomixer:5`). A white base input read back white with the layer over it: the mixer's output did reach the screen.
+- **Fix (fa239b5):** `texture-target=2D` on the layer caps. SMPTE still, blue PNG, two H.264 cues on screen; 59.0 presented/s with a 30 fps H.264 cue, all its frames shown.
+- **Second fault, then visible: colours of RGB stills through the ISP.** The ISP converts RGB to full-range BT.601 YUV and labels nothing; read as BT.709 limited range, grey 189 showed as 200, green 189 as 167, red 189 as 215. The layer is now read as full range BT.601 when the ISP is fed RGB: every bar within 2 of the PNG (the KMS wall matches the PNG exactly).
+- **Consequence:** GPU-wall results on the DMABuf and ISP routes since early October counted frames of layers that were not drawn (the extra `glcolorconvert` pass now costs GPU time per layer); they are being re-measured.
+
 ### P1 — `cutepi-test.drevilish.com` does not load (fixed)
 
 1. **Causes:**

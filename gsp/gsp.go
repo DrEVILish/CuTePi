@@ -2714,7 +2714,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			return
 		}
 		if isVideo && glOpen && !spec.warmSink {
-			glRegister(pipeline, byFactory, elementNames, spec.opts)
+			glRegister(pipeline, byFactory, elementNames, spec.opts, isPackedRGB(glPadFormat(caps, spec.filename)))
 		}
 	})
 
