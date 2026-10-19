@@ -53,6 +53,18 @@ Each entry gives:
 - **Fix (fa239b5):** `texture-target=2D` on the layer caps. SMPTE still, blue PNG, two H.264 cues on screen; 59.0 presented/s with a 30 fps H.264 cue, all its frames shown.
 - **Second fault, then visible: colours of RGB stills through the ISP.** The ISP converts RGB to full-range BT.601 YUV and labels nothing; read as BT.709 limited range, grey 189 showed as 200, green 189 as 167, red 189 as 215. The layer is now read as full range BT.601 when the ISP is fed RGB: every bar within 2 of the PNG (the KMS wall matches the PNG exactly).
 - **Third fault: the copy route (moving RGBA and packed RGB: animated GIF, alpha video, QuickTime Animation) drew opaque black.** Its slot textures wrap EGLImages and never had filters set; GL's default minifying filter wants mipmaps, so the textures were incomplete and sampled as (0, 0, 0, 1) (a white base read back black under a GIF). Linear filtering and clamp-to-edge are now set when the slots are imported: an animated GIF, a transparent rotating-Earth GIF and a VP9 lower third with alpha on screen, transparency kept.
+- **The GPU wall with layers drawn cannot carry moving 1080p video (measured 2026-10-20).** One 1080p60 layer:
+  H.264 and HEVC 15.8-16.5 presented frames/s (mixed 60), MPEG-2 on the dma-heap route 28.7; a still 60.1. V3D
+  `gpu_stats`: render queue 92% busy at 5.2-6.4 ms a job with a moving layer, 19% idle, 30% with a still; V3D at
+  650 MHz (mailbox). Standalone, `v4l2h264dec ! glupload ! glcolorconvert ! glcolorbalance` runs at 88 fps, so
+  the cost lies in the wall's combination (the convert pass and the mix into the linear scanout ring). Support runs
+  on the GPU wall (17 software-decoded files, two passes per route): none supported; dma-heap route 19-27 steady
+  fps for the cheap codecs against 13-16 through the ISP.
+- **The plane wall presenter on the same build** (`CUTEPI_WALL_SINK=planesink`, temporarily): pictures read back
+  (H.264 from the decoder's buffer, MPEG-2 from the scanout pool; HEVC was checked bit-exact on 10 Oct), and of 11
+  key files 9 supported (H.264, HEVC, MPEG-2, VP8, MJPEG, AV1, DNxHR LB, alpha PNG, JPEG, GIF at its 25 fps; H.264
+  High and ProRes Proxy 58.9 and 58.7 on one fade-in). The test Pi was put back on the GPU wall; which wall is the
+  default is the user's decision.
 - **Consequence:** GPU-wall results on the DMABuf and ISP routes since early October counted frames of layers that were not drawn (the extra `glcolorconvert` pass now costs GPU time per layer); they are being re-measured.
 
 ### P1 — `cutepi-test.drevilish.com` does not load (fixed)
