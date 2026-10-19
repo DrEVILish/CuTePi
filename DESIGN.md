@@ -1741,10 +1741,19 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   at ~45 fps (QuickTime Animation 43.7 → 55.2 steady, a 50 fps GIF 43 → 50). Opaque packed RGB stills keep the ISP
   route (on the copy route a 24-bit PNG still faded in at 44 steps/s). The route is chosen from the pad's format when
   its caps name a single one, even before the size is fixed (`cutepianimdec`, always RGBA).
-- **GPU wall software route** (decoder → `cutepiyuvpack` → `videoconvert` → ISP `v4l2convert` → YU12 dmabufs):
-  about 70-85 fps flat out for 1080p, so a decoder near 60 can fall short in the service beside the mixer (VP9
-  corpus file 13-37 fps, YouTube VP9 59.8). A CPU copy into system dma-heap buffers instead of the ISP measured
-  +15% for VP9, -9% for ProRes: not adopted.
+- **GPU wall software route: system dma-heap buffers** (2026-10-19; decoder → `cutepiyuvpack` → `videoconvert` →
+  `cutepisysdmabuf` → `DMA_DRM` YU12/NV12): each I420/NV12 frame (10-bit and 4:2:2 packed to I420 first) is copied by
+  the CPU into a buffer from `/dev/dma_heap/system` (cached, no CMA; V3D has an MMU), bracketed by
+  `DMA_BUF_IOCTL_SYNC`, and `glupload` imports it in place (`DirectDmabufExternal`). Other YUV layouts keep the ISP.
+  The tail's format comes from the import's pixel format (`ffHeapYUV`) when the decoder's pad is not fixed yet.
+  Checks: every frame read back from the GPU equals the same frame uploaded from system memory (`gsp/sysdmabuf`
+  test, I420 and NV12); on HDMI MPEG-2, VP8, AV1, ProRes, DNxHR, MJPEG, VP9 and a JPEG still (mean difference
+  1.07 levels from the file, since the decoder's colorimetry is kept). Against the ISP route, two interleaved
+  support runs each on the GPU wall, layers drawn (steady fps, heap / ISP): MPEG-2 20.4-23.1 / 14.0-14.2, VP8
+  20.0-22.1 / 12.6-15.4, MJPEG 22.2-26.9 / 15.2-15.8, FFV1 21.2-25.2 / 13.8-14.0, DNxHR LB 21.8-22.2 / 14.1-15.8,
+  MPEG-4 19.3-20.5 / 12.8-14.0, VP9 19.6-20.2 / 6.3-10.7; decode-bound codecs (CineForm, ProRes, Theora, 10-bit
+  H.264, AV1) about level. `CUTEPI_GL_SWROUTE=isp` keeps the ISP for comparisons. The wall itself is the limit
+  here, not the route: with a moving 1080p layer drawn, the V3D render queue is 92% busy (TEST_REPORT P2).
 - **Not usable on the Pi 4:** the VideoCore MJPEG decoder (its end of stream hangs the firmware until a reboot;
   demoted), OpenVVC (wrong output), VVC in FFmpeg (16 fps), Daniel2 and MLVC (no ARM/NPU support), CEF for live
   pages (16.8-28 fps through its CPU path; no dmabuf output without a display server).

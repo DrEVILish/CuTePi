@@ -10,6 +10,7 @@ import (
 
 	"CuTePi/gsp/bobdeint"
 	"CuTePi/gsp/glwall"
+	"CuTePi/gsp/sysdmabuf"
 )
 
 // A point on the picture, centred, y down: where each operation sends it.
@@ -101,6 +102,10 @@ func TestGLVideoTailShapes(t *testing.T) {
 	if len(dl) == 0 {
 		hwTurnedRoute = "isp" // no ISP: the software path
 	}
+	swRoute, swCaps := "isp", 2 // I420 and NV12: system dma-heap buffers where the heap opens
+	if sysdmabuf.Register() {
+		swRoute, swCaps = "heap", 1
+	}
 	cases := []struct {
 		name                string
 		dmabuf, flip, hw    bool
@@ -114,7 +119,9 @@ func TestGLVideoTailShapes(t *testing.T) {
 		{"alpha as ARGB", false, false, false, "ARGB", "alpha", 1, false, false},
 		{"packed RGB (qtrle, BMP)", false, false, false, "RGB", "alpha", 1, false, false},
 		{"packed BGRx", false, false, false, "BGRx", "alpha", 1, false, false},
-		{"software via ISP", false, false, false, "I420", "isp", 2, false, false},
+		{"software I420", false, false, false, "I420", swRoute, swCaps, false, false},
+		{"software 10-bit 4:2:2", false, false, false, "I422_10LE", swRoute, swCaps, false, false},
+		{"software via ISP", false, false, false, "YUY2", "isp", 2, false, false},
 		{"software turned", false, true, false, "I420", "isp", 2, false, true},
 		{"alpha turned", false, true, false, "RGBA", "alpha", 1, false, true},
 		{"hardware turned", false, true, true, "", hwTurnedRoute, 2, len(dl) > 0, true},
@@ -203,9 +210,12 @@ func TestGLTailFormat(t *testing.T) {
 	savedCodec := CodecLookup
 	defer func() { CodecLookup = savedCodec }()
 	CodecLookup = func(name string) string {
-		return map[string]string{"anim.mov": "qtrle/rgb24", "argb.mov": "qtrle/argb", "h264.mov": "h264/yuv420p"}[name]
+		return map[string]string{"anim.mov": "qtrle/rgb24", "argb.mov": "qtrle/argb", "h264.mov": "h264/yuv420p",
+			"prores.mov": "prores/yuv422p10le", "odd.mov": "ffv1/yuv444p"}[name]
 	}
-	for name, want := range map[string]string{"anim.mov": "RGB", "argb.mov": "ARGB", "h264.mov": "", "none.mov": ""} {
+	// ... and a YUV file the layout the dma-heap tail is chosen by.
+	for name, want := range map[string]string{"anim.mov": "RGB", "argb.mov": "ARGB", "h264.mov": "I420",
+		"prores.mov": "I422_10LE", "odd.mov": "", "none.mov": ""} {
 		if got := glTailFormat(unfixed, name); got != want {
 			t.Errorf("unfixed caps, %s: %q, want %q", name, got, want)
 		}
@@ -397,5 +407,21 @@ func TestConfigureDeinterlace(t *testing.T) {
 		if v, _ := f.GetProperty("tff"); v != c.tff {
 			t.Errorf("%s (caps %v): tff %v, want %v", c.file, c.caps, v, c.tff)
 		}
+	}
+}
+
+// CUTEPI_GL_SWROUTE=isp keeps I420 on the ISP; formats the dma-heap tail
+// does not copy (YUY2) always take the ISP.
+func TestGLHeapRoute(t *testing.T) {
+	gst.Init(nil)
+	if !sysdmabuf.Register() {
+		t.Skip("no system dma-heap")
+	}
+	if !glHeapRoute("I420") || !glHeapRoute("NV12") || glHeapRoute("YUY2") || glHeapRoute("") {
+		t.Error("heap route: I420/NV12 only")
+	}
+	t.Setenv("CUTEPI_GL_SWROUTE", "isp")
+	if glHeapRoute("I420") {
+		t.Error("CUTEPI_GL_SWROUTE=isp must keep the ISP")
 	}
 }

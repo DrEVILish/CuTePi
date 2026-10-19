@@ -9,6 +9,7 @@ package gsp
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 
 	"CuTePi/gsp/glwall"
+	"CuTePi/gsp/sysdmabuf"
 	"CuTePi/logs"
 )
 
@@ -29,7 +31,7 @@ type glLayer struct {
 	parked  bool // armed panic image: attached at the top, alpha 0
 	level   float64
 	seq     uint64 // attach order (newest highest)
-	route   string // "dmabuf" (hardware), "alpha" (RGBA upload) or "isp"
+	route   string // "dmabuf" (hardware), "alpha" (RGBA upload), "isp", "heap" or "bob"
 	ispRGB  bool   // the ISP is fed packed RGB (glISPRGBColorimetry)
 	caps    string // the frames' caps at the bridge, once attached
 	srcW    int    // the cue's picture size (before any flip), once attached
@@ -37,7 +39,8 @@ type glLayer struct {
 }
 
 // glRoute names a GL tail (glVideoTail) by what reaches its appsink: the
-// decoder's DMABufs ("dmabuf"), the ISP's YU12 DMABufs ("isp"), or RGBA in
+// decoder's DMABufs ("dmabuf"), the ISP's YU12 DMABufs ("isp"), system
+// dma-heap DMABufs filled by cutepisysdmabuf ("heap"), or RGBA in
 // RAM that the wall copies ("alpha"). A turned hardware cue's tail starts
 // with an ISP scale but ends in RGBA, so the last converter decides.
 func glRoute(names []string) string {
@@ -45,6 +48,8 @@ func glRoute(names []string) string {
 		switch names[i] {
 		case "v4l2convert":
 			return "isp"
+		case "cutepisysdmabuf":
+			return "heap"
 		case "cutepibob":
 			return "bob"
 		case "videoconvert", "videoflip", "videoscale":
@@ -172,11 +177,37 @@ func glVideoTail(dmabuf bool, format string, flip, hw bool) []string {
 		return append(names, "v4l2convert", "capsfilter", "appsink") // to YU12 DMABufs, as the ISP route
 	case hasAlphaFormat(format) || isPackedRGB(format):
 		return []string{"queue", "videoconvert", "capsfilter", "appsink"}
+	case glHeapRoute(format):
+		// I420/NV12 (10-bit and 4:2:2 packed to I420 first): one CPU copy
+		// into system dma-heap buffers the GPU samples in place
+		// (cutepisysdmabuf), the VideoCore left to the hardware decoders.
+		return append(append([]string{"queue"}, packStage()...), "videoconvert", "capsfilter", "cutepisysdmabuf", "appsink")
 	default:
 		// 10-bit and 4:2:2 frames are packed to I420 by NEON first (packStage):
 		// videoconvert then passes them to the ISP untouched.
 		return append(append([]string{"queue"}, packStage()...), "videoconvert", "capsfilter", "v4l2convert", "capsfilter", "appsink")
 	}
+}
+
+// glHeapCaps are the formats cutepisysdmabuf copies; videoconvert passes
+// them through untouched.
+const glHeapCaps = "video/x-raw,format={I420,NV12}"
+
+// glHeapRoute: a software tail of format goes through cutepisysdmabuf
+// (system dma-heap buffers) instead of the ISP: the format is one it takes,
+// or one the NEON packer turns into I420. CUTEPI_GL_SWROUTE=isp keeps the
+// ISP for everything (comparisons).
+func glHeapRoute(format string) bool {
+	if os.Getenv("CUTEPI_GL_SWROUTE") == "isp" || !sysdmabuf.Register() {
+		return false
+	}
+	switch format {
+	case "I420", "NV12":
+		return true
+	case "I420_10LE", "I422_10LE", "Y42B":
+		return len(packStage()) > 0
+	}
+	return false
 }
 
 // glDirNick is videoflip's video-direction nick for d.
@@ -302,11 +333,14 @@ func glDeinterlace(names []string, interlaced bool) []string {
 	if !interlaced {
 		return names
 	}
-	// The plain ISP tail (no turning): cutepibob writes DMABufs the GPU
+	// The plain ISP or dma-heap tail (no turning): cutepibob writes DMABufs the GPU
 	// samples itself, so the ISP's copy into DMABufs (one per picture, 60 a
 	// second on the VideoCore beside the hardware decoder) goes. videoconvert
 	// passes I420 through untouched (and the decoder's frames uncopied).
 	isp, flip := indexOfName(names, "v4l2convert"), indexOfName(names, "videoflip")
+	if isp < 0 {
+		isp = indexOfName(names, "cutepisysdmabuf") // the dma-heap tail, likewise
+	}
 	if isp > 0 && flip < 0 && names[isp-1] == "capsfilter" {
 		out := append([]string{}, names[:isp-1]...) // up to and with videoconvert
 		return append(out, "cutepibob", "queue", "capsfilter", "appsink")
@@ -377,8 +411,8 @@ func glTailFormat(caps *gst.Caps, filename string) string {
 
 // glPadFormat: the pad's format when fixed, or when its caps name one format
 // only (cutepianimdec's pad is always RGBA, before its size is known); else
-// "RGBA" for a file recorded as having alpha, or the packed RGB format its
-// import metadata names; else "".
+// "RGBA" for a file recorded as having alpha, or the packed RGB or YUV
+// format its import metadata names (ffPackedRGB, ffHeapYUV); else "".
 func glPadFormat(caps *gst.Caps, filename string) string {
 	if caps != nil && (caps.IsFixed() || caps.GetSize() == 1) {
 		if f := capsFormat(caps); f != "" {
@@ -390,7 +424,14 @@ func glPadFormat(caps *gst.Caps, filename string) string {
 	}
 	if CodecLookup != nil && filename != "" {
 		if c := CodecLookup(filename); strings.Contains(c, "/") {
-			if f, ok := ffPackedRGB[c[strings.LastIndex(c, "/")+1:]]; ok {
+			pix := c[strings.LastIndex(c, "/")+1:]
+			if f, ok := ffPackedRGB[pix]; ok {
+				return f
+			}
+			// The decoder's frames are usually still unfixed here; the
+			// import's pixel format names the YUV layout the dma-heap tail
+			// takes (glHeapRoute).
+			if f, ok := ffHeapYUV[pix]; ok {
 				return f
 			}
 		}
@@ -403,6 +444,13 @@ func glPadFormat(caps *gst.Caps, filename string) string {
 var ffPackedRGB = map[string]string{
 	"rgb24": "RGB", "bgr24": "BGR", "rgba": "RGBA", "bgra": "BGRA", "argb": "ARGB", "abgr": "ABGR",
 	"rgb0": "RGBx", "bgr0": "BGRx", "0rgb": "xRGB", "0bgr": "xBGR",
+}
+
+// ffHeapYUV maps ffprobe pixel formats to the GStreamer formats software
+// decoders produce for them, for the ones glHeapRoute takes.
+var ffHeapYUV = map[string]string{
+	"yuv420p": "I420", "yuvj420p": "I420", "nv12": "NV12",
+	"yuv420p10le": "I420_10LE", "yuv422p10le": "I422_10LE", "yuv422p": "Y42B", "yuvj422p": "Y42B",
 }
 
 // ispInputCaps are the formats the ISP accepts; videoconvert passes a
@@ -437,6 +485,8 @@ func configureGLTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, names
 		caps[0].Set("caps", gst.NewCapsFromString(glCopyAlphaCaps))
 	case isPackedRGB(format):
 		caps[0].Set("caps", gst.NewCapsFromString(glCopyCaps))
+	case len(byFactory["cutepisysdmabuf"]) > 0:
+		caps[0].Set("caps", gst.NewCapsFromString(glHeapCaps))
 	default:
 		caps[0].Set("caps", gst.NewCapsFromString(ispInputCaps))
 		caps[1].Set("caps", gst.NewCapsFromString("video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=YU12"))
