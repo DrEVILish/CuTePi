@@ -46,8 +46,9 @@ FFmpeg's **VP8** decoder ranked above libvpx's, a NEON packer that turns **10-bi
 DNxHR) into 4:2:0 for the display path, **Motion JPEG** and **PNG video** on several cores (`cutepimjpegdec`, `cutepipngvdec`), and an **animated image** decoder (`cutepianimdec`: GIF, APNG, animated
 WebP, AVIF stills and sequences, JPEG XL stills and animations, with alpha) that decodes frames in parallel. The "Video decoder" column comes from a probe that runs outside the
 service, so it names GStreamer's choice there (e.g. `av1dec`, `avdec_cfhd`) rather than CuTePi's own elements,
-which only exist in the service. URL imports are kept in their own format when it plays at 1080p60 here and
-converted otherwise, never during playback (DESIGN §12.15).
+which only exist in the service. URL imports are kept in their own format when it is supported here (1080p60 with
+smooth fades) and refused otherwise, with a notice listing the supported codecs and containers; nothing is
+converted on import (DESIGN §12.15).
 
 **Supported** means, measured on the hardware named below through the live service:
 

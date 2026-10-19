@@ -62,11 +62,33 @@ func handleYoutubeDownload(c *gin.Context) {
 		writeLine(map[string]any{"error": redactPaths(msg)})
 	}
 
+	// Refused, with what is supported, when the video is not in a codec that
+	// plays at 1080p60 here (nothing is converted on import, DESIGN §12.15).
+	gpuWall := gsp.GPUWall()
+	unsupported := func(what string) {
+		msg := fmt.Sprintf("Not imported: %s. %s", what, supportedNotice(gpuWall))
+		logs.PrintfWarn(logs.YDLFailed, "url=%q unsupported: %s", url, what)
+		writeLine(map[string]any{"error": msg, "unsupported": true})
+	}
+
 	stage("resolving")
+	formatID, offered, listed := pickNativeFormat(c.Request.Context(), url)
+	if listed && formatID == "" {
+		labels := make([]string, len(offered))
+		for i, o := range offered {
+			labels[i] = codecLabel(o)
+		}
+		what := "this site offers the video only in " + strings.Join(labels, ", ") + " at its best quality"
+		if len(labels) == 0 {
+			what = "this site offers no video stream CuTePi can play"
+		}
+		unsupported(what)
+		return
+	}
 	th := &pctThrottle{every: 250 * time.Millisecond}
 	// The request context: a client that disconnects (closed modal, lost
 	// Wi-Fi) kills yt-dlp instead of leaving it downloading for 30 minutes.
-	tmpDir, filename, err := downloadWithYtDlp(c.Request.Context(), url, func(line string) {
+	tmpDir, filename, err := downloadWithYtDlp(c.Request.Context(), url, formatID, func(line string) {
 		if msg := parseYtDlpLine(line, th); msg != nil {
 			writeLine(msg)
 		}
@@ -78,30 +100,19 @@ func handleYoutubeDownload(c *gin.Context) {
 	dlPath := filepath.Join(tmpDir, filename)
 	logs.Printf(logs.YDLDownload, "stage=complete filename=%q", filename)
 
-	// A codec that does not play at 1080p60 on this display path is
-	// converted in the background queue (never while anything plays); the
-	// request follows it while connected, the job runs on regardless.
-	if conversionOn() {
-		codec, _ := probeVideoCodec(c.Request.Context(), dlPath)
-		if codec != "" && !plays60(codec, gsp.GPUWall()) {
-			logs.Printf(logs.YDLDownload, "stage=queue_convert codec=%s filename=%q", codec, filename)
-			job := queueConversion(tmpDir, dlPath, codec)
-			job.setListener(func(m map[string]any) {
-				if m["error"] != nil {
-					logs.PrintfWarn(logs.YDLFailed, "url=%q error=%v", url, m["error"])
-				}
-				writeLine(m)
-			})
-			writeLine(map[string]any{"stage": "queued", "from": codec, "paused": playbackRunning()})
-			select {
-			case <-job.done:
-			case <-c.Request.Context().Done():
-			}
-			job.setListener(nil)
-			return
-		}
-	}
 	defer os.RemoveAll(tmpDir)
+
+	// Check what arrived too: when the format list could not be read,
+	// yt-dlp chose the stream. Audio-only downloads have no video stream and
+	// are imported.
+	if codec, pixFmt, _ := probeVideoStream(c.Request.Context(), dlPath); codec != "" && !plays60(codec, pixFmt, gpuWall) {
+		what := "the video is " + codecLabel(codec)
+		if codec == "h264" {
+			what = "the video is 10-bit H.264"
+		}
+		unsupported(what)
+		return
+	}
 
 	// A download never silently replaces a pool file of the same name (the
 	// upload path asks first; here there is nobody to ask): keep both, and
@@ -214,7 +225,7 @@ const ytDlpSort = "res:1080,fps"
 // temp subdir - never directly over an existing media file. Every progress
 // line from the second (download) invocation is passed to onLine, so a
 // streaming handler can mirror yt-dlp's own percentage/speed/ETA.
-func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) (string, string, error) {
+func downloadWithYtDlp(parent context.Context, url, formatID string, onLine func(string)) (string, string, error) {
 	outputTemplate := "%(title)s.%(ext)s"
 	// yt-dlp's own client choice. Forcing player_client=android (which
 	// worked around "The page needs to be reloaded" with yt-dlp 2025.04)
@@ -222,14 +233,13 @@ func downloadWithYtDlp(parent context.Context, url string, onLine func(string)) 
 	// with current yt-dlp; current yt-dlp's default clients return the
 	// 1080p60 H.264/VP9/AV1 streams (2026-10-08). Debian trixie's yt-dlp
 	// (2025.04.30) is too old for YouTube: install a current release.
-	// The site's own format, no re-encode by us when it can be helped: of
-	// the streams at the best height and frame rate on offer (up to the
-	// display's 1080 lines), one in a codec that plays at 60 fps here if
-	// there is one (chooseFormat); otherwise the best stream, converted
-	// afterwards (youtube_convert.go).
+	// The site's own format, never re-encoded: formatID is the stream
+	// chooseFormat picked (the best picture, in a codec that plays at 60 fps
+	// here), or "" when the format list could not be read (yt-dlp's choice;
+	// the handler checks what arrived).
 	formatArgs := []string{"-S", ytDlpSort}
-	if id := pickNativeFormat(parent, url); id != "" {
-		formatArgs = append(formatArgs, "-f", id+"+bestaudio/"+id)
+	if formatID != "" {
+		formatArgs = append(formatArgs, "-f", formatID+"+bestaudio/"+formatID)
 	}
 
 	// Scratch space under the data dir's tmp/ — not inside the media dir,

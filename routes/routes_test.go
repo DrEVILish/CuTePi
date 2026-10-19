@@ -2392,7 +2392,7 @@ func TestYoutubeDlpTimeout(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	start := time.Now()
-	_, _, err := downloadWithYtDlp(context.Background(), "https://youtube.com/watch?v=x", nil)
+	_, _, err := downloadWithYtDlp(context.Background(), "https://youtube.com/watch?v=x", "", nil)
 	if err == nil {
 		t.Fatal("hung yt-dlp must fail via timeout")
 	}

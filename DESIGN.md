@@ -66,8 +66,8 @@ selection, settings).
   dav1d, 4× libaom), `cutepicfhddec` (CineForm on the GoPro CineForm SDK ported to AArch64, 4× FFmpeg),
   `cutepiyuvpack` (10-bit and 4:2:2 frames to I420 in one NEON pass), `wpedmabuf` (live pages to scanout
   buffers, no CPU copy).
-- **URL imports** keep the site's own format when it plays at 1080p60 here; otherwise they are converted in a
-  background queue that never runs while anything plays (§12.15).
+- **URL imports** keep the site's own format when it is supported here (1080p60 with smooth fades); otherwise
+  they are refused with a notice listing the supported codecs and containers, never converted (§12.15).
 - **Codec test corpus**: `tools/codec-corpus/` generates 52 short files in many codecs and containers (video, audio,
   image) with the Pi's own ffmpeg/GStreamer, probes how GStreamer decodes each (decoder, hardware or software, speed),
   and runs each end to end through the live service (upload, play, output checked from outside). Results:
@@ -1605,28 +1605,24 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   theme with `steps()` 58.0, the theme as shipped 52.4 (GPU-bound: WebKit's painting, the scanout blit and the
   mixer share the V3D); 0 service crashes in 20 play/stop cycles and 5 restarts.
 
-### 12.15 URL import: native format, conversion only when needed (decided 2026-10-09)
+### 12.15 URL import: native format, refused when unsupported (decided 2026-10-09, conversion removed 2026-10-19)
 
 - **Native first.** Before downloading, CuTePi reads yt-dlp's format list (`-J`) and, among the video streams at
   the best height (at most the display's 1080 lines) and frame rate on offer, takes the highest-bitrate stream in
-  a codec that plays at 1080p60 on the display path in use (`routes/youtube_format.go`). A lower resolution in a
-  playable codec never wins over a better picture. YouTube offers H.264, VP9 and AV1 at 1080p60: H.264 (format
-  312) is taken and imported as it is.
-- **Which codecs play at 60** (`plays60`), from the codec support tests on the Pi 4 (README tables; real YouTube
-  files through the GPU wall: H.264 60.2 fps steady and through fades, VP9 59.8 steady but 21 on its fade-out,
-  AV1 49.4): GPU wall H.264, HEVC, VP8, MPEG-1/2, MPEG-4 Part 2, MJPEG; KMS wall the same without HEVC (0.8 fps:
-  its 128-column frames cannot go on a plane as they are) and with Theora.
-- **Otherwise converted**, to the best measured option for the display path: HEVC on the GPU wall (x265
-  superfast CRF 18, 44.6 dB for 1080p60; Main 10 kept for 10-bit sources), H.264 on the KMS wall (x264 veryfast
-  CRF 18). Audio and subtitles are copied, into MKV.
-- **Never during playback.** Conversions run one at a time in a background queue (`routes/youtube_convert.go`):
-  a job waits until nothing plays (no cue running, nothing on the wall), and the encoder is stopped (SIGSTOP) the
-  moment playback starts and continued (SIGCONT) when the wall is idle again. The import dialog follows the job
-  ("queued for conversion: waiting until playback stops", "Conversion paused while playback runs", progress and
-  ETA) while open; the job runs on when it is closed, and when done the converted file is imported and every
-  client's media pool refreshes. Converting runs at about 6× the video's length for 1080p60 on a Pi 4 at 2 GHz.
-  The queue lives in memory: a restart drops pending jobs (their downloads are in `tmp/`).
-  `CUTEPI_YTDLP_TRANSCODE=0` imports every download as it comes.
+  a supported codec (`routes/youtube_format.go`). A lower resolution in a supported codec never wins over a better
+  picture. YouTube offers H.264, VP9 and AV1 at 1080p60: H.264 (format 312) is taken and imported as it is.
+- **Supported** (`routes/supported.go`, one table for the decision and the notice): video that plays at 1080p60
+  with smooth fades on the display path in use, from the codec support tests on the Pi 4. GPU wall: H.264 (8-bit),
+  HEVC (8 and 10-bit), VP8, MPEG-1/2, MPEG-4 Part 2, Motion JPEG; KMS wall the same without HEVC (its 128-column
+  frames cannot go on a plane as they are) and with Theora. Containers: MP4, MOV, MKV or WebM.
+- **Otherwise refused, never converted** (the user's decision, 2026-10-19). When the format list shows no
+  supported stream at the best picture, nothing is downloaded; when the list could not be read, the download is
+  probed (`ffprobe` codec and pixel format) and discarded if unsupported. The import dialog shows the reason (the
+  codecs the site offers, e.g. "AV1, VP9", or the downloaded file's codec) and the supported codecs and
+  containers. Audio-only downloads have no video stream and are imported. File uploads are not converted either:
+  any file GStreamer can decode is accepted (§2), and one it cannot play is refused with the same list.
+- The conversion queue that re-encoded unsupported downloads to HEVC/H.264 in the background (and its
+  `CUTEPI_YTDLP_TRANSCODE` switch) is gone.
 - yt-dlp needs a current release: Debian trixie's (2025.04.30) gets only 360p30 or nothing from YouTube. The
   service no longer forces `player_client=android` (format 18, 360p30, with that release).
 
