@@ -830,6 +830,12 @@ static void lin_gl_import(GstGLContext *ctx, gpointer d) {
     ls->s[i].img = p_mkimg(W.dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, ia);
     if (ls->s[i].img == EGL_NO_IMAGE_KHR) continue;
     glGenTextures(1, &ls->s[i].tex); glBindTexture(GL_TEXTURE_2D, ls->s[i].tex); p_bindimg(GL_TEXTURE_2D, ls->s[i].img);
+    /* GL's default minifying filter wants mipmaps, which these textures never have: incomplete, they sample as
+     * opaque black (every copy-route layer showed black). GstGL sets these on the textures it makes itself. */
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
   }
 }
