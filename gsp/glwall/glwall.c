@@ -1112,7 +1112,10 @@ glwall_layer *glwall_layer_attach(GstElement *appsink, const char *colorimetry, 
   l->queue = gst_element_factory_make("queue", NULL);
   if (!l->src || !l->upload || !l->convert || !l->caps || !l->queue) { *err = g_strdup("GL elements missing (gstreamer1.0-gl)"); goto fail; }
   g_object_set(l->src, "format", GST_FORMAT_TIME, "max-buffers", 3, "block", TRUE, "is-live", FALSE, "caps", lc, NULL);
-  GstCaps *rgba = gst_caps_from_string("video/x-raw(memory:GLMemory),format=RGBA");
+  /* 2D: glupload imports a DMABuf (hardware decoders, the ISP) as an external-OES RGBA texture, which
+   * glcolorconvert would pass through untouched, and the mixer cannot draw an external-OES texture: it skipped
+   * every such layer ("skipping texture:0") and the wall showed black. glcolorconvert renders it to 2D. */
+  GstCaps *rgba = gst_caps_from_string("video/x-raw(memory:GLMemory),format=RGBA,texture-target=2D");
   g_object_set(l->caps, "caps", rgba, NULL); gst_caps_unref(rgba);
   g_object_set(l->queue, "max-size-buffers", 2, "max-size-bytes", 0, "max-size-time", (guint64)0, NULL);
   gst_bin_add_many(GST_BIN(W.wall), l->src, l->upload, l->convert, l->caps, l->queue, NULL);
