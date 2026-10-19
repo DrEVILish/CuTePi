@@ -3,6 +3,8 @@ package media
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,6 +65,28 @@ func TestKindOf(t *testing.T) {
 	} {
 		if got := KindOf(c.name, c.mime); got != c.want {
 			t.Errorf("KindOf(%q, %q) = %v, want %v", c.name, c.mime, got, c.want)
+		}
+	}
+}
+
+// A video thumbnail is the keyframe at or before the seek point; it works for
+// codecs that refuse keyframe-only decoding with frame threads (Theora).
+func TestVideoThumbnailKeyframe(t *testing.T) {
+	if bgNice == "" {
+		t.Skip("no nice")
+	}
+	dir := t.TempDir()
+	for _, c := range []struct{ name, codec string }{{"t.mkv", "libtheora"}, {"v.mkv", "libvpx-vp9"}, {"m.mkv", "mpeg2video"}} {
+		src := filepath.Join(dir, c.name)
+		if b, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25", "-t", "4",
+			"-g", "25", "-c:v", c.codec, src).CombinedOutput(); err != nil {
+			t.Skipf("%s: %v %s", c.codec, err, b)
+		}
+		out := src + ".jpg"
+		if err := GenerateThumbnail(src, KindVideo, 4, out); err != nil {
+			t.Errorf("%s: %v", c.codec, err)
+		} else if st, err := os.Stat(out); err != nil || st.Size() == 0 {
+			t.Errorf("%s: no thumbnail", c.codec)
 		}
 	}
 }

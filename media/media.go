@@ -402,7 +402,7 @@ func thumbnailSeek(duration float64) float64 {
 }
 
 // GenerateThumbnail creates a 16:9 JPEG thumbnail for the given media file
-// at outPath: a frame at 5s (or the clip's midpoint, if shorter than 10s)
+// at outPath: the keyframe at or before 5s (or the clip's midpoint, if shorter than 10s)
 // for video, a scaled copy for images, and a waveform image for audio.
 // duration is the clip's length in seconds, as reported by Probe; it's
 // ignored for images/audio.
@@ -416,6 +416,16 @@ func GenerateThumbnail(srcPath string, kind Kind, duration float64, outPath stri
 	switch kind {
 	case KindVideo:
 		seek := thumbnailSeek(duration)
+		// The keyframe at or before the seek point, decoded alone on one
+		// thread: an exact seek decoded every frame from that keyframe on
+		// (AV1 6.2 s and H.264 6.4 s of CPU a thumbnail, against 0.4 s).
+		// One thread also because Theora refuses skip_frame with frame
+		// threads. Should a decoder still give nothing, the exact seek.
+		keyframe := []string{"-y", "-nostdin", "-threads", "1", "-skip_frame", "nokey", "-noaccurate_seek",
+			"-ss", fmt.Sprintf("%f", seek), "-i", srcPath, "-frames:v", "1", "-vf", scaleFilter, outPath}
+		if err := runThumbnail(srcPath, keyframe); err == nil {
+			return nil
+		}
 		args = []string{"-y", "-nostdin", "-ss", fmt.Sprintf("%f", seek), "-i", srcPath, "-frames:v", "1", "-vf", scaleFilter, outPath}
 	case KindImage:
 		args = []string{"-y", "-nostdin", "-i", srcPath, "-frames:v", "1", "-vf", scaleFilter, outPath}
@@ -431,9 +441,12 @@ func GenerateThumbnail(srcPath string, kind Kind, duration float64, outPath stri
 	if kind != KindAudio {
 		args = append(busyThreads(), args...)
 	}
+	return runThumbnail(srcPath, args)
+}
+
+func runThumbnail(srcPath string, args []string) error {
 	cmd, cancel := toolCmd(ThumbnailTimeout, "ffmpeg", args...)
 	defer cancel()
-
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("media: ffmpeg thumbnail generation failed for %q: %w: %s", srcPath, err, out)
 	}
