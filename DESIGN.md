@@ -886,6 +886,12 @@ below.
   it made the display read a second full-screen buffer every refresh, and decoders sharing the memory bus lost
   frames while a layer faded: 1080i H.264 through the ISP 31 fps during fades, 59-60 without the console plane.
   `CUTEPI_PW_KEEP_CONSOLE=1` keeps it. fbcon restores it when the service releases the display.
+- **Late frames are shown (2026-10-20).** `cutepiplanesink` runs with `max-lateness=-1`: a late frame goes up at
+  the next commit instead of being dropped (the decoder's QoS still skips ahead). A decoder near its limit (10-bit
+  H.264 at 1080p60: about 71 fps decode-only, 45-50 in the cue) that fell behind once, by a 50-100 ms hiccup, had
+  every later frame dropped at the sink and showed nothing for the rest of the cue. QoS off made it worse (the
+  decoder falls behind within 1.5 s). 10-bit H.264 1080p60 stays below 60 on the Pi 4: the CPU decode has no margin
+  for the 8-bit pack and the frame copy.
 - **Interlaced video (2026-10-20).** On the presenter an interlaced file (caps, or a field order recorded at
   import) takes the software tail with `cutepibob` after the converter (`pwDeinterlace`): one picture per field,
   written into DMABufs the plane scans out, so 1080i shows as 60 pictures a second instead of woven at 30. Decoder

@@ -900,6 +900,12 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 	planeSink := sink == nil
 	if planeSink {
 		sink = firstByFactory(byFactory, "cutepiplanesink")
+		// Late frames are shown, not dropped: the presenter puts up the newest
+		// one each refresh anyway. A decoder near its limit (10-bit H.264 at
+		// 1080p60, ~50 fps here) that fell behind once (a 50-100 ms hiccup)
+		// had every later frame dropped at the sink and showed nothing for
+		// the rest of the cue; the decoder's QoS still skips to catch up.
+		sink.Set("max-lateness", int64(-1))
 		// Decoders get pwStartLatency to fill ahead before the first frame
 		// of running playback is due (sound waits the same).
 		p.Set("latency", uint64(pwStartLatency))
