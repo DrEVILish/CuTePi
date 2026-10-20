@@ -425,3 +425,22 @@ func TestGLHeapRoute(t *testing.T) {
 		t.Error("CUTEPI_GL_SWROUTE=isp must keep the ISP")
 	}
 }
+
+// Interlaced video on the presenter: cutepibob right after the converter's
+// capsfilter; decoder DMABufs go through the ISP first; a turned tail is
+// left as it is.
+func TestPWDeinterlace(t *testing.T) {
+	gst.Init(nil)
+	sw := []string{"queue", "cutepiyuvpack", "videoconvert", "capsfilter", "videocrop", "cutepiplanesink"}
+	got := pwDeinterlace(sw, false)
+	if want := []string{"queue", "cutepiyuvpack", "videoconvert", "capsfilter", "cutepibob", "videocrop", "cutepiplanesink"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("software tail: %v, want %v", got, want)
+	}
+	if hw := pwDeinterlace(sw, true); len(videoDownload()) > 0 && (hw[0] != "queue" || hw[1] != "v4l2convert" || indexOfName(hw, "cutepibob") < 0) {
+		t.Errorf("decoder DMABufs: %v, want the ISP after the queue", hw)
+	}
+	turned := []string{"queue", "videoconvert", "videoscale", "capsfilter", "videocrop", "videoflip", "videoconvert", "cutepiplanesink"}
+	if got := pwDeinterlace(turned, false); indexOfName(got, "cutepibob") >= 0 {
+		t.Errorf("turned tail deinterlaced: %v", got)
+	}
+}

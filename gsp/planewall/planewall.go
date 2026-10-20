@@ -7,6 +7,7 @@ package planewall
 
 /*
 #cgo pkg-config: gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 gstreamer-allocators-1.0 gstreamer-gl-1.0 libdrm egl glesv2
+#cgo LDFLAGS: -lm
 #include <stdlib.h>
 #include <glib.h>
 #include "planewall.h"
@@ -16,6 +17,7 @@ import "C"
 import (
 	"errors"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -55,6 +57,19 @@ func Set(plane uint32, name string, value uint64) error {
 	defer C.free(unsafe.Pointer(cs))
 	if C.planewall_set(C.uint32_t(plane), cs, C.uint64_t(value)) != 0 {
 		return errors.New("planewall: unknown plane or property " + name)
+	}
+	return nil
+}
+
+// Ramp runs a fade on the plane in the presenter: alpha = opacity x level,
+// level from -> to over dur along curve (0 linear, 1 smooth, 2 log, 3 exp),
+// started at start, evaluated for every commit at its display time. A later
+// Set of "alpha" ends it.
+func Ramp(plane uint32, from, to, opacity float64, start time.Time, dur time.Duration, curve int) error {
+	startUs := int64(C.g_get_monotonic_time()) - time.Since(start).Microseconds()
+	if C.planewall_ramp(C.uint32_t(plane), C.double(from), C.double(to), C.double(opacity),
+		C.int64_t(startUs), C.int64_t(dur.Microseconds()), C.int(curve)) != 0 {
+		return errors.New("planewall: unknown plane")
 	}
 	return nil
 }

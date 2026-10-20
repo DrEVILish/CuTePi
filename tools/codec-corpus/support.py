@@ -386,14 +386,16 @@ def debugfs_formats():
     return {}
 
 
-def picture():
+def picture(known=None):
     """What the display shows, read back from the framebuffers of the planes in use (tools/screen/scanout.py):
     the largest share of non-black samples over the planes other than the console's, and which plane. Frame
-    counters alone passed a GPU wall that showed black on HDMI for weeks (TEST_REPORT P2)."""
+    counters alone passed a GPU wall that showed black on HDMI for weeks (TEST_REPORT P2). known: the planes
+    to read, when the wall says which (the presenter, the GPU wall); otherwise the DRM debugfs state lists
+    them, but reading it takes every modeset lock and held the presenter's commits for ~200 ms."""
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "screen"))
     import scanout
-    planes, cur, console = [], None, set()
-    for f in glob.glob("/sys/kernel/debug/dri/*/state"):
+    planes, cur, console = list(known or []), None, set()
+    for f in ([] if known else glob.glob("/sys/kernel/debug/dri/*/state")):
         try:
             txt = open(f).read()
         except OSError:
@@ -665,12 +667,15 @@ def run(path, mdl, keep=False):
             t_due = time.monotonic() + FADE_S + STEADY_S   # when the fade out is triggered
             t_fo = None
             formats = blends = pic = None
+            t_pic = None
             while time.monotonic() < t_due + FADE_S + 0.3:
                 if formats is None and time.monotonic() >= t_due - 0.3:
                     # The picture, and for alpha files the plane's format and
                     # blend mode, while it is on screen (end of steady play,
                     # as on the kmssink wall).
-                    pic = picture()
+                    known = [samples[-1][6]] if PW and samples else [127] if GL else None
+                    t_pic = time.monotonic()
+                    pic = picture(known)
                     formats, blends = (debugfs_formats(), blend_modes()) if PW and is_alpha else ({}, {})
                 if t_fo is None and time.monotonic() >= t_due:
                     call("POST", "/api/fadeOut")
@@ -685,11 +690,11 @@ def run(path, mdl, keep=False):
                 raise RuntimeError("no wall layer appeared")
             t_first = next((smp[0] for smp in samples if smp[1] >= 1), samples[0][0])
             res["first_frame_ms"] = round((t_first - t_play) * 1000)
-            if PW and not (kind == "image" and not animated):
-                # The presenter shows the prerolled frame at opacity 0 and
-                # starts the fade with the first moving frame (gsp
-                # movingOnPlane): the fade in begins at the first opacity step,
-                # as the fade out's window does.
+            if PW:
+                # The presenter puts the first frame up at opacity 0 and steps
+                # the fade from its own clock (a moving cue's from the first
+                # moving frames, gsp movingOnPlane): the fade in begins at the
+                # first opacity step, as the fade out's window does.
                 st0 = next((smp[2] for smp in samples if smp[0] >= t_first), None)
                 t_step = next((smp[0] for smp in samples if st0 is not None and smp[2] > st0), None)
                 if t_step is not None:
@@ -706,7 +711,10 @@ def run(path, mdl, keep=False):
             st_fo = next((smp[2] for smp in samples if smp[0] >= t_fo), None)
             t_fo_seen = next((smp[0] for smp in samples if smp[0] >= t_fo and st_fo is not None and smp[2] > st_fo), t_fo)
             res["fade_out_delay_ms"] = round((t_fo_seen - t_fo) * 1000)
-            win = {"fade_in": (t_first + 0.05, t_first + FADE_S - 0.05), "steady": (t_first + FADE_S + 0.3, t_fo - 0.1),
+            # The steady window ends before the picture is read back (mapping
+            # a decoder's buffer can hold a commit back by a refresh or two).
+            steady_end = min(t_fo - 0.1, t_pic - 0.05) if t_pic else t_fo - 0.1
+            win = {"fade_in": (t_first + 0.05, t_first + FADE_S - 0.05), "steady": (t_first + FADE_S + 0.3, steady_end),
                    "fade_out": (t_fo_seen + 0.05, t_fo_seen + FADE_S - 0.05)}
             if GL:
                 hz = gl_rate(samples, t_first, samples[-1][0] + 0.001, 3)

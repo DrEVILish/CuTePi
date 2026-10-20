@@ -23,6 +23,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
+#include <math.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -85,6 +86,11 @@ typedef struct {
   /* wanted state (under P.lock) */
   uint64_t alpha, zpos, rot, blend;
   int props_dirty;
+  /* A fade in progress (planewall_ramp): alpha = opacity * (from + (to - from) * shape(t)) at each commit's
+   * display time, so every refresh of a fade gets its own step whatever the caller's timer does. */
+  int ramp_on, ramp_curve;
+  double ramp_from, ramp_to, ramp_opacity;
+  gint64 ramp_start_us, ramp_dur_us;
   int attached;                 /* a sink feeds it */
   frame *pending;               /* newest frame not yet committed */
   /* presenter-owned */
@@ -700,6 +706,34 @@ static int cmpd (const void *a, const void *b) {
   return x < y ? -1 : x > y;
 }
 
+/* The fade envelope, as gsp's fadeShape (linear, smooth, log, exp). */
+static double ramp_shape (int curve, double t) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  switch (curve) {
+  case 1: return t * t * (3 - 2 * t);
+  case 2: return log10 (1 + 9 * t);
+  case 3: return (exp (3 * t) - 1) / (exp (3) - 1);
+  default: return t;
+  }
+}
+
+/* Ramps in progress: each plane's alpha for a commit shown at t_us (under P.lock). 1 if one still runs. */
+static int ramps_apply_locked (gint64 t_us) {
+  int running = 0;
+  for (int i = 0; i < P.npl; i++) {
+    plane_st *s = &P.pl[i];
+    if (!s->ramp_on) continue;
+    double t = s->ramp_dur_us > 0 ? (double) (t_us - s->ramp_start_us) / s->ramp_dur_us : 1;
+    double a = s->ramp_opacity * (s->ramp_from + (s->ramp_to - s->ramp_from) * ramp_shape (s->ramp_curve, t));
+    uint64_t v = (uint64_t) (CLAMP (a, 0.0, 1.0) * 65535 + 0.5);
+    if (v != s->alpha) { s->alpha = v; s->props_dirty = 1; }
+    if (t >= 1) s->ramp_on = 0;
+    else running = 1;
+  }
+  return running;
+}
+
 static gpointer present (gpointer d) {
   struct sched_param sp = { .sched_priority = 10 };
   if (pthread_setschedparam (pthread_self (), SCHED_FIFO, &sp) != 0)
@@ -711,6 +745,12 @@ static gpointer present (gpointer d) {
     while (!P.dirty && !P.quit) g_cond_wait (&P.cond, &P.lock);
     if (P.quit) { g_mutex_unlock (&P.lock); break; }
     P.dirty = 0;
+    {
+      /* This commit is shown at the next vblank: one refresh after the last one, or now if idle. */
+      gint64 now = g_get_monotonic_time (), period = 1000000 / (P.hz > 0 ? P.hz : 60);
+      gint64 at = P.last_us && now - P.last_us < 2 * period ? P.last_us + period : now + period / 2;
+      if (ramps_apply_locked (at)) P.dirty = 1;   /* a fade runs: commit again next refresh */
+    }
     drmModeAtomicReq *rq = drmModeAtomicAlloc ();
     for (int i = 0; i < P.npl; i++) {
       plane_st *s = &P.pl[i];
@@ -830,6 +870,32 @@ int planewall_open (int drm_fd, uint32_t crtc_id, const uint32_t * planes, int n
     plane_formats (s);
     if (!s->p_fb || !s->p_crtc) { *err = g_strdup_printf ("plane %u has no FB_ID/CRTC_ID", s->id); return -1; }
   }
+  /* The console's plane (fbcon's black framebuffer, under every layer) goes off: blending a part-transparent layer
+   * over it made the display read a second full-screen buffer every refresh, and while a layer faded the
+   * decoders sharing the memory bus lost frames (1080i H.264 through the ISP: 31 fps during fades, 59-60 with it
+   * off). The display's background is black anyway. fbcon puts it back when the service lets the display go. */
+  if (!g_getenv ("CUTEPI_PW_KEEP_CONSOLE")) {
+    drmModePlaneRes *pr = drmModeGetPlaneResources (P.fd);
+    for (uint32_t k = 0; pr && k < pr->count_planes; k++) {
+      drmModePlane *pl = drmModeGetPlane (P.fd, pr->planes[k]);
+      if (pl && pl->crtc_id == P.crtc && pl->fb_id) {
+        int ours = 0;
+        for (int i = 0; i < P.npl; i++) if (P.pl[i].id == pl->plane_id) ours = 1;
+        if (!ours) {
+          uint32_t pf = prop_id (pl->plane_id, "FB_ID", NULL, NULL, NULL, NULL, NULL, NULL);
+          uint32_t pc = prop_id (pl->plane_id, "CRTC_ID", NULL, NULL, NULL, NULL, NULL, NULL);
+          drmModeAtomicReq *rq = drmModeAtomicAlloc ();
+          drmModeAtomicAddProperty (rq, pl->plane_id, pf, 0);
+          drmModeAtomicAddProperty (rq, pl->plane_id, pc, 0);
+          int r = drmModeAtomicCommit (P.fd, rq, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+          g_printerr ("planewall: console plane %u off: %s\n", pl->plane_id, r ? g_strerror (errno) : "ok");
+          drmModeAtomicFree (rq);
+        }
+      }
+      if (pl) drmModeFreePlane (pl);
+    }
+    if (pr) drmModeFreePlaneResources (pr);
+  }
   P.quit = 0;
   P.th = g_thread_new ("planewall", present, NULL);
   P.open = 1;
@@ -844,7 +910,7 @@ int planewall_set (uint32_t plane, const char *name, uint64_t value) {
   plane_st *s = plane_of (plane);
   int ok = s != NULL;
   if (s) {
-    if (!strcmp (name, "alpha")) s->alpha = value;
+    if (!strcmp (name, "alpha")) { s->alpha = value; s->ramp_on = 0; }
     else if (!strcmp (name, "zpos")) s->zpos = value;
     else if (!strcmp (name, "rotation")) s->rot = value;
     else if (!strcmp (name, "pixel blend mode")) s->blend = value;
@@ -853,6 +919,25 @@ int planewall_set (uint32_t plane, const char *name, uint64_t value) {
   }
   g_mutex_unlock (&P.lock);
   return ok ? 0 : -1;
+}
+
+/* A fade on plane: from -> to (levels 0..1, times opacity) over dur_us from start_us (CLOCK_MONOTONIC),
+ * evaluated at every commit. A later planewall_set of "alpha" ends it. */
+int planewall_ramp (uint32_t plane, double from, double to, double opacity, int64_t start_us, int64_t dur_us, int curve) {
+  g_mutex_lock (&P.lock);
+  plane_st *s = plane_of (plane);
+  if (s) {
+    s->ramp_on = 1;
+    s->ramp_from = from;
+    s->ramp_to = to;
+    s->ramp_opacity = opacity;
+    s->ramp_start_us = start_us;
+    s->ramp_dur_us = dur_us;
+    s->ramp_curve = curve;
+    kick_locked ();
+  }
+  g_mutex_unlock (&P.lock);
+  return s ? 0 : -1;
 }
 
 void planewall_stats (planewall_stats_t * st) {

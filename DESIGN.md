@@ -874,9 +874,24 @@ below.
   decoders fill ahead before its first frame of running playback is due, and sound waits the same. Before that, the
   first 100-300 ms after Go were short of frames (HEVC 2 and 4 frames in the first two 100 ms, H.264 3, MPEG-2 5,
   against 6). The prerolled frame is put on the plane at opacity 0; the fade-in clock (and the sound's gain with it)
-  starts only when the plane has shown new frames on 5 consecutive refreshes (`movingOnPlane`), so a fade in starts
-  on a picture that is already moving and every refresh of it brings a new frame. Go to the first visible step is
-  about 180-320 ms. A cue without a fade in starts as before.
+  starts when the plane has shown 4 new frames of running playback, whatever the video's frame rate, or 400 ms after
+  PLAYING at the latest (`movingOnPlane`; a first version waiting for a frame on every refresh never started a
+  24 or 30 fps cue's fade). A cue without a fade in starts as before.
+- **Fades stepped by the presenter (2026-10-20).** A fade in progress goes to the presenter whole
+  (`planewall.Ramp`: from, to, opacity, start, duration, curve) and is evaluated for every commit at the time it
+  will be shown, as the GPU wall does per output frame. Alpha levels written by the 10 ms fade ticker left an
+  occasional refresh without a step (58.8 steps/s). An alpha written outright ends the ramp.
+- **No console plane under the layers (2026-10-20).** When the presenter opens it turns off the console's plane
+  (fbcon's black framebuffer at zpos 0); the display's background is black. Blending a part-transparent layer over
+  it made the display read a second full-screen buffer every refresh, and decoders sharing the memory bus lost
+  frames while a layer faded: 1080i H.264 through the ISP 31 fps during fades, 59-60 without the console plane.
+  `CUTEPI_PW_KEEP_CONSOLE=1` keeps it. fbcon restores it when the service releases the display.
+- **Interlaced video (2026-10-20).** On the presenter an interlaced file (caps, or a field order recorded at
+  import) takes the software tail with `cutepibob` after the converter (`pwDeinterlace`): one picture per field,
+  written into DMABufs the plane scans out, so 1080i shows as 60 pictures a second instead of woven at 30. Decoder
+  DMABufs (hardware H.264, fixed before the tail exists) go through the ISP into system memory first. MPEG-2 1080i
+  (MKV, MOV) and H.264 1080i 60/60/60; the in-between lines read back as the average of their neighbours (residual
+  0.05 against more than 10 for woven fields).
 - **HEVC Main 10 (2026-10-20).** The decoder's 10-bit frames are two-plane SAND128 in P030 (three 10-bit samples in
   each 32-bit word, so a 1920-pixel row is 2560 bytes, 20 columns), with the same column heights as 8-bit (Y
   ALIGN(h,16), UV half). The planes take P030 with the SAND128 modifier, so Main 10 takes the 8-bit route: Y

@@ -1620,14 +1620,14 @@ func fadeShape(curve string, t float64) float64 {
 }
 
 // movingOnPlane returns, for a cue whose video is on a plane of the
-// presenter (§6.1.4), whether the plane is showing running playback at the
-// display rate yet. The first frame shown is the prerolled one, held until
-// the stream's frames arrive (pwStartLatency later), and the first moving
-// frames can still stall (a software decoder starting: 2-5 frames missing in
-// the first 100 ms on one start in three). The fade clock waits until the
-// plane has shown pwSteadyFrames new frames on as many consecutive commits,
-// so the fade in starts on a picture that is already moving smoothly and
-// every refresh of it brings a new frame. Sound follows the same level.
+// presenter (§6.1.4), whether the plane is showing running playback yet. The
+// first frame shown is the prerolled one, held until the stream's frames
+// arrive (pwStartLatency later), and the first moving frames can still stall
+// (a software decoder starting: 2-5 frames missing in the first 100 ms on one
+// start in three, right after the first moving frame). The fade clock waits
+// until the plane has shown pwSteadyFrames new frames, whatever the video's
+// frame rate, or pwSteadyWait after PLAYING at the latest; the prerolled
+// frame stays at opacity 0 until then and sound follows the same level.
 // Anything else (no presenter, no video, a still) moves at once.
 func movingOnPlane(p *gst.Pipeline) func(state gst.State) bool {
 	if !planewall.IsOpen() {
@@ -1637,18 +1637,14 @@ func movingOnPlane(p *gst.Pipeline) func(state gst.State) bool {
 	// for motion; one without (sound only) never does.
 	var l *wallLayer
 	decided, moving := false, false
-	type mark struct {
-		shown uint64
-		atUs  int64
-	}
-	var hist []mark
 	var base uint64
+	var since time.Time
 	return func(state gst.State) bool {
 		if moving || state != gst.StatePlaying {
 			return moving || state != gst.StatePlaying
 		}
 		if !decided {
-			decided = true
+			decided, since = true, time.Now()
 			if l = layerOf(p); l == nil {
 				moving = true
 				return true
@@ -1656,31 +1652,17 @@ func movingOnPlane(p *gst.Pipeline) func(state gst.State) bool {
 			base = planewall.PlaneStats(l.plane.id).Shown
 			return false
 		}
-		s := planewall.PlaneStats(l.plane.id)
-		if s.Shown <= base {
-			return false
-		}
-		hist = append(hist, mark{s.Shown, s.AtUs})
-		// Steady: over the last pwSteadyFrames refreshes, a new frame on each.
-		span := int64(pwSteadyFrames) * 1e6 / 60
-		for _, m := range hist {
-			if dt := s.AtUs - m.atUs; dt >= span-span/(2*pwSteadyFrames) {
-				refreshes := (dt*60 + 5e5) / 1e6
-				if int64(s.Shown-m.shown) >= refreshes && refreshes >= pwSteadyFrames {
-					moving = true
-				}
-			}
-		}
-		if len(hist) > 64 {
-			hist = hist[1:]
-		}
+		moving = planewall.PlaneStats(l.plane.id).Shown >= base+pwSteadyFrames || time.Since(since) >= pwSteadyWait
 		return moving
 	}
 }
 
-// pwSteadyFrames is how many frames on consecutive refreshes count as
-// steady motion (movingOnPlane).
-const pwSteadyFrames = 5
+// pwSteadyFrames new frames shown count as running playback; pwSteadyWait
+// bounds the wait (a stalled or very slow stream still fades in).
+const (
+	pwSteadyFrames = 4
+	pwSteadyWait   = 400 * time.Millisecond
+)
 
 func fadeIn(p *gst.Pipeline, gen uint64) {
 	mgr.mu.Lock()
@@ -2616,7 +2598,17 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 			if planeHEVC {
 				dmabuf = glDmaBufCapable(srcPad)
 			}
+			// Interlaced video on the presenter: the software tail with a
+			// bob deinterlacer (pwDeinterlace), decoder frames included.
+			interlaced := planewall.IsOpen() && !spec.isTest && !planeHEVC && glInterlaced(caps, spec.filename)
+			fromDMABuf := interlaced && dmabuf
+			if interlaced {
+				dmabuf = false
+			}
 			elementNames = kmsVideoTail(!spec.isTest && dmabuf, spec.opts)
+			if interlaced {
+				elementNames = pwDeinterlace(elementNames, fromDMABuf)
+			}
 		} else {
 			// Two videoflip stages (rotate, then mirror) so a cue can
 			// combine e.g. 90° with a horizontal mirror; method=none
@@ -2697,6 +2689,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 				pipeline.GetPipelineBus().Post(msg)
 				return
 			}
+			configureDeinterlace(byFactory, caps, spec.filename)
 		}
 		if spec.warmSink && isAudio {
 			last := len(elements) - 1

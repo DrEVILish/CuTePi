@@ -444,14 +444,35 @@ func restackLocked(w *KMSWall) {
 }
 
 // setLayerRamp applies a fade in progress: level from -> to over dur along
-// curve, started at start. The GPU wall evaluates it for every output frame;
-// the plane wall takes the level for now.
+// curve, started at start. The GPU wall evaluates it for every output frame,
+// the presenter for every commit at its display time (a 10 ms ticker writing
+// levels left an occasional refresh without a step: 58.8 steps/s); the
+// kmssink wall takes the level for now.
 func setLayerRamp(p *gst.Pipeline, from, to float64, start time.Time, dur time.Duration, curve string) {
 	if glOpen {
 		glRamp(p, from, to, start, dur, curve)
 		return
 	}
+	if planewall.IsOpen() {
+		if l := layerOf(p); l != nil && l.visible && kmsWall() != nil {
+			_ = planewall.Ramp(l.plane.id, from, to, l.opacity, start, dur, pwCurve(curve))
+		}
+		return
+	}
 	setLayerLevel(p, rampLevel(from, to, time.Since(start), dur, curve))
+}
+
+// pwCurve is planewall.Ramp's number for a fade curve (fadeShape's names).
+func pwCurve(curve string) int {
+	switch curve {
+	case "smooth":
+		return 1
+	case "log":
+		return 2
+	case "exp":
+		return 3
+	}
+	return 0
 }
 
 // rampLevel is a fade's level `elapsed` into it: from before it starts, to
@@ -735,6 +756,30 @@ func kmsVideoTail(dmabuf bool, opts LoadOpts) []string {
 	return append(names, layerSink())
 }
 
+// pwDeinterlace puts cutepibob (gsp/bobdeint) into a plane tail of
+// interlaced video, after its converter's capsfilter: one picture per
+// field, rows between line-interpolated in one NEON pass, written into
+// DMABufs the plane scans out (configureKMSTail), so 1080i shows as 60
+// pictures a second. Before, the presenter showed the fields woven at 30.
+// A turned tail (90/270) is left woven. Decoder DMABufs (hardware H.264,
+// fixed before the tail is built) are brought into system memory by the ISP
+// first (videoDownload): videoconvert cannot read them.
+func pwDeinterlace(names []string, fromDMABuf bool) []string {
+	if indexOfName(names, "videoflip") >= 0 {
+		return names
+	}
+	i := indexOfName(names, "capsfilter")
+	if i <= 0 || indexOfName(names[:i], "videoconvert") < 0 {
+		return names
+	}
+	out := append(append([]string{}, names[:i+1]...), "cutepibob")
+	out = append(out, names[i+1:]...)
+	if fromDMABuf && len(videoDownload()) > 0 && out[0] == "queue" {
+		out = append(append([]string{"queue"}, videoDownload()...), out[1:]...)
+	}
+	return out
+}
+
 // packStage is cutepiyuvpack (gsp/yuvpack) where it registers: 10-bit
 // 4:2:0/4:2:2 and 8-bit 4:2:2 frames become I420 in one NEON pass (1080p
 // 10-bit 4:2:2: 2.35 ms against 20 ms for videoconvert to I420, which
@@ -892,7 +937,12 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 			cf.Set("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=I420,width=%d,height=%d,pixel-aspect-ratio=1/1", lay.preW, lay.preH)))
 		}
 	} else if cf := firstByFactory(byFactory, "capsfilter"); cf != nil {
-		if planeSink && firstByFactory(byFactory, "videoconvert") == nil {
+		if bob := firstByFactory(byFactory, "cutepibob"); bob != nil {
+			// pwDeinterlace: I420 into cutepibob, its pictures out as
+			// DMABufs the plane scans out.
+			cf.Set("caps", gst.NewCapsFromString("video/x-raw,format=I420"))
+			bob.Set("dmabuf", true)
+		} else if planeSink && firstByFactory(byFactory, "videoconvert") == nil {
 			cf.Set("caps", gst.NewCapsFromString("video/x-raw(memory:DMABuf)")) // decoder frames, as DMABuf
 		} else {
 			cf.Set("caps", gst.NewCapsFromString(kmsSysmemCaps))

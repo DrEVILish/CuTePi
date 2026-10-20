@@ -11,6 +11,7 @@ typedef struct {
 int planewall_open (int drm_fd, uint32_t crtc_id, const uint32_t * planes, int nplanes, int w, int h, int hz, char **err);
 int planewall_is_open (void);
 int planewall_set (uint32_t plane, const char *name, uint64_t value);
+int planewall_ramp (uint32_t plane, double from, double to, double opacity, int64_t start_us, int64_t dur_us, int curve);
 void planewall_detach (uint32_t plane);
 void planewall_stats (planewall_stats_t * st);
 void planewall_plane_stats (uint32_t plane, uint64_t * shown, uint64_t * dropped, uint64_t * steps, int *first, int64_t * t_us);
