@@ -16,7 +16,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"CuTePi/config"
-	"CuTePi/gsp"
 )
 
 func Upload(rg *gin.RouterGroup) {
@@ -201,7 +200,7 @@ func handleUpload(c *gin.Context) {
 		c.Header("X-Upload-Result", url.PathEscape(string(summary)))
 	}
 	if len(failures) > 0 {
-		respondError(c, http.StatusUnprocessableEntity, uploadFailureMessage(failures, len(files), gsp.GPUWall()))
+		respondError(c, http.StatusUnprocessableEntity, uploadFailureMessage(failures, len(files), currentPath()))
 		return
 	}
 
@@ -222,10 +221,10 @@ func handleUpload(c *gin.Context) {
 
 // uploadFailureMessage says which files were refused and why; when any
 // cannot be played, it lists what is supported (supportedNotice).
-func uploadFailureMessage(failures []string, total int, gpuWall bool) string {
+func uploadFailureMessage(failures []string, total int, path displayPath) string {
 	msg := fmt.Sprintf("could not import %d of %d: %s", len(failures), total, strings.Join(failures, "; "))
 	if strings.Contains(msg, "cannot be played") {
-		msg += ". " + supportedNotice(gpuWall)
+		msg += ". " + supportedNotice(path)
 	}
 	return msg
 }

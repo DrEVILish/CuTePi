@@ -64,9 +64,9 @@ func handleYoutubeDownload(c *gin.Context) {
 
 	// Refused, with what is supported, when the video is not in a codec that
 	// plays at 1080p60 here (nothing is converted on import, DESIGN §12.15).
-	gpuWall := gsp.GPUWall()
+	path := currentPath()
 	unsupported := func(what string) {
-		msg := fmt.Sprintf("Not imported: %s. %s", what, supportedNotice(gpuWall))
+		msg := fmt.Sprintf("Not imported: %s. %s", what, supportedNotice(path))
 		logs.PrintfWarn(logs.YDLFailed, "url=%q unsupported: %s", url, what)
 		writeLine(map[string]any{"error": msg, "unsupported": true})
 	}
@@ -105,7 +105,7 @@ func handleYoutubeDownload(c *gin.Context) {
 	// Check what arrived too: when the format list could not be read,
 	// yt-dlp chose the stream. Audio-only downloads have no video stream and
 	// are imported.
-	if codec, pixFmt, _ := probeVideoStream(c.Request.Context(), dlPath); codec != "" && !plays60(codec, pixFmt, gpuWall) {
+	if codec, pixFmt, _ := probeVideoStream(c.Request.Context(), dlPath); codec != "" && !plays60(codec, pixFmt, path) {
 		what := "the video is " + codecLabel(codec)
 		if codec == "h264" {
 			what = "the video is 10-bit H.264"

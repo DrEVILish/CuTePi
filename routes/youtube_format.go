@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"CuTePi/gsp"
 	"CuTePi/logs"
 	"CuTePi/media"
 )
@@ -42,14 +41,14 @@ func vcodecName(v string) string {
 // plays at 60 fps here; "" when none does (the import is then refused). A
 // lower resolution in a playable codec is never preferred over the best
 // picture: output quality first.
-func chooseFormat(formats []ytFormat, maxHeight int, gpuWall bool) string {
-	id, _ := chooseFormatOffered(formats, maxHeight, gpuWall)
+func chooseFormat(formats []ytFormat, maxHeight int, path displayPath) string {
+	id, _ := chooseFormatOffered(formats, maxHeight, path)
 	return id
 }
 
 // chooseFormatOffered is chooseFormat plus the codecs offered at the best
 // height and frame rate (for the notice when none is supported).
-func chooseFormatOffered(formats []ytFormat, maxHeight int, gpuWall bool) (string, []string) {
+func chooseFormatOffered(formats []ytFormat, maxHeight int, path displayPath) (string, []string) {
 	bestH, bestFPS := 0, 0.0
 	for _, f := range formats {
 		if f.VCodec == "" || f.VCodec == "none" || f.Height <= 0 || f.Height > maxHeight {
@@ -70,7 +69,7 @@ func chooseFormatOffered(formats []ytFormat, maxHeight int, gpuWall bool) (strin
 			seen[name] = true
 			offered = append(offered, name)
 		}
-		if !plays60(vcodecName(f.VCodec), "", gpuWall) {
+		if !plays60(vcodecName(f.VCodec), "", path) {
 			continue
 		}
 		if f.TBR > pickTBR {
@@ -97,7 +96,7 @@ func pickNativeFormat(ctx context.Context, url string) (string, []string, bool) 
 	if json.Unmarshal(out, &info) != nil || len(info.Formats) == 0 {
 		return "", nil, false
 	}
-	id, offered := chooseFormatOffered(info.Formats, 1080, gsp.GPUWall())
+	id, offered := chooseFormatOffered(info.Formats, 1080, currentPath())
 	logs.Printf(logs.YDLDownload, "stage=format url=%q native_playable=%q offered=%v (of %d)", url, id, offered, len(info.Formats))
 	return id, offered, true
 }

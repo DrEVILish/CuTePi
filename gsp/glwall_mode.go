@@ -7,6 +7,7 @@ package gsp
 // plane. The KMS plane wall remains the default.
 
 import (
+	"CuTePi/gsp/planewall"
 	"os"
 	"sync"
 	"time"
@@ -128,3 +129,7 @@ func GLAudioSync() (displayDelay, cueAudioOffset time.Duration) {
 
 // GPUWall reports whether the GPU wall is running (glOpen).
 func GPUWall() bool { return glOpen }
+
+// PresenterWall reports whether the plane wall runs with CuTePi's own
+// presenter (§6.1.4).
+func PresenterWall() bool { return !glOpen && planewall.IsOpen() }

@@ -863,12 +863,14 @@ Any number of cues can run at once, each on its own display layer, stacked; the 
 - **Limits:** the plane wall has one display plane per layer (16 on the Pi 4, one kept for the panic image); the
   hardware decoders' totals apply (two 1080p60 H.264 layers cannot both run at full rate, HEVC can: §6.1.1).
 
-### 6.1.4 Plane wall presenter (opt-in, 2026-10-10)
+### 6.1.4 Plane wall presenter (2026-10-10; the test Pi's display path since 2026-10-20)
 
 The KMS wall (§6.1) with its frames and plane properties committed by CuTePi instead of a `kmssink` per layer
 (`gsp/planewall`). Selected with `CUTEPI_WALL_SINK=planesink` (no `CUTEPI_WALL=gl`); if the presenter cannot start,
-the wall falls back to `kmssink` (logged). Which wall is the default is the operator's decision, from the numbers
-below.
+the wall falls back to `kmssink` (logged). Which wall is the default is the operator's decision: on 2026-10-20 the
+user chose the presenter for the test Pi, after the GPU wall was found to draw no DMABuf layers and, once drawing them,
+to hold a 1080p video layer to about 16 fps (TEST_REPORT P2). Support set on the presenter, three passes merged:
+78 of 107 supported (README).
 
 - **Start of a cue (2026-10-20).** A cue's pipeline runs with a 100 ms start latency (`pwStartLatency`): the
   decoders fill ahead before its first frame of running playback is due, and sound waits the same. Before that, the
@@ -1650,9 +1652,11 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   a supported codec (`routes/youtube_format.go`). A lower resolution in a supported codec never wins over a better
   picture. YouTube offers H.264, VP9 and AV1 at 1080p60: H.264 (format 312) is taken and imported as it is.
 - **Supported** (`routes/supported.go`, one table for the decision and the notice): video that plays at 1080p60
-  with smooth fades on the display path in use, from the codec support tests on the Pi 4. GPU wall: H.264 (8-bit),
-  HEVC (8 and 10-bit), VP8, MPEG-1/2, MPEG-4 Part 2, Motion JPEG; KMS wall the same without HEVC (its 128-column
-  frames cannot go on a plane as they are) and with Theora. Containers: MP4, MOV, MKV or WebM.
+  with smooth fades on the display path in use, from the codec support tests on the Pi 4. Plane wall presenter (the
+  test Pi's path; README, three passes): H.264 (8-bit), HEVC (8 and 10-bit), VP8, VP9, MPEG-1/2, MPEG-4 Part 2,
+  Motion JPEG, Theora (AV1 passed one run in three: not listed). GPU wall: H.264, HEVC, VP8, MPEG-1/2, MPEG-4
+  Part 2, Motion JPEG (from runs that counted undrawn layers: TEST_REPORT P2). kmssink wall: as the GPU wall without
+  HEVC and with Theora. Containers: MP4, MOV, MKV or WebM.
 - **Otherwise refused, never converted** (the user's decision, 2026-10-19). When the format list shows no
   supported stream at the best picture, nothing is downloaded; when the list could not be read, the download is
   probed (`ffprobe` codec and pixel format) and discarded if unsupported. The import dialog shows the reason (the

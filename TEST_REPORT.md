@@ -46,6 +46,29 @@ Each entry gives:
 3. The fix for the most likely cause.
 4. Related issues to check.
 
+### P3 — Plane wall presenter to 60 fps: support set 44 → 78 supported (2026-10-20)
+
+The user chose the presenter as the test Pi's display path and asked for the remaining gaps to be fixed. Measured
+with support.py on the presenter, now with a picture check (each file's plane read back), three passes per file,
+merged by majority (README). Changes and what they fixed:
+
+| Change | Before | After |
+|---|---|---|
+| 100 ms start latency; fade-in clock waits for 4 moving frames (5696714, 71da18b) | fade-ins 55-59 fps (first 100-300 ms short of frames) | 60 |
+| HEVC Main 10 on a P030 plane, UV gathered (10d3ffa) | 0-1.4 fps | 60/60/60, displayed frames bit-exact (1080p and 1920x800) |
+| 1080i through cutepibob into scanout DMABufs (71da18b) | 30 fps, woven | MPEG-2 1080i 60/60/60; H.264 1080i 60 |
+| Fades stepped by the presenter per commit (71da18b) | occasional 58.8 steps/s | 60 |
+| Console plane off (71da18b) | 1080i H.264 31 fps during fades | 58.8-60 |
+| Sink shows late frames (bd4df2c) | a near-limit decoder blanked for the rest of a cue after one hiccup | carries on |
+| Converters on four threads (ebea765) | VP9 alpha 24, ProRes 422 52-55 | VP9 lower third 59.4, ProRes 422 60 |
+| No QoS on the tail's own stages (d5cbe8a) | ProRes 4444, CineForm 444/RGB 1-2 fps | 28-37 (decode-bound) |
+| support.py: picture check, no debugfs reads while measuring, fade windows back-dated, multi-pass merge | — | — |
+
+Still below 60 on the Pi 4 (decode-bound): CineForm (34-50), ProRes 4444/XQ (28-37), VP9 with alpha (about 25),
+10-bit H.264 (45-55: 71 fps decode-only leaves no margin), AV1 (passes 1 run in 3: 58.8/47 fade-ins). DNxHR HQ MOV is
+bound by the SD card when read cold. qtrle and HAP in MKV, ALAC in MKV are refused at import (no decoder/parser).
+The first HEVC cue after a restart can miss one opacity step.
+
 ### P2 — GPU wall: HDMI black, every DMABuf layer undrawn (fixed 2026-10-19)
 
 - **Found:** the user saw no video on HDMI. Reading back the framebuffer the wall plane scans out (`tools/screen/scanout.py`: GETFB2, MAP_DUMB, mmap, as root, read-only) gave 0 of 2025 samples non-black with the SMPTE still (ISP route) and H.264 (hardware route) visible at level 1, while the wall's counters showed 60 frames/s presented and the cues' frames shown. Builds of 10 Oct (e5531b1) and e391389 were black too. The KMS plane wall showed the bars. The readback itself was checked on a dumb buffer the GPU cleared to red through an EGLImage.

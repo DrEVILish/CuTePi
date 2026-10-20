@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"CuTePi/gsp"
 	"CuTePi/media"
 )
 
@@ -12,21 +13,54 @@ import (
 // support"; DESIGN §12.15). URL imports in anything else are refused with
 // supportedNotice, never converted.
 type supportedCodec struct {
-	name     string // ffprobe codec_name
-	label    string
-	gpu, kms bool // supported on the GPU wall / the KMS plane wall
-	eightBit bool // 8-bit only (hardware H.264: 10-bit decodes at 12-14 fps)
+	name         string // ffprobe codec_name
+	label        string
+	gpu, pw, kms bool // supported on the GPU wall / the plane wall presenter / the kmssink plane wall
+	eightBit     bool // 8-bit only (hardware H.264: 10-bit decodes in software, 45-50 fps)
 }
 
+// The presenter's column is from the support runs of 2026-10-20 (README, three passes, a majority); the GPU
+// wall's and the kmssink wall's from earlier runs.
 var supportedCodecs = []supportedCodec{
-	{name: "h264", label: "H.264 (8-bit)", gpu: true, kms: true, eightBit: true},
-	{name: "hevc", label: "HEVC/H.265 (8 and 10-bit)", gpu: true},
-	{name: "vp8", label: "VP8", gpu: true, kms: true},
-	{name: "mpeg2video", label: "MPEG-2", gpu: true, kms: true},
-	{name: "mpeg1video", label: "MPEG-1", gpu: true, kms: true},
-	{name: "mpeg4", label: "MPEG-4 Part 2", gpu: true, kms: true},
-	{name: "mjpeg", label: "Motion JPEG", gpu: true, kms: true},
-	{name: "theora", label: "Theora", kms: true},
+	{name: "h264", label: "H.264 (8-bit)", gpu: true, pw: true, kms: true, eightBit: true},
+	{name: "hevc", label: "HEVC/H.265 (8 and 10-bit)", gpu: true, pw: true},
+	{name: "vp8", label: "VP8", gpu: true, pw: true, kms: true},
+	{name: "vp9", label: "VP9", pw: true},
+	{name: "av1", label: "AV1"},
+	{name: "mpeg2video", label: "MPEG-2", gpu: true, pw: true, kms: true},
+	{name: "mpeg1video", label: "MPEG-1", gpu: true, pw: true, kms: true},
+	{name: "mpeg4", label: "MPEG-4 Part 2", gpu: true, pw: true, kms: true},
+	{name: "mjpeg", label: "Motion JPEG", gpu: true, pw: true, kms: true},
+	{name: "theora", label: "Theora", pw: true, kms: true},
+}
+
+// displayPath is the display path in use, which decides what is supported.
+type displayPath int
+
+const (
+	pathKMS displayPath = iota
+	pathGPU
+	pathPresenter
+)
+
+func currentPath() displayPath {
+	switch {
+	case gsp.GPUWall():
+		return pathGPU
+	case gsp.PresenterWall():
+		return pathPresenter
+	}
+	return pathKMS
+}
+
+func (c supportedCodec) on(p displayPath) bool {
+	switch p {
+	case pathGPU:
+		return c.gpu
+	case pathPresenter:
+		return c.pw
+	}
+	return c.kms
 }
 
 // supportedContainers are the containers the support tests cover.
@@ -34,11 +68,11 @@ const supportedContainers = "MP4, MOV, MKV or WebM"
 
 // plays60 reports whether a video stream (ffprobe codec_name and pix_fmt;
 // "" when not known) is supported on the display path in use.
-func plays60(codec, pixFmt string, gpuWall bool) bool {
+func plays60(codec, pixFmt string, path displayPath) bool {
 	deep := strings.Contains(pixFmt, "10") || strings.Contains(pixFmt, "12")
 	for _, c := range supportedCodecs {
 		if c.name == codec {
-			return (gpuWall && c.gpu || !gpuWall && c.kms) && !(c.eightBit && deep)
+			return c.on(path) && !(c.eightBit && deep)
 		}
 	}
 	return false
@@ -46,10 +80,10 @@ func plays60(codec, pixFmt string, gpuWall bool) bool {
 
 // supportedNotice lists the supported codecs and containers for the
 // display path in use, for an import that is refused.
-func supportedNotice(gpuWall bool) string {
+func supportedNotice(path displayPath) string {
 	var names []string
 	for _, c := range supportedCodecs {
-		if gpuWall && c.gpu || !gpuWall && c.kms {
+		if c.on(path) {
 			names = append(names, c.label)
 		}
 	}
@@ -65,10 +99,6 @@ func codecLabel(codec string) string {
 		}
 	}
 	switch codec {
-	case "vp9":
-		return "VP9"
-	case "av1":
-		return "AV1"
 	case "":
 		return "an unknown codec"
 	}
