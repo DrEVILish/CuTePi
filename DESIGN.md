@@ -877,6 +877,13 @@ below.
   starts only when the plane has shown new frames on 5 consecutive refreshes (`movingOnPlane`), so a fade in starts
   on a picture that is already moving and every refresh of it brings a new frame. Go to the first visible step is
   about 180-320 ms. A cue without a fade in starts as before.
+- **HEVC Main 10 (2026-10-20).** The decoder's 10-bit frames are two-plane SAND128 in P030 (three 10-bit samples in
+  each 32-bit word, so a 1920-pixel row is 2560 bytes, 20 columns), with the same column heights as 8-bit (Y
+  ALIGN(h,16), UV half). The planes take P030 with the SAND128 modifier, so Main 10 takes the 8-bit route: Y
+  zero-copy from the decoder, UV gathered by the GPU (the gather moves bytes; only the width in bytes differs), a
+  P030 framebuffer with the Y's column height. Before, Main 10 stayed on the decoder's untiled system-memory copy
+  (0-1.4 fps). Checked bit-exact against FFmpeg's decode (`tools/codec-corpus/sandcheck.py`, now also 10-bit) on a
+  1080p60 frame and a 1920x800 one; the 1080p60 support files 60/60/60 in MKV and MOV.
 - **Presenter.** One thread (SCHED_FIFO 10) on the service's DRM fd (master, atomic capability). When a frame or a
   plane property changed, it makes one blocking atomic commit carrying every changed plane: framebuffer, source crop,
   on-screen rectangle, alpha, zpos, rotation, pixel blend mode, and COLOR_ENCODING/COLOR_RANGE for YUV frames. The

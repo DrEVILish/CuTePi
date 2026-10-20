@@ -2494,14 +2494,17 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 	// (TEST_REPORT, GPU wall step 2).
 	// Live pages stay on decodebin: its raw passthrough is what was verified
 	// for wpevideosrc's frames.
-	// Plane wall presenter: 8-bit HEVC (4:2:0) goes to the plane as the
-	// decoder's tiled DMABuf frames (cutepiplanesink gathers their UV,
-	// §6.1.4), which takes decodebin3 as on the GPU wall. Only these files:
-	// decodebin3 exposes software decoders' pads before their size is known
-	// (the plane wall's crop needs it), and 10-bit HEVC's tiled frames have no
-	// gather yet (they stay on the decoder's system-memory copy).
-	planeHEVC := planewall.IsOpen() && spec.endpointURL == "" && !spec.isTest &&
-		CodecLookup != nil && CodecLookup(spec.filename) == "hevc/yuv420p"
+	// Plane wall presenter: HEVC 4:2:0, 8-bit (NV12) and 10-bit (P030), goes
+	// to the plane as the decoder's tiled DMABuf frames (cutepiplanesink
+	// gathers their UV, §6.1.4), which takes decodebin3 as on the GPU wall.
+	// Only these files: decodebin3 exposes software decoders' pads before
+	// their size is known (the plane wall's crop needs it). 10-bit HEVC on
+	// the decoder's untiled system-memory copy played at 0-1.4 fps.
+	planeHEVC := false
+	if planewall.IsOpen() && spec.endpointURL == "" && !spec.isTest && CodecLookup != nil {
+		c := CodecLookup(spec.filename)
+		planeHEVC = c == "hevc/yuv420p" || c == "hevc/yuv420p10le"
+	}
 	decoderBin := "decodebin"
 	if (glOpen && spec.endpointURL == "") || planeHEVC {
 		decoderBin = "decodebin3"

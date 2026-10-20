@@ -106,6 +106,7 @@ typedef struct {
     int busy;
   } uv[UVN];
   int uv_n, uv_aw, uv_ah;
+  uint32_t uv_fourcc;           /* NV12 (8-bit) or P030 (10-bit) */
   uint32_t uv_gen;
   struct { GstMemory *key; EGLImageKHR img; GLuint tex; } uvtex[UVTEX];
   int nuvtex;
@@ -208,11 +209,17 @@ static int plane_takes (plane_st * s, uint32_t fourcc, uint64_t mod) {
   return 0;
 }
 
-static int plane_takes_sand (plane_st * s) {
+static int plane_takes_sand (plane_st * s, uint32_t fourcc) {
   for (int i = 0; i < s->nfmt; i++)
-    if (s->fmt[i] == DRM_FORMAT_NV12 && fourcc_mod_broadcom_mod (s->mod[i]) == DRM_FORMAT_MOD_BROADCOM_SAND128)
+    if (s->fmt[i] == fourcc && fourcc_mod_broadcom_mod (s->mod[i]) == DRM_FORMAT_MOD_BROADCOM_SAND128)
       return 1;
   return 0;
+}
+
+/* Bytes in a SAND row of w pixels: NV12 one a sample, P030 three 10-bit samples in each 32-bit word (a 128-byte
+ * column holds 96 pixels). The gather moves bytes, so only the width in bytes differs between them. */
+static uint32_t sand_bytes (uint32_t fourcc, int w) {
+  return fourcc == DRM_FORMAT_P030 ? (uint32_t) (w + 2) / 3 * 4 : (uint32_t) w;
 }
 
 /* ---- frames ------------------------------------------------------------- */
@@ -226,7 +233,8 @@ static void frame_free (plane_st * s, frame * f) {
 }
 
 /* ---- HEVC: Y zero-copy, UV gathered by the GPU -----------------------------
- * The HEVC decoder writes two-plane SAND128: Y with columns of ALIGN(h,16)
+ * The HEVC decoder writes two-plane SAND128 (NV12 for 8-bit, P030 for 10-bit: three samples in each 32-bit
+ * word): Y with columns of ALIGN(h,16)
  * lines in one memory, UV with columns of half that in another. A vc4
  * framebuffer takes one column height for both planes, so as decoded the
  * frame cannot be scanned out (it went through a CPU untile: ~1 fps). A
@@ -250,7 +258,8 @@ static GMutex gl_lock;
 void planewall_set_gl_display (void *display) { G.display = display; }
 
 static int is_sand (uint32_t fourcc, uint64_t mod) {
-  return fourcc == DRM_FORMAT_NV12 && fourcc_mod_broadcom_mod (mod) == DRM_FORMAT_MOD_BROADCOM_SAND128;
+  return (fourcc == DRM_FORMAT_NV12 || fourcc == DRM_FORMAT_P030) &&
+      fourcc_mod_broadcom_mod (mod) == DRM_FORMAT_MOD_BROADCOM_SAND128;
 }
 
 static GLuint gl_shader (GLenum t, const char *src) {
@@ -398,11 +407,12 @@ static void uv_free_cb (GstGLContext * ctx, gpointer d) {
 
 /* Frames of the plane's HEVC stream go: ring set up for w x h. Off screen
  * first (its buffers may be shown). */
-static int uv_setup (plane_st * s, int w, int h) {
-  uint32_t aw = (w + 127) & ~127u, ah = (h + 15) & ~15u;
-  if (s->uv_n == UVN && s->uv_aw == (int) aw && s->uv_ah == (int) ah) return 0;
+static int uv_setup (plane_st * s, int w, int h, uint32_t fourcc) {
+  uint32_t wb = sand_bytes (fourcc, w), aw = (wb + 127) & ~127u, ah = (h + 15) & ~15u;
+  if (s->uv_n == UVN && s->uv_aw == (int) aw && s->uv_ah == (int) ah && s->uv_fourcc == fourcc) return 0;
   if (s->uv_n) { planewall_detach (s->id); gst_gl_context_thread_add (G.ctx, uv_free_cb, s); }
-  gl_job j = { .s = s, .w = w, .h = h };
+  s->uv_fourcc = fourcc;
+  gl_job j = { .s = s, .w = (int) wb, .h = h };
   gst_gl_context_thread_add (G.ctx, uv_alloc_cb, &j);
   if (!j.ok) { gst_gl_context_thread_add (G.ctx, uv_free_cb, s); return -1; }
   return 0;
@@ -461,10 +471,11 @@ static uint32_t sand_fb (plane_st * s, GstMemory * my, int w, int h, int slot) {
   int dfd = gst_is_dmabuf_memory (my) ? gst_dmabuf_memory_get_fd (my) : gst_is_fd_memory (my) ? gst_fd_memory_get_fd (my) : -1;
   uint32_t hy;
   if (dfd < 0 || drmPrimeFDToHandle (P.fd, dfd, &hy)) return 0;
-  uint32_t hd[4] = { hy, s->uv[slot].handle }, pt[4] = { (uint32_t) w, (uint32_t) w }, of[4] = { (uint32_t) my->offset, 0 };
+  uint32_t wb = sand_bytes (s->uv_fourcc, w);
+  uint32_t hd[4] = { hy, s->uv[slot].handle }, pt[4] = { wb, wb }, of[4] = { (uint32_t) my->offset, 0 };
   uint64_t mo[4] = { DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT (s->uv_ah), DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT (s->uv_ah) };
   uint32_t fb = 0;
-  int r = drmModeAddFB2WithModifiers (P.fd, w, h, DRM_FORMAT_NV12, hd, pt, of, mo, &fb, DRM_MODE_FB_MODIFIERS);
+  int r = drmModeAddFB2WithModifiers (P.fd, w, h, s->uv_fourcc, hd, pt, of, mo, &fb, DRM_MODE_FB_MODIFIERS);
   if (hy != s->uv[slot].handle) drmCloseBufferHandle (P.fd, hy);
   if (r) { GST_WARNING ("addfb2 SAND Y+UV %dx%d: %s", w, h, g_strerror (errno)); return 0; }
   if (!c) { c = g_new0 (sand_fbs, 1); gst_mini_object_set_qdata (GST_MINI_OBJECT (my), q, c, sand_fbs_free); }
@@ -497,8 +508,8 @@ static void sand_dump (plane_st * s, GstBuffer * b, GstMemory * my, int slot, in
   }
   FILE *f = fopen ("/dev/shm/pw_meta.txt", "w");
   if (f) {
-    fprintf (f, "frame %" G_GUINT64_FORMAT " pts_ns %" G_GUINT64_FORMAT " w %d h %d aw %d ah %d\n", s->sand_frames,
-        GST_BUFFER_PTS (b), w, h, s->uv_aw, s->uv_ah);
+    fprintf (f, "frame %" G_GUINT64_FORMAT " pts_ns %" G_GUINT64_FORMAT " w %d h %d aw %d ah %d fourcc %.4s\n",
+        s->sand_frames, GST_BUFFER_PTS (b), w, h, s->uv_aw, s->uv_ah, (const char *) &s->uv_fourcc);
     fclose (f);
   }
 }
@@ -956,8 +967,10 @@ static GstCaps *cutepi_plane_sink_get_caps (GstBaseSink * bs, GstCaps * filter) 
     GstStructure *st = gst_structure_new ("video/x-raw", "format", G_TYPE_STRING, "DMA_DRM",
         "width", GST_TYPE_INT_RANGE, 1, G_MAXINT, "height", GST_TYPE_INT_RANGE, 1, G_MAXINT,
         "framerate", GST_TYPE_FRACTION_RANGE, 0, 1, G_MAXINT, 1, NULL);
-    if (G.display && plane_takes_sand (s)) {
-      gchar *str = gst_video_dma_drm_fourcc_to_string (DRM_FORMAT_NV12, DRM_FORMAT_MOD_BROADCOM_SAND128);
+    static const uint32_t sand_fourccs[] = { DRM_FORMAT_NV12, DRM_FORMAT_P030 };
+    for (unsigned k = 0; k < G_N_ELEMENTS (sand_fourccs); k++) {
+      if (!G.display || !plane_takes_sand (s, sand_fourccs[k])) continue;
+      gchar *str = gst_video_dma_drm_fourcc_to_string (sand_fourccs[k], DRM_FORMAT_MOD_BROADCOM_SAND128);
       GValue v = G_VALUE_INIT;
       g_value_init (&v, G_TYPE_STRING);
       g_value_take_string (&v, str);
@@ -994,7 +1007,7 @@ static gboolean cutepi_plane_sink_set_caps (GstBaseSink * bs, GstCaps * caps) {
     }
     self->sand = is_sand (self->drm.drm_fourcc, self->drm.drm_modifier);
     if (self->sand) {
-      if (!gl_ready () || uv_setup (s, self->vi.width, self->vi.height)) {
+      if (!gl_ready () || uv_setup (s, self->vi.width, self->vi.height, self->drm.drm_fourcc)) {
         GST_ELEMENT_ERROR (self, RESOURCE, FAILED, ("no GPU gather for HEVC frames on plane %u", self->plane_id), (NULL));
         return FALSE;
       }
