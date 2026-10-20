@@ -20,6 +20,9 @@ kernel, outside the service. A codec+container is listed **Supported** only if:
          so the transparent areas show what lies beneath;
   audio  (the 1080p60 part does not apply) the HDMI stream runs without a
          break through steady play and the fade out.
+  picture (video and images) at the end of steady play the display shows
+         it: the framebuffers of the planes in use, read back
+         (tools/screen/scanout.py), are not black on at least 0.5% of a plane.
 
 Otherwise it is listed "<Pi model> - unsupported" with the measured figures.
 
@@ -383,6 +386,45 @@ def debugfs_formats():
     return {}
 
 
+def picture():
+    """What the display shows, read back from the framebuffers of the planes in use (tools/screen/scanout.py):
+    the largest share of non-black samples over the planes other than the console's, and which plane. Frame
+    counters alone passed a GPU wall that showed black on HDMI for weeks (TEST_REPORT P2)."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "screen"))
+    import scanout
+    planes, cur, console = [], None, set()
+    for f in glob.glob("/sys/kernel/debug/dri/*/state"):
+        try:
+            txt = open(f).read()
+        except OSError:
+            continue
+        for line in txt.splitlines():
+            m = re.match(r"plane\[(\d+)\]", line)
+            if m:
+                cur = int(m.group(1))
+            elif cur is not None and re.search(r"crtc=pixelvalve", line):
+                planes.append(cur)
+            elif cur is not None and "fbcon" in line:
+                console.add(cur)
+        if planes:
+            break
+    best = None
+    for pl in dict.fromkeys(planes):
+        if pl in console:
+            continue
+        try:
+            info = scanout.read_plane(pl)
+        except OSError:
+            continue
+        if info.get("nonblack") is not None and (best is None or info["nonblack"] > best["nonblack"]):
+            best = info
+    return best
+
+
+# A picture is something other than black on at least this share of a plane (a small "LIVE" bug with alpha
+# covers 1.4% of the screen).
+MIN_PICTURE = 0.005
+
 _drm = None
 
 
@@ -611,12 +653,14 @@ def run(path, mdl, keep=False):
             # file); the steady window must not shrink by that.
             t_due = time.monotonic() + FADE_S + STEADY_S   # when the fade out is triggered
             t_fo = None
-            formats = blends = None
+            formats = blends = pic = None
             while time.monotonic() < t_due + FADE_S + 0.3:
-                if PW and is_alpha and formats is None and time.monotonic() >= t_due - 0.3:
-                    # The plane's format and blend mode while it is on screen
-                    # (end of steady play, as on the kmssink wall).
-                    formats, blends = debugfs_formats(), blend_modes()
+                if formats is None and time.monotonic() >= t_due - 0.3:
+                    # The picture, and for alpha files the plane's format and
+                    # blend mode, while it is on screen (end of steady play,
+                    # as on the kmssink wall).
+                    pic = picture()
+                    formats, blends = (debugfs_formats(), blend_modes()) if PW and is_alpha else ({}, {})
                 if t_fo is None and time.monotonic() >= t_due:
                     call("POST", "/api/fadeOut")
                     t_fo = time.monotonic()
@@ -659,6 +703,7 @@ def run(path, mdl, keep=False):
             call("POST", "/api/cue/%d/play" % pos)
             time.sleep(FADE_S + STEADY_S)
             t_read = time.monotonic()
+            pic = picture()
             if is_alpha:
                 formats, blends = debugfs_formats(), blend_modes()
             t_fo = time.monotonic()
@@ -703,6 +748,11 @@ def run(path, mdl, keep=False):
             need = MIN_FPS if not animated else (src_fps or 60) - 1 / (FADE_S - 0.1)
             res["need_fps"] = round(need, 1)
             ok = smooth and all((res[w + "_fps"] or 0) >= need for w in win)
+        if pic is None or pic.get("nonblack") is None:
+            res["picture"] = "not read"
+        else:
+            res["picture"] = "%.1f%% non-black (plane %d, %s)" % (pic["nonblack"] * 100, pic["plane"], pic["fourcc"])
+            ok = ok and pic["nonblack"] >= MIN_PICTURE
         if is_alpha and GL and not PW:
             # The mixer blends every layer with straight alpha over the layers
             # beneath, so what decides is whether the cue's frames keep their
@@ -826,6 +876,8 @@ def fmt_row(r):
                 f(iv["p99"]), f(iv["p99_9"]), f(iv["max"]), iv["repeats"])
     if r.get("plane_format") and not r.get("error"):
         meas += "; alpha: plane %s, blend %s" % (r["plane_format"], r["blend_mode"])
+    if r.get("picture") and not r.get("error"):
+        meas += "; picture: " + r["picture"]
     status = "**Supported**" if r["status"] == "Supported" else r["status"]
     return "| %s | %s | %s | %s | %s | %s | %s |" % (
         r["kind"], r["codec"], r["container"], dec, "yes" if r.get("hardware") else "no", meas, status)
