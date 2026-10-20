@@ -196,3 +196,12 @@ func TestLiveCacheKeeperPrunesOrphans(t *testing.T) {
 		t.Fatalf("cue A after keeper = url %q title %q", got.EndpointURL, got.Title)
 	}
 }
+
+// A page that keeps failing to preload is retried less and less often.
+func TestPreloadRetryBackoff(t *testing.T) {
+	for n, want := range map[int]time.Duration{1: time.Minute, 2: 2 * time.Minute, 3: 4 * time.Minute, 7: time.Hour, 20: time.Hour} {
+		if got := preloadRetry(n); got != want {
+			t.Errorf("failure %d: retry in %v, want %v", n, got, want)
+		}
+	}
+}

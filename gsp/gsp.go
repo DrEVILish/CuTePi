@@ -2304,10 +2304,16 @@ func livePageChain(dw, dh, hz int, zeroCopy bool) ([]*gst.Element, error) {
 }
 
 func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
+	NoteBusy() // a cue starting: background WebKit preloads stop now (quiet.go)
 	pipeline, err := gst.NewPipeline("")
 	if err != nil {
 		return nil, err
 	}
+	pipeline.Connect("deep-element-added", func(_, _, e any) {
+		if el, ok := e.(*gst.Element); ok {
+			intraNoQoS(el)
+		}
+	})
 	if glOpen {
 		glwall.UseSystemClock(pipeline) // the wall's clock: the bridge maps running times onto it
 	}

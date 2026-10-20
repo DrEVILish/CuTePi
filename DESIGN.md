@@ -1628,6 +1628,13 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
 
 ### 12.16 Decoders and codec paths on the Pi 4 (2026-10-09)
 
+> **Measurement caveat (2026-10-20).** GPU-wall frame rates in this section dated 2026-10-12 to 2026-10-14 were taken
+> while that wall drew no DMABuf layer (hardware decoders, the ISP, the heap route; fixed in fa239b5) and drew
+> copy-route layers opaque black (f62e397): `support.py` counted presented frames, not pictures (TEST_REPORT P2).
+> Those "Supported" verdicts are withdrawn until re-measured with pictures checked. Standalone decoder figures
+> (flat-out fps, CPU per frame, bit-exactness against the reference decoders) were measured without the wall and
+> stand.
+
 Measured on the test Pi (Pi 4, ARM 2.0 GHz, codec blocks 650 MHz); research notes and raw results in the
 h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
 
@@ -1678,7 +1685,10 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
   (cached, synced on map; luma rows on 64 bytes, chroma on 32) and they leave as DMA_DRM DMABufs the GPU samples
   directly: no ISP. With the ISP copying each picture into a DMABuf (60 a second on the VideoCore beside the
   hardware decoder) 1080i H.264 held at 55 fps steady (fade out 51.6). 1080i MPEG-2, 4:2:0 25 Mbit/s and 4:2:2
-  50 Mbit/s, and 1080i H.264 on the hardware decoder: Supported (support corpus `mpeg2_1080i`, `h264_1080i`).
+  50 Mbit/s, and 1080i H.264 on the hardware decoder: reported Supported on 2026-10-13, **withdrawn 2026-10-20**:
+  the GPU wall then drew no DMABuf layer (TEST_REPORT P2), so those 60 fps counted frames the mixer skipped. With
+  layers drawn the GPU wall presents ~16 fps for any moving 1080p layer. The plane wall presenter does not
+  deinterlace yet: `mpeg2_1080i` plays there at 30 fps, woven (codec workspace, `planewall-mine.txt`).
 - **PNG video: `cutepipngvdec`** (`gsp/pngvdec`, 2026-10-13): PNG frames in MOV/MKV decoded by four workers with
   libpng's simplified API straight into the output buffers (straight-alpha RGBA), finished in order; byte-identical
   to `pngdec`, which decoded one frame at a time (21-22 ms at 1080p RGBA, 33-39 fps on the wall). Moving pictures

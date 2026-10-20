@@ -28,6 +28,17 @@ const liveCacheTick = 5 * time.Second
 // the next try (offline server, bad certificate, ...).
 const livePreloadRetry = time.Minute
 
+// livePreloadMaxRetry caps the back-off for a page that keeps failing: each
+// failure doubles the wait from livePreloadRetry. A dead page was retried
+// every minute forever, each try ~6 s of WebKit start-up.
+const livePreloadMaxRetry = time.Hour
+
+// liveQuietPeriod is how long playback must have been quiet (nothing
+// playing, armed or being built) before a preload starts: a show's cues
+// follow each other, and WebKit's start-up beside a cue starting made the
+// cue stall.
+const liveQuietPeriod = 30 * time.Second
+
 // sandboxSweep is how often WebKit's leftover sandbox folders (one per web
 // process launch, never removed by WebKit) are cleared: at start, then this
 // often.
@@ -44,6 +55,7 @@ var (
 	// preloaded: source id -> URL preloaded this run; failed: id -> next try.
 	preloaded = map[int]string{}
 	preloadAt = map[int]time.Time{}
+	failures  = map[int]int{} // id -> consecutive failed preloads
 )
 
 // RunLiveCacheKeeper runs the keeper forever (main starts it).
@@ -54,6 +66,15 @@ func RunLiveCacheKeeper() {
 	}
 	// Let the display (and the GPU wall's GL) finish starting before WebKit's
 	// first GL set-up in this process (liveCacheStartDelay).
+	// Playback is sampled often so the quiet period counts from when it
+	// really ended, not from the keeper's last pass (up to liveCacheTick
+	// earlier).
+	go func() {
+		for {
+			gsp.PlaybackQuiet(0)
+			time.Sleep(250 * time.Millisecond)
+		}
+	}()
 	time.Sleep(liveCacheStartDelay)
 	var lastSweep time.Time
 	for {
@@ -117,7 +138,7 @@ func dropOrphanSources(caching bool, orphans, live []ctp.LiveSource) {
 // preloadNext preloads the first live cue page not preloaded this run, if
 // the wall is idle. One page per pass: each takes ~2 s and ~1.5 cores.
 func preloadNext(live []ctp.LiveSource) {
-	if !gsp.WallIdle() {
+	if !gsp.PlaybackQuiet(liveQuietPeriod) {
 		return
 	}
 	now := time.Now()
@@ -135,19 +156,24 @@ func preloadNext(live []ctp.LiveSource) {
 		return
 	}
 	start := time.Now()
-	err := gsp.PreloadPage(next.URL, gsp.WallIdle)
+	// Stops (the WebKit child and its helper processes killed) as soon as
+	// anything plays, is armed or starts to build.
+	err := gsp.PreloadPage(next.URL, func() bool { return !gsp.BusySince(start) })
 	liveCacheMu.Lock()
 	defer liveCacheMu.Unlock()
 	switch {
 	case err == nil:
 		preloaded[next.MediaID] = next.URL
 		delete(preloadAt, next.MediaID)
+		delete(failures, next.MediaID)
 		logs.Printf(logs.GSPPipeDebug, "live-page cache: preloaded %s in %.1fs", next.URL, time.Since(start).Seconds())
 	case errors.Is(err, gsp.ErrPreloadStopped):
 		// The wall got busy: try again on a later idle pass.
 	default:
-		preloadAt[next.MediaID] = time.Now().Add(livePreloadRetry)
-		logs.Printf(logs.GSPPipeDebug, "live-page cache: preloading %s: %v (retry in %v)", next.URL, err, livePreloadRetry)
+		failures[next.MediaID]++
+		wait := preloadRetry(failures[next.MediaID])
+		preloadAt[next.MediaID] = time.Now().Add(wait)
+		logs.Printf(logs.GSPPipeDebug, "live-page cache: preloading %s: %v (retry in %v)", next.URL, err, wait)
 	}
 }
 
@@ -165,4 +191,14 @@ func sourceHosts(sources []ctp.LiveSource) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// preloadRetry is the wait after the nth consecutive failure: livePreloadRetry
+// doubled each time, at most livePreloadMaxRetry.
+func preloadRetry(n int) time.Duration {
+	d := livePreloadRetry
+	for i := 1; i < n && d < livePreloadMaxRetry; i++ {
+		d *= 2
+	}
+	return min(d, livePreloadMaxRetry)
 }

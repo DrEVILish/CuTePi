@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
@@ -82,6 +83,9 @@ func child(args []string, limit time.Duration, keepGoing func() bool) ([]byte, e
 		return nil, err
 	}
 	cmd := exec.Command(exe, args...)
+	// Its own process group, so a stop kills WebKit's helper processes
+	// (WPEWebProcess, WPENetworkProcess) with it, not only the child.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Start(); err != nil {
@@ -90,7 +94,9 @@ func child(args []string, limit time.Duration, keepGoing func() bool) ([]byte, e
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	deadline := time.After(limit)
-	tick := time.NewTicker(100 * time.Millisecond)
+	// Polled often: a stop must reach WebKit before a starting cue's first
+	// frames (keepGoing reads a few fields under a lock).
+	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		select {
@@ -112,15 +118,22 @@ func child(args []string, limit time.Duration, keepGoing func() bool) ([]byte, e
 			return out.Bytes(), errors.New(msg)
 		case <-tick.C:
 			if !keepGoing() {
-				cmd.Process.Kill()
+				killGroup(cmd)
 				<-done
 				return nil, ErrStopped
 			}
 		case <-deadline:
-			cmd.Process.Kill()
+			killGroup(cmd)
 			<-done
 			return nil, fmt.Errorf("WebKit child process gave no answer within %v", limit)
 		}
+	}
+}
+
+// killGroup kills the child and every process in its group.
+func killGroup(cmd *exec.Cmd) {
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		cmd.Process.Kill()
 	}
 }
 
