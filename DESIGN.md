@@ -870,6 +870,13 @@ The KMS wall (§6.1) with its frames and plane properties committed by CuTePi in
 the wall falls back to `kmssink` (logged). Which wall is the default is the operator's decision, from the numbers
 below.
 
+- **Start of a cue (2026-10-20).** A cue's pipeline runs with a 100 ms start latency (`pwStartLatency`): the
+  decoders fill ahead before its first frame of running playback is due, and sound waits the same. Before that, the
+  first 100-300 ms after Go were short of frames (HEVC 2 and 4 frames in the first two 100 ms, H.264 3, MPEG-2 5,
+  against 6). The prerolled frame is put on the plane at opacity 0; the fade-in clock (and the sound's gain with it)
+  starts only when the plane has shown new frames on 5 consecutive refreshes (`movingOnPlane`), so a fade in starts
+  on a picture that is already moving and every refresh of it brings a new frame. Go to the first visible step is
+  about 180-320 ms. A cue without a fade in starts as before.
 - **Presenter.** One thread (SCHED_FIFO 10) on the service's DRM fd (master, atomic capability). When a frame or a
   plane property changed, it makes one blocking atomic commit carrying every changed plane: framebuffer, source crop,
   on-screen rectangle, alpha, zpos, rotation, pixel blend mode, and COLOR_ENCODING/COLOR_RANGE for YUV frames. The

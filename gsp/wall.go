@@ -841,12 +841,23 @@ func cropPx(v string, full int) int {
 
 // configureKMSTail wires the chain built from kmsVideoTail: plane, shared fd,
 // box, crop, rotation and stretch. srcW/srcH are the decoded frame size.
+// pwStartLatency is how far ahead of its first frame a cue on the presenter
+// starts: without it the decoders started just in time and the first 100-300
+// ms after Go were short of frames (HEVC 2 and 4 frames in the first two 100
+// ms, H.264 3, MPEG-2 5, against 6); with 100 ms every cue measured ran 6 a
+// 100 ms from its first moving frame. The prerolled frame is shown at
+// opacity 0 meanwhile (movingOnPlane).
+const pwStartLatency = 100 * time.Millisecond
+
 func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts LoadOpts, srcW, srcH int, still bool) error {
 	w := kmsWall()
 	sink := firstByFactory(byFactory, "kmssink")
 	planeSink := sink == nil
 	if planeSink {
 		sink = firstByFactory(byFactory, "cutepiplanesink")
+		// Decoders get pwStartLatency to fill ahead before the first frame
+		// of running playback is due (sound waits the same).
+		p.Set("latency", uint64(pwStartLatency))
 	}
 	if w == nil || sink == nil {
 		return fmt.Errorf("kms tail without a KMS wall")

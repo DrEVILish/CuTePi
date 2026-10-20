@@ -61,7 +61,9 @@ def _mapped(fd, handle, size=None):
 
 
 def _luma_share(b):
-    return sum(1 for i in range(0, len(b), 1024) if b[i] > 20) / max(1, len(b) // 1024)
+    """Share of luma samples (every 16th byte) above black."""
+    v = memoryview(b)[::16]
+    return sum(1 for x in v if x > 20) / max(1, len(v))
 
 
 def read_plane(plane):
@@ -102,8 +104,9 @@ def read_plane(plane):
             pitch = f.pitches[0]
             raw = _mapped(fd, f.handles[0], pitch * h)
             bpp = 2 if fourcc == "RG16" else 4
-            nz = sum(1 for i in range(0, len(raw), 4096) if raw[i:i + 3] != b"\0\0\0")
-            out.update(raw=raw, pix=RGB[fourcc], stride_px=pitch // bpp, nonblack=nz / max(1, len(raw) // 4096))
+            step = 16 * bpp
+            nz = sum(1 for i in range(0, len(raw) - 3, step) if raw[i:i + 3] != b"\0\0\0"[:min(3, bpp)])
+            out.update(raw=raw, pix=RGB[fourcc], stride_px=pitch // bpp, nonblack=nz / max(1, len(raw) // step))
             return out
         out["nonblack"] = None  # a format this tool does not read
         return out

@@ -422,8 +422,19 @@ def picture():
 
 
 # A picture is something other than black on at least this share of a plane (a small "LIVE" bug with alpha
-# covers 1.4% of the screen).
+# covers 1.4% of the screen), or on half the share the file itself has (a white ball on black: 0.2%).
 MIN_PICTURE = 0.005
+
+
+def source_share(path):
+    """Share of the file's luma above black, on a frame 3 s in (the first frame of a still)."""
+    out = subprocess.run(["ffmpeg", "-v", "error", "-ss", "3", "-i", path, "-frames:v", "1", "-f", "rawvideo",
+                          "-pix_fmt", "gray", "-"], capture_output=True).stdout
+    if not out:
+        out = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-frames:v", "1", "-f", "rawvideo",
+                              "-pix_fmt", "gray", "-"], capture_output=True).stdout
+    v = memoryview(out)[::16]
+    return sum(1 for x in v if x > 20) / len(v) if len(v) else None
 
 _drm = None
 
@@ -674,6 +685,16 @@ def run(path, mdl, keep=False):
                 raise RuntimeError("no wall layer appeared")
             t_first = next((smp[0] for smp in samples if smp[1] >= 1), samples[0][0])
             res["first_frame_ms"] = round((t_first - t_play) * 1000)
+            if PW and not (kind == "image" and not animated):
+                # The presenter shows the prerolled frame at opacity 0 and
+                # starts the fade with the first moving frame (gsp
+                # movingOnPlane): the fade in begins at the first opacity step,
+                # as the fade out's window does.
+                st0 = next((smp[2] for smp in samples if smp[0] >= t_first), None)
+                t_step = next((smp[0] for smp in samples if st0 is not None and smp[2] > st0), None)
+                if t_step is not None:
+                    res["fade_in_delay_ms"] = round((t_step - t_first) * 1000)
+                    t_first = t_step
             # The fade in starts with the first frame shown; both fade windows
             # leave 50 ms at each end, so no frame before or after a fade is
             # counted as a missing step.
@@ -697,6 +718,8 @@ def run(path, mdl, keep=False):
                     st = gl_per_refresh(samples, lo, hi, 2, hz or 0) if GL else gl_rate(samples, lo, hi, 2)
                     res[w + "_steps"] = round(st, 1) if st is not None else None
             plane = samples[-1][6] if PW else None
+            if os.environ.get("SUPPORT_DUMP"):
+                res["samples"] = [(round(x[0] - t_first, 4), x[1], x[2]) for x in samples]
         else:
             trace_start()
             t_play = time.monotonic()
@@ -751,8 +774,11 @@ def run(path, mdl, keep=False):
         if pic is None or pic.get("nonblack") is None:
             res["picture"] = "not read"
         else:
-            res["picture"] = "%.1f%% non-black (plane %d, %s)" % (pic["nonblack"] * 100, pic["plane"], pic["fourcc"])
-            ok = ok and pic["nonblack"] >= MIN_PICTURE
+            src = source_share(path)
+            need = MIN_PICTURE if src is None else min(MIN_PICTURE, src / 2)
+            res["picture"] = "%.1f%% non-black (plane %d, %s; file %s)" % (
+                pic["nonblack"] * 100, pic["plane"], pic["fourcc"], "%.1f%%" % (src * 100) if src is not None else "?")
+            ok = ok and pic["nonblack"] > 0 and pic["nonblack"] >= need
         if is_alpha and GL and not PW:
             # The mixer blends every layer with straight alpha over the layers
             # beneath, so what decides is whether the cue's frames keep their

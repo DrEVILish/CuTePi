@@ -1619,6 +1619,69 @@ func fadeShape(curve string, t float64) float64 {
 	}
 }
 
+// movingOnPlane returns, for a cue whose video is on a plane of the
+// presenter (§6.1.4), whether the plane is showing running playback at the
+// display rate yet. The first frame shown is the prerolled one, held until
+// the stream's frames arrive (pwStartLatency later), and the first moving
+// frames can still stall (a software decoder starting: 2-5 frames missing in
+// the first 100 ms on one start in three). The fade clock waits until the
+// plane has shown pwSteadyFrames new frames on as many consecutive commits,
+// so the fade in starts on a picture that is already moving smoothly and
+// every refresh of it brings a new frame. Sound follows the same level.
+// Anything else (no presenter, no video, a still) moves at once.
+func movingOnPlane(p *gst.Pipeline) func(state gst.State) bool {
+	if !planewall.IsOpen() {
+		return func(gst.State) bool { return true }
+	}
+	// Decided at the first tick in PLAYING: a cue with a layer by then waits
+	// for motion; one without (sound only) never does.
+	var l *wallLayer
+	decided, moving := false, false
+	type mark struct {
+		shown uint64
+		atUs  int64
+	}
+	var hist []mark
+	var base uint64
+	return func(state gst.State) bool {
+		if moving || state != gst.StatePlaying {
+			return moving || state != gst.StatePlaying
+		}
+		if !decided {
+			decided = true
+			if l = layerOf(p); l == nil {
+				moving = true
+				return true
+			}
+			base = planewall.PlaneStats(l.plane.id).Shown
+			return false
+		}
+		s := planewall.PlaneStats(l.plane.id)
+		if s.Shown <= base {
+			return false
+		}
+		hist = append(hist, mark{s.Shown, s.AtUs})
+		// Steady: over the last pwSteadyFrames refreshes, a new frame on each.
+		span := int64(pwSteadyFrames) * 1e6 / 60
+		for _, m := range hist {
+			if dt := s.AtUs - m.atUs; dt >= span-span/(2*pwSteadyFrames) {
+				refreshes := (dt*60 + 5e5) / 1e6
+				if int64(s.Shown-m.shown) >= refreshes && refreshes >= pwSteadyFrames {
+					moving = true
+				}
+			}
+		}
+		if len(hist) > 64 {
+			hist = hist[1:]
+		}
+		return moving
+	}
+}
+
+// pwSteadyFrames is how many frames on consecutive refreshes count as
+// steady motion (movingOnPlane).
+const pwSteadyFrames = 5
+
 func fadeIn(p *gst.Pipeline, gen uint64) {
 	mgr.mu.Lock()
 	c0 := mgr.clipOfLocked(p)
@@ -1635,11 +1698,12 @@ func fadeIn(p *gst.Pipeline, gen uint64) {
 	defer ticker.Stop()
 	var elapsed time.Duration
 	last := time.Now()
+	moving := movingOnPlane(p)
 	for now := range ticker.C {
 		_, state := p.GetState(gst.StateNull, 0)
 		delta := now.Sub(last)
 		last = now
-		onWall := !glOpen || glOnWall(p)
+		onWall := (!glOpen || glOnWall(p)) && moving(state)
 		mgr.mu.Lock()
 		// The focus, or the voice it became when a cue that keeps the
 		// others running was fired (§6.1.2): the fade carries on there. A
