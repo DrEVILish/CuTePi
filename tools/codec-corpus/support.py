@@ -696,7 +696,11 @@ def run(path, mdl, keep=False):
                 # moving frames, gsp movingOnPlane): the fade in begins at the
                 # first opacity step, as the fade out's window does.
                 st0 = next((smp[2] for smp in samples if smp[0] >= t_first), None)
-                t_step = next((smp[0] for smp in samples if st0 is not None and smp[2] > st0), None)
+                hit = next((smp for smp in samples if st0 is not None and smp[2] > st0), None)
+                # Samples come every ~30 ms: the first one showing a step can be
+                # a refresh or two after it; steps come one per refresh, so the
+                # fade started (steps - st0 - 1) refreshes before that sample.
+                t_step = hit[0] - (hit[2] - st0 - 1) / 60.0 if hit else None
                 if t_step is not None:
                     res["fade_in_delay_ms"] = round((t_step - t_first) * 1000)
                     t_first = t_step
@@ -709,7 +713,10 @@ def run(path, mdl, keep=False):
             # window starts at the first opacity step seen on screen, as the
             # fade in's starts at the first frame shown.
             st_fo = next((smp[2] for smp in samples if smp[0] >= t_fo), None)
-            t_fo_seen = next((smp[0] for smp in samples if smp[0] >= t_fo and st_fo is not None and smp[2] > st_fo), t_fo)
+            hit = next((smp for smp in samples if smp[0] >= t_fo and st_fo is not None and smp[2] > st_fo), None)
+            # As for the fade in: back-dated by the steps the sample already shows
+            # (one a refresh) on the presenter, whose counts are per commit.
+            t_fo_seen = (hit[0] - ((hit[2] - st_fo - 1) / 60.0 if PW else 0)) if hit else t_fo
             res["fade_out_delay_ms"] = round((t_fo_seen - t_fo) * 1000)
             # The steady window ends before the picture is read back (mapping
             # a decoder's buffer can hold a commit back by a refresh or two).
@@ -912,6 +919,8 @@ def fmt_row(r):
         meas += "; alpha: plane %s, blend %s" % (r["plane_format"], r["blend_mode"])
     if r.get("picture") and not r.get("error"):
         meas += "; picture: " + r["picture"]
+    if r.get("passes"):
+        meas += "; passed " + r["passes"]
     status = "**Supported**" if r["status"] == "Supported" else r["status"]
     return "| %s | %s | %s | %s | %s | %s | %s |" % (
         r["kind"], r["codec"], r["container"], dec, "yes" if r.get("hardware") else "no", meas, status)

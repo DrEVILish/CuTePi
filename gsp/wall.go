@@ -957,8 +957,21 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 	// Four threads on every converter, as on the GPU wall (VP9 with alpha:
 	// A420 to RGBA on one thread held the cue to 24 fps). A converter whose
 	// formats already match passes frames through untouched.
+	// QoS off on the tail's own stages: a converter skips a frame that
+	// arrives late, and a slow conversion (12-bit 4:4:4 or RGB to 8-bit RGB:
+	// ProRes 4444, CineForm 444/RGB) makes every frame late, so it threw away
+	// nearly all the decoder's frames (1-2 fps shown with the decoder at full
+	// tilt, 19 fps decode-only). The sink shows late frames; the decoder's
+	// QoS (where it has one) still skips ahead.
 	for _, conv := range byFactory["videoconvert"] {
 		conv.Set("n-threads", uint(4))
+	}
+	for _, f := range []string{"videoconvert", "cutepiyuvpack", "videocrop", "cutepibob", "videoflip", "videoscale", "v4l2convert"} {
+		for _, e := range byFactory[f] {
+			if _, err := e.GetPropertyType("qos"); err == nil {
+				e.Set("qos", false)
+			}
+		}
 	}
 	if vc := firstByFactory(byFactory, "videocrop"); vc != nil {
 		vc.Set("left", lay.cropL)
