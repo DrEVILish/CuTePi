@@ -35,7 +35,7 @@ _d.drmModeObjectGetProperties.argtypes = [ctypes.c_int, ctypes.c_uint32, ctypes.
 _d.drmModeGetProperty.restype = ctypes.POINTER(_Prop)
 _d.drmModeGetFB2.restype = ctypes.POINTER(_FB2)
 _d.drmModeGetFB2.argtypes = [ctypes.c_int, ctypes.c_uint32]
-RGB = {"XB24": "rgb0", "AB24": "rgba", "XR24": "bgr0", "AR24": "bgra", "RG16": "rgb565le"}
+RGB = {"XB24": "rgb0", "AB24": "rgba", "XR24": "bgr0", "AR24": "bgra", "BA24": "abgr", "RA24": "argb", "BX24": "0bgr", "RX24": "0rgb", "RG16": "rgb565le"}
 
 
 def _mapped(fd, handle, size=None):

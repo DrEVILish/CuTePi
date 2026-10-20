@@ -954,6 +954,12 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 			cf.Set("caps", gst.NewCapsFromString(kmsSysmemCaps))
 		}
 	}
+	// Four threads on every converter, as on the GPU wall (VP9 with alpha:
+	// A420 to RGBA on one thread held the cue to 24 fps). A converter whose
+	// formats already match passes frames through untouched.
+	for _, conv := range byFactory["videoconvert"] {
+		conv.Set("n-threads", uint(4))
+	}
 	if vc := firstByFactory(byFactory, "videocrop"); vc != nil {
 		vc.Set("left", lay.cropL)
 		vc.Set("right", lay.cropR)

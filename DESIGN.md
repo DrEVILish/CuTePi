@@ -892,6 +892,9 @@ below.
   every later frame dropped at the sink and showed nothing for the rest of the cue. QoS off made it worse (the
   decoder falls behind within 1.5 s). 10-bit H.264 1080p60 stays below 60 on the Pi 4: the CPU decode has no margin
   for the 8-bit pack and the frame copy.
+- **Converters on four threads (2026-10-20)**, as on the GPU wall: VP9 with alpha (A420 to RGBA) went from 24 to
+  35 fps (the 1080p test file; two VP9 decodes are the limit), a VP9 lower third with alpha to 59.4; ProRes 422 to
+  60.
 - **Interlaced video (2026-10-20).** On the presenter an interlaced file (caps, or a field order recorded at
   import) takes the software tail with `cutepibob` after the converter (`pwDeinterlace`): one picture per field,
   written into DMABufs the plane scans out, so 1080i shows as 60 pictures a second instead of woven at 30. Decoder
