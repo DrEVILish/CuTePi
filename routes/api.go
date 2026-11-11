@@ -211,84 +211,16 @@ func Api(rg *gin.RouterGroup) {
 	registerDiskRoute(rg)
 	registerLiveRoutes(rg)
 	registerActiveCuesRoutes(rg)
-	rg.GET("/ws", func(c *gin.Context) {
-		ws.Handle(c.Writer, c.Request)
-	})
-	// Full HTML render of the "Now Playing" widget. Used for the initial page
-	// render and by the WebSocket-driven refresher (public/src/ui.js) only
-	// when GET /api/nowplaying/status reports a change.
-	rg.GET("/nowplaying", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "mediainfo.html", nowplayingData())
-	})
+	registerStatusRoutes(rg)
 
-	// Lightweight change-detection endpoint, called once per WebSocket
-	// "sync" (no polling). Returns the server-side version (playback state
-	// counter + cuesheet counter) plus a "changed" flag computed against the
-	// version the client last saw; the widget only re-renders (via GET
-	// /api/nowplaying) when changed is true. Per-client tracking lives
-	// entirely in the client, so any number of concurrent clients work.
-	rg.GET("/nowplaying/status", func(c *gin.Context) {
-		clientVersion := c.Query("version")
-		gsp.CurrentPosition()
-		// The header partial carries the GO cluster too, so selection and
-		// cuesheet changes must re-render it — the version string couples
-		// both counters (string pair, so neither can mask the other).
-		version := fmt.Sprintf("%d.%d", gsp.StateVersion(), ctp.CuesheetVersion())
-		c.JSON(http.StatusOK, gin.H{
-			"changed": version != clientVersion,
-			"version": version,
-		})
-	})
-	rg.GET("/cuesheet", func(c *gin.Context) {
-		renderCuesheet(c)
-	})
-	rg.GET("/cuesheet/status", func(c *gin.Context) {
-		var clientVersion uint64
-		if raw := c.Query("version"); raw != "" {
-			if v, err := strconv.ParseUint(raw, 10, 64); err == nil {
-				clientVersion = v
-			}
-		}
-		noteRunningCues()
-		version := ctp.CuesheetVersion()
-		c.JSON(http.StatusOK, gin.H{"changed": version != clientVersion, "version": version})
-	})
+	registerTransportRoutes(rg)
+	registerMediaRoutes(rg)
+	registerSheetRoutes(rg)
+	registerSettingsRoutes(rg)
+	registerCueRoutes(rg)
+}
 
-	rg.GET("/qr", func(c *gin.Context) {
-		scheme := "http"
-		if c.Request.TLS != nil {
-			scheme = "https"
-		}
-		// The reverse proxy reports the client-facing scheme. Any client can
-		// send the header, so only the two real values are honoured.
-		switch proto := strings.ToLower(strings.TrimSpace(c.Request.Header.Get("X-Forwarded-Proto"))); proto {
-		case "http", "https":
-			scheme = proto
-		}
-		host := c.Request.Host
-		if host == "" {
-			host = fmt.Sprintf("localhost:%d", config.Port())
-		}
-		target := fmt.Sprintf("%s://%s/upload", scheme, host)
-		if c.Query("type") == "wifi" {
-			// Wi-Fi join code (Android hostapd 2.x syntax): clients scan it
-			// straight into their network list - used by the Network tab.
-			ap := config.AP()
-			// The join code necessarily carries the hotspot password; like
-			// every API route it is behind the operator password when set.
-			target = fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", wifiQREscape(ap.SSID), wifiQREscape(ap.Pass))
-			if ap.Pass == "" {
-				target = fmt.Sprintf("WIFI:T:nopass;S:%s;;", wifiQREscape(ap.SSID))
-			}
-		}
-		png, err := qrcode.Encode(target, qrcode.Medium, 256)
-		if err != nil {
-			c.String(http.StatusInternalServerError, err.Error())
-			return
-		}
-		c.Data(http.StatusOK, "image/png", png)
-	})
-
+func registerTransportRoutes(rg *gin.RouterGroup) {
 	rg.POST("/play", func(c *gin.Context) {
 		logs.Printf(logs.RTEPlay, "PLAY")
 		gsp.Play()
@@ -505,7 +437,9 @@ func Api(rg *gin.RouterGroup) {
 		}
 		c.Status(http.StatusNoContent)
 	})
+}
 
+func registerMediaRoutes(rg *gin.RouterGroup) {
 	// Direct Play from Mediapool
 	rg.POST("/play/:filename", func(c *gin.Context) {
 		filename := c.Param("filename")
@@ -687,7 +621,9 @@ func Api(rg *gin.RouterGroup) {
 			"uptimeS": int(time.Since(startTime).Seconds()),
 		})
 	})
+}
 
+func registerSheetRoutes(rg *gin.RouterGroup) {
 	// GO-advance toggle (GO bar checkbox): persisted in state, applies to
 	// the next GO. Unchecked checkboxes post nothing, so an absent field
 	// means "off".
@@ -906,6 +842,9 @@ func Api(rg *gin.RouterGroup) {
 		kickPanicArm()
 		c.Status(http.StatusNoContent)
 	})
+}
+
+func registerSettingsRoutes(rg *gin.RouterGroup) {
 	rg.GET("/settings", func(c *gin.Context) {
 		display, audio := config.Display(), config.Audio()
 		ap := config.AP()
@@ -1154,7 +1093,9 @@ func Api(rg *gin.RouterGroup) {
 		shutdownServer(300 * time.Millisecond)
 		c.Status(http.StatusOK)
 	})
+}
 
+func registerCueRoutes(rg *gin.RouterGroup) {
 	rg.POST("/cue/next", func(c *gin.Context) {
 		logs.Printf(logs.RTECueNext, "Select Next Cue (down)")
 		var err error
@@ -1579,4 +1520,85 @@ func displayModeLabel() string {
 		return fmt.Sprintf("%d × %d @ %d Hz", w, h, hz)
 	}
 	return fmt.Sprintf("%d × %d", w, h)
+}
+
+func registerStatusRoutes(rg *gin.RouterGroup) {
+	rg.GET("/ws", func(c *gin.Context) {
+		ws.Handle(c.Writer, c.Request)
+	})
+	// Full HTML render of the "Now Playing" widget. Used for the initial page
+	// render and by the WebSocket-driven refresher (public/src/ui.js) only
+	// when GET /api/nowplaying/status reports a change.
+	rg.GET("/nowplaying", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "mediainfo.html", nowplayingData())
+	})
+
+	// Lightweight change-detection endpoint, called once per WebSocket
+	// "sync" (no polling). Returns the server-side version (playback state
+	// counter + cuesheet counter) plus a "changed" flag computed against the
+	// version the client last saw; the widget only re-renders (via GET
+	// /api/nowplaying) when changed is true. Per-client tracking lives
+	// entirely in the client, so any number of concurrent clients work.
+	rg.GET("/nowplaying/status", func(c *gin.Context) {
+		clientVersion := c.Query("version")
+		gsp.CurrentPosition()
+		// The header partial carries the GO cluster too, so selection and
+		// cuesheet changes must re-render it — the version string couples
+		// both counters (string pair, so neither can mask the other).
+		version := fmt.Sprintf("%d.%d", gsp.StateVersion(), ctp.CuesheetVersion())
+		c.JSON(http.StatusOK, gin.H{
+			"changed": version != clientVersion,
+			"version": version,
+		})
+	})
+	rg.GET("/cuesheet", func(c *gin.Context) {
+		renderCuesheet(c)
+	})
+	rg.GET("/cuesheet/status", func(c *gin.Context) {
+		var clientVersion uint64
+		if raw := c.Query("version"); raw != "" {
+			if v, err := strconv.ParseUint(raw, 10, 64); err == nil {
+				clientVersion = v
+			}
+		}
+		noteRunningCues()
+		version := ctp.CuesheetVersion()
+		c.JSON(http.StatusOK, gin.H{"changed": version != clientVersion, "version": version})
+	})
+
+	rg.GET("/qr", func(c *gin.Context) {
+		scheme := "http"
+		if c.Request.TLS != nil {
+			scheme = "https"
+		}
+		// The reverse proxy reports the client-facing scheme. Any client can
+		// send the header, so only the two real values are honoured.
+		switch proto := strings.ToLower(strings.TrimSpace(c.Request.Header.Get("X-Forwarded-Proto"))); proto {
+		case "http", "https":
+			scheme = proto
+		}
+		host := c.Request.Host
+		if host == "" {
+			host = fmt.Sprintf("localhost:%d", config.Port())
+		}
+		target := fmt.Sprintf("%s://%s/upload", scheme, host)
+		if c.Query("type") == "wifi" {
+			// Wi-Fi join code (Android hostapd 2.x syntax): clients scan it
+			// straight into their network list - used by the Network tab.
+			ap := config.AP()
+			// The join code necessarily carries the hotspot password; like
+			// every API route it is behind the operator password when set.
+			target = fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", wifiQREscape(ap.SSID), wifiQREscape(ap.Pass))
+			if ap.Pass == "" {
+				target = fmt.Sprintf("WIFI:T:nopass;S:%s;;", wifiQREscape(ap.SSID))
+			}
+		}
+		png, err := qrcode.Encode(target, qrcode.Medium, 256)
+		if err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		c.Data(http.StatusOK, "image/png", png)
+	})
+
 }
