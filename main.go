@@ -166,20 +166,18 @@ func main() {
 	// tear down the playback pipeline, THEN close the DB. The old handler
 	// closed the DB first, killing the worker's and any in-flight handler's
 	// transactions with 'database is closed'.
+	shutdownDone := make(chan struct{})
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		log.Printf("CuTePi: shutting down (signal received)")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
-			log.Printf("CuTePi: HTTP shutdown: %v", err)
-		}
-		gsp.Panic() // tear down the playback pipeline (stops the show cleanly)
-		releaseConsole()
-		ctp.CloseDB()
-		os.Exit(0)
+		drainServer(srv, func() {
+			gsp.Panic()
+			releaseConsole()
+			ctp.CloseDB()
+		})
+		close(shutdownDone)
 	}()
 
 	printNetworkInfo()
@@ -191,4 +189,13 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("CuTePi: server failed on %s: %v", address, err)
 	}
+	<-shutdownDone
+}
+
+// drainServer waits for HTTP handlers before tearing down shared resources.
+func drainServer(srv *http.Server, cleanup func()) {
+	if err := srv.Shutdown(context.Background()); err != nil {
+		log.Printf("CuTePi: HTTP shutdown: %v", err)
+	}
+	cleanup()
 }
