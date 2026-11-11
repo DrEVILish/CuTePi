@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -201,81 +200,12 @@ func Show(rg *gin.RouterGroup) {
 			}
 		}
 
-		// Only after the media is in place: overwrite clears the sheet (and
-		// any local groups — stale folders would otherwise survive the
-		// import). This must run BEFORE ImportGroups: ClearCueSheet deletes
-		// every group, so clearing afterwards dropped the show's own groups
-		// and left its cues pointing at deleted parents. If an insert below
-		// fails mid-way, the cues and groups inserted so far are rolled back
-		// so the sheet is left empty-but-consistent (with an audit note)
-		// instead of a random half-show.
-		appendedOffset := 0
-		switch mode {
-		case "overwrite":
-			if err := ctp.ClearCueSheet(); err != nil {
-				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
-				return
-			}
-		case "append":
-			count, err := ctp.CueCount()
-			if err != nil {
-				c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
-				return
-			}
-			appendedOffset = count
-		}
-
-		// Groups are created before cues: cue Parent values reference group
-		// ids, and the manifest's ids are remapped through the returned map
-		// (imported groups get fresh local ids). v1 manifests have no groups,
-		// leaving the map empty and every cue top-level — matching pre-group
-		// behaviour.
-		idMap, err := ctp.ImportGroups(manifest.Groups)
-		if err != nil {
-			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
+		if err := ctp.ImportShow(manifest.Groups, manifest.Cues, manifest.SelectedCuePos, mode == "overwrite"); err != nil {
+			logs.Emit(logs.AuditEvent{Event: "import_failed", Title: err.Error()})
+			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
-		inserted := 0
-		// Layer "under" names a cue by its number in the show; numbers can
-		// change on import (append mode), so links are made once every cue
-		// is in, through the positions the show's numbers landed on.
-		posByNum := map[string]int{}
-		type underLink struct {
-			pos int
-			num string
-		}
-		var unders []underLink
-		for _, cue := range manifest.Cues {
-			cue.Parent = idMap[cue.Parent]
-			pos, err := ctp.AddCueFull(cue)
-			if err != nil {
-				// Roll back only this import's inserts. AddCueFull always
-				// appends (it ignores the exported cuePos), so in append mode
-				// the inserts sit at appendedOffset+1.., never at the top of
-				// the operator's existing sheet.
-				for pos := appendedOffset + inserted; pos > appendedOffset; pos-- {
-					_ = ctp.RemoveCue(strconv.Itoa(pos)) // best-effort rollback of this import's inserts
-				}
-				ctp.ImportGroupsRollback(idMap)
-				logs.Emit(logs.AuditEvent{Event: "import_failed", Pos: 0, Title: fmt.Sprintf("after %d cues: %v", inserted, err)})
-				respondError(c, http.StatusInternalServerError, err.Error())
-				return
-			}
-			inserted++
-			posByNum[cue.CueNum] = pos
-			if cue.LayerUnder != "" {
-				unders = append(unders, underLink{pos, cue.LayerUnder})
-			}
-		}
-		for _, u := range unders {
-			if target := posByNum[u.num]; target > 0 {
-				if err := ctp.SetCueLayerUnderPos(u.pos, target); err != nil {
-					logs.PrintfWarn(logs.RTEEdit, "import: layer under cue %s: %v", u.num, err)
-				}
-			}
-		}
-		ctp.SelectedCuePosFor(manifest.SelectedCuePos, len(manifest.Cues), appendedOffset)
-		logs.Emit(logs.AuditEvent{Event: "show_imported", Title: fmt.Sprintf("%s: %d cues", mode, inserted)})
+		logs.Emit(logs.AuditEvent{Event: "show_imported", Title: fmt.Sprintf("%s: %d cues", mode, len(manifest.Cues))})
 
 		if c.GetHeader("HX-Request") != "" {
 			renderCuesheet(c)

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // ExportCue is the JSON representation of one cue for .CTP show export /
@@ -309,16 +312,60 @@ func uniqueCueField(field, value string) (string, error) {
 // AddCueFull inserts a cue with all its settings restored (import path).
 // appendingStillToEnd, if nonzero, overrides the cue's exported cuePos and
 // assigns the next free position (append mode). Returns the assigned cuePos.
-func AddCueFull(c ExportCue) (cuePos int, err error) {
+func AddCueFull(c ExportCue) (int, error) {
+	tx, err := db.Beginx()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	pos, err := importCueTx(tx, c)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	bumpCuesheetVersion()
+	return pos, nil
+}
+
+// SelectedCuePosFor re-targets the selection after an import, remapping the
+// exported position: append mode must offset it past pre-existing cues.
+func SelectedCuePosFor(exported, exportedTotal, appendedOffset int) {
+	if exported <= 0 || exported > exportedTotal {
+		return
+	}
+	_ = setSelectedCuePos(exported + appendedOffset) // best-effort
+}
+
+// sanitizeColor drops a colour that is not a CSS hex value: imported .CTP
+// files are foreign input and a bad colour must not reach a style attribute.
+func sanitizeColor(c string) string {
+	if ValidColor(c) {
+		return c
+	}
+	return ""
+}
+
+// importOpacity maps a manifest opacity to the stored percentage: shows
+// exported before opacity existed carry none (0), which means fully opaque.
+func importOpacity(v float64) float64 {
+	if v <= 0 || v > 100 {
+		return 100
+	}
+	return v
+}
+
+func importCueTx(tx *sqlx.Tx, c ExportCue) (cuePos int, err error) {
 	mediaID := 0
 	if c.SourceKind == "endpoint" {
-		mediaID, err = AddEndpoint(c.EndpointTitle, c.EndpointURL)
+		mediaID, err = importEndpointTx(tx, c.EndpointTitle, c.EndpointURL)
 		if err != nil {
 			return 0, err
 		}
 		c.PosStart, c.PosEnd, c.CueDuration, c.Hold, c.Loop, c.LoopCount, c.AutoContinue = 0, 0, 0, false, false, 0, false
 	} else {
-		if err = db.Get(&mediaID, `SELECT media_id FROM mediapool WHERE source_kind = 'file' AND filename = ?`, c.Filename); err != nil {
+		if err = tx.Get(&mediaID, `SELECT media_id FROM mediapool WHERE source_kind = 'file' AND filename = ?`, c.Filename); err != nil {
 			return 0, fmt.Errorf("media %q not found", c.Filename)
 		}
 	}
@@ -346,21 +393,21 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 	}
 	// Match AddCue's title de-duplication: imports into a sheet that already
 	// holds a title get a numeric suffix.
-	title, err := uniqueCueField("title", c.Title)
+	title, err := importUniqueTitle(tx, c.Title)
 	if err != nil {
 		return 0, err
 	}
 
-	if cuePos, err = nextFreeCuePos(); err != nil {
+	if cuePos, err = importNextPos(tx); err != nil {
 		return 0, err
 	}
 
-	cueNum, err := freeCueNum(db, c.CueNum)
+	cueNum, err := freeCueNum(tx, c.CueNum)
 	if err != nil {
 		return 0, err
 	}
 
-	_, err = db.Exec(`
+	_, err = tx.Exec(`
 			INSERT INTO cuesheet (cuePos, cueNum, media_id, title, posStart, posEnd,
 			preWait, cueDuration, postWait, hold, loop, loop_count, color,
 			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index, stop_others, layer)
@@ -416,49 +463,136 @@ func AddCueFull(c ExportCue) (cuePos int, err error) {
 	// import order; headers sit on whole sheetIndexStep multiples).
 	if c.Parent != 0 {
 		var headerIdx float64
-		if err := db.Get(&headerIdx, `SELECT sheet_index FROM cue_group WHERE group_id = ?`, c.Parent); err == nil {
-			var members int
-			_ = db.Get(&members, `SELECT COUNT(*) FROM cuesheet WHERE parent = ? AND cuePos != ?`, c.Parent, cuePos)
-			_, _ = db.Exec(`UPDATE cuesheet SET sheet_index = ? WHERE cuePos = ?`,
-				headerIdx+float64(members+1), cuePos)
+		if err := tx.Get(&headerIdx, `SELECT sheet_index FROM cue_group WHERE group_id = ?`, c.Parent); err != nil {
+			return 0, err
+		}
+		var members int
+		if err := tx.Get(&members, `SELECT COUNT(*) FROM cuesheet WHERE parent = ? AND cuePos != ?`, c.Parent, cuePos); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`UPDATE cuesheet SET sheet_index = ? WHERE cuePos = ?`, headerIdx+float64(members+1), cuePos); err != nil {
+			return 0, err
 		}
 	}
-	bumpCuesheetVersion()
 	return cuePos, nil
 }
 
-// nextFreeCuePos returns one past the highest cuePos.
-func nextFreeCuePos() (int, error) {
+// ImportShow applies the complete cuesheet change in one database transaction.
+func ImportShow(groups []ExportGroup, cues []ExportCue, selected int, overwrite bool) error {
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	offset := 0
+	if overwrite {
+		for _, q := range []string{`DELETE FROM cuesheet`, `DELETE FROM cue_group`} {
+			if _, err = tx.Exec(q); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`DELETE FROM state WHERE key = ?`, stateKeySelectedSet); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO state (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, stateKeySelectedCue, "0"); err != nil {
+			return err
+		}
+	} else if err = tx.Get(&offset, `SELECT COUNT(*) FROM cuesheet`); err != nil {
+		return err
+	}
+	ids := make(map[int]int, len(groups))
+	for _, g := range groups {
+		name := g.Name
+		if name == "" {
+			name = "New Group"
+		}
+		var max float64
+		if err = tx.Get(&max, `SELECT COALESCE(MAX(sheet_index),0) FROM (SELECT sheet_index FROM cuesheet UNION ALL SELECT sheet_index FROM cue_group)`); err != nil {
+			return err
+		}
+		num, e := freeCueNum(tx, g.CueNum)
+		if e != nil {
+			return e
+		}
+		res, e := tx.Exec(`INSERT INTO cue_group (name,parent_group_id,sheet_index,collapse,slideshow,awards_mode,shuffle,loop,fade_ms,duration_ms,cue_num,color) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, name, ids[g.ParentGroupID], max+sheetIndexStep, boolInt(g.Collapse), boolInt(g.Slideshow), boolInt(g.AwardsMode), boolInt(g.Shuffle), boolInt(g.Loop), g.FadeMS, g.DurationMS, num, sanitizeColor(g.Color))
+		if e != nil {
+			return e
+		}
+		id, e := res.LastInsertId()
+		if e != nil {
+			return e
+		}
+		ids[g.GroupID] = int(id)
+	}
+	positions := make(map[string]int, len(cues))
+	type link struct {
+		pos int
+		num string
+	}
+	var links []link
+	for _, c := range cues {
+		c.Parent = ids[c.Parent]
+		pos, e := importCueTx(tx, c)
+		if e != nil {
+			return e
+		}
+		positions[c.CueNum] = pos
+		if c.LayerUnder != "" {
+			links = append(links, link{pos, c.LayerUnder})
+		}
+	}
+	for _, l := range links {
+		if target := positions[l.num]; target > 0 {
+			if _, err = tx.Exec(`UPDATE cuesheet SET layer_under = COALESCE((SELECT cue_id FROM cuesheet WHERE cuePos = ?), 0) WHERE cuePos = ?`, target, l.pos); err != nil {
+				return err
+			}
+		}
+	}
+	if selected > 0 && selected <= len(cues) {
+		if _, err = tx.Exec(`DELETE FROM state WHERE key = ?`, stateKeySelectedSet); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO state (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, stateKeySelectedCue, strconv.Itoa(selected+offset)); err != nil {
+			return err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	bumpCuesheetVersion()
+	return nil
+}
+
+func importUniqueTitle(tx *sqlx.Tx, title string) (string, error) {
+	current := title
+	for suffix := 2; ; suffix++ {
+		var exists int
+		if err := tx.Get(&exists, `SELECT COUNT(*) FROM cuesheet WHERE title = ?`, current); err != nil {
+			return "", err
+		}
+		if exists == 0 {
+			return current, nil
+		}
+		current = fmt.Sprintf("%s (%d)", title, suffix)
+	}
+}
+func importNextPos(tx *sqlx.Tx) (int, error) {
 	var max sql.NullInt64
-	if err := db.Get(&max, `SELECT MAX(cuePos) FROM cuesheet`); err != nil {
+	if err := tx.Get(&max, `SELECT MAX(cuePos) FROM cuesheet`); err != nil {
 		return 0, err
 	}
 	return int(max.Int64) + 1, nil
 }
-
-// SelectedCuePosFor re-targets the selection after an import, remapping the
-// exported position: append mode must offset it past pre-existing cues.
-func SelectedCuePosFor(exported, exportedTotal, appendedOffset int) {
-	if exported <= 0 || exported > exportedTotal {
-		return
+func importEndpointTx(tx *sqlx.Tx, title, rawURL string) (int, error) {
+	title = strings.TrimSpace(title)
+	u, err := validateEndpointURL(rawURL)
+	if err != nil {
+		return 0, err
 	}
-	_ = setSelectedCuePos(exported + appendedOffset) // best-effort
-}
-
-// sanitizeColor drops a colour that is not a CSS hex value: imported .CTP
-// files are foreign input and a bad colour must not reach a style attribute.
-func sanitizeColor(c string) string {
-	if ValidColor(c) {
-		return c
+	if title == "" {
+		title = u.Host
 	}
-	return ""
-}
-
-// importOpacity maps a manifest opacity to the stored percentage: shows
-// exported before opacity existed carry none (0), which means fully opaque.
-func importOpacity(v float64) float64 {
-	if v <= 0 || v > 100 {
-		return 100
-	}
-	return v
+	var id int
+	err = tx.QueryRow(`INSERT INTO mediapool (filename,source_kind,endpoint_url,endpoint_title,mimetype,size,duration,resolution,thumbnail_pending,waveform,waveform_pending,missing,media_meta) VALUES (NULL,?,?,?,?,0,0,?,0,?,0,0,?) RETURNING media_id`, "endpoint", u.String(), title, "application/x-cutepi-endpoint", "", "", "").Scan(&id)
+	return id, err
 }
