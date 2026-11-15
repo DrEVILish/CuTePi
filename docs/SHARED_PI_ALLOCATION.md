@@ -1,6 +1,6 @@
 # Shared CuTePi / TimerPi Pi allocation
 
-Status: 2026-11-15, 19:30:54 UTC. Ethernet-only performance testing is complete and the original .55 follower is restored; .73 playback was untouched. Temporary TimerPi cleanup/session-release acknowledgment is pending. The prior sessions remain separately released.
+Status: 2026-11-15, 19:31:17 UTC. Ethernet-only profiling is complete, the original .55 follower is restored, and TimerPi confirmed temporary cleanup and session release. .73 was untouched. All three sessions are released.
 
 The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
 
@@ -14,7 +14,7 @@ The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You
 - The separate .55 reboot restriction remains: explicit owner approval is required. Do not run the TimerPi installer on a CuTePi playback Pi.
 - Existing direct PVE-root SSH access to root@192.168.10.73 and root@192.168.10.55 was verified by TimerPi's fresh preflight. Use the existing SSH identity and host-key trust; no new credentials are needed or shared here.
 
-## Ethernet-only performance diagnosis: from 2026-11-15 19:18:05 UTC
+## Ethernet-only performance diagnosis: 2026-11-15, 19:18:05 to 19:31:17 UTC
 
 The owner clarified that clients reach the main Pi over Ethernet; BATMAN is the inter-Pi synchronisation path only. TimerPi requested continued latency diagnosis and speed fixes. CuTePi reserved a fresh slot until follower restoration and explicit temporary-cleanup/release handback. No competing CuTePi hardware measurement or deployment is scheduled.
 
@@ -42,7 +42,13 @@ TimerPi explicitly handed back .55 at 19:29:50 UTC: its qualification service wa
 
 CuTePi recreated only the original .55 cutepi-follower from the fresh handover-20261115-1920 capture. Start was 19:30:54.132 UTC; verification at 19:30:54.508 UTC found active/running PID 1718065, Transient=yes. Original binary SHA, actual argv, captured environment, working directory and lifecycle properties matched the fresh baseline. Its own original port 80 listener returned HTTP 200. No CuTePi deployment/show/data replacement or .73/network/controller/DRM/reboot command occurred.
 
-TimerPi received the follower RESTORATION ACK and may remove only its own stopped temporary units/files. CuTePi restoration is complete; final temporary-cleanup/session-release acknowledgment remains pending. No further Pi commands are planned by CuTePi for this session.
+TimerPi received the follower RESTORATION ACK and may remove only its own stopped temporary units/files. CuTePi restoration is complete; TimerPi subsequently confirmed temporary cleanup and released this session at 19:31:17 UTC. No further Pi commands are planned by CuTePi for this session.
+
+### Ethernet profiling cleanup complete: 19:31:17 UTC
+
+After CuTePi's fresh-baseline restoration acknowledgment, TimerPi confirmed its test MainPID 0 and removed only its own qualification runtime unit/drop-ins, failure bookkeeping, /tmp/timerpi-qualification and own /run/timerpi. It verified the unit absent after daemon-reload and the temporary directory absent, with original follower PID 1718065 active/running. All test clients, CPU and strace jobs had completed.
+
+TimerPi reports that .73 was never accessed in this session and no network/controller/radio/filter/routing/DRM commands or permanent changes occurred. No further Pi commands are planned; publishing continues locally only. The session is fully released. The strict 250 ms six passing patched runs and passing original-build reversal remain separately recorded, without a robust operator-speedup or full-qualification claim.
 
 ### TimerPi-reported Ethernet diagnosis results and limits
 
