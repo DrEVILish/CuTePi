@@ -1,0 +1,41 @@
+{
+  "cancel": [
+    {
+      "filename": "hw-20261115-prepare.mp4",
+      "state": "failed",
+      "error": "cancelled"
+    }
+  ],
+  "retryAccepted": {
+    "jobs": [
+      {
+        "filename": "hw-20261115-prepare.mp4",
+        "state": "failed",
+        "error": "cancelled"
+      },
+      {
+        "filename": "hw-20261115-prepare.mp4",
+        "state": "queued"
+      }
+    ],
+    "queued": [
+      "hw-20261115-prepare.mp4"
+    ]
+  },
+  "final": [
+    {
+      "filename": "hw-20261115-prepare.mp4",
+      "state": "failed",
+      "error": "cancelled"
+    },
+    {
+      "filename": "hw-20261115-prepare.mp4",
+      "state": "done"
+    }
+  ],
+  "observedRetryStates": [
+    "done",
+    "preparing",
+    "queued"
+  ]
+}

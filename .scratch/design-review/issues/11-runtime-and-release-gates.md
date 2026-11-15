@@ -25,3 +25,5 @@ AGENTS.md; cutepi.service; deploy/install-service-user.sh; .github/workflows/tes
 ## Comments
 
 2026-11-15 — Charted from owner-confirmed scope and area assessments. This is an open decision, not an approved change or a resolved implementation ticket.
+
+2026-11-15 — [Pi hardware evidence](../../../docs/reviews/2026-11-15-hardware.md): rapid-refire testing exposed an audio input teardown warning and persistent BCM2835/MMAL decoder failure on experimental builds. Audio candidates were retained off main after failed hardware qualification. Application restarts did not clear the decoder; a normal stock reboot did. Include decoder failure/recovery and live-page startup/cache behavior in qualification. A short recovered run does not establish a show-duration release gate.

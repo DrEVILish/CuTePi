@@ -1,0 +1,111 @@
+diff --git a/gsp/audio_settings_test.go b/gsp/audio_settings_test.go
+index f91d43b..9acb8d3 100644
+--- a/gsp/audio_settings_test.go
++++ b/gsp/audio_settings_test.go
+@@ -6,0 +7 @@ import (
++	"sync"
+@@ -299,0 +301,104 @@ func TestAudioBusResetKeepsInputs(t *testing.T) {
++
++// Retiring one cue must not leave a still-streaming source disconnected
++// from the mixer while other cues continue to use the shared bus.
++func TestAudioBusReleaseKeepsStreamingLinked(t *testing.T) {
++	gstInit()
++	config.SetDirsForTesting(t.TempDir())
++	anchor, err := gst.NewPipeline("release-test-anchor")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := audioBusInput(anchor); err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		audioBusRelease(anchor)
++		ResetAudioBus()
++	}()
++	abus.mu.Lock()
++	bus, sink := abus.p.GetPipelineBus(), abus.sink
++	abus.mu.Unlock()
++	// Collect actual GStreamer errors rather than relying on log text.
++	bus.RemoveWatch()
++	var buffers atomic.Int32
++	sink.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer, func(*gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
++		buffers.Add(1)
++		return gst.PadProbeOK
++	})
++	waitFor(t, "audio before cue retirement", func() bool { return buffers.Load() >= 5 })
++	for i := 0; i < 1000; i++ {
++		owner, err := gst.NewPipeline("release-test-cue")
++		if err != nil {
++			t.Fatal(err)
++		}
++		if _, err := audioBusInput(owner); err != nil {
++			t.Fatal(err)
++		}
++		time.Sleep(5 * time.Millisecond)
++		audioBusRelease(owner)
++		if got := AudioBusInputs(); got != 1 {
++			t.Fatalf("retirement left %d inputs, want only the continuing cue", got)
++		}
++		if msg := bus.TimedPopFiltered(0, gst.MessageError); msg != nil {
++			e := msg.ParseError()
++			t.Fatalf("cue retirement posted an audio error: %s (%s)", e.Error(), e.DebugString())
++		}
++	}
++	before := buffers.Load()
++	waitFor(t, "audio after cue retirement", func() bool { return buffers.Load() > before+5 })
++}
++
++func TestAudioBusReleaseUnderBackpressure(t *testing.T) {
++	gstInit()
++	config.SetDirsForTesting(t.TempDir())
++	anchor, _ := gst.NewPipeline("blocked-bus-anchor")
++	if _, err := audioBusInput(anchor); err != nil {
++		t.Fatal(err)
++	}
++	owner, _ := gst.NewPipeline("blocked-bus-cue")
++	if _, err := audioBusInput(owner); err != nil {
++		audioBusRelease(anchor)
++		t.Fatal(err)
++	}
++	abus.mu.Lock()
++	sink := abus.sink.GetStaticPad("sink")
++	abus.mu.Unlock()
++	blocked, release := make(chan struct{}), make(chan struct{})
++	var entered, released sync.Once
++	unblock := func() { released.Do(func() { close(release) }) }
++	probe := sink.AddProbe(gst.PadProbeTypeBuffer, func(*gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
++		entered.Do(func() { close(blocked) })
++		<-release
++		return gst.PadProbeOK
++	})
++	defer func() {
++		unblock()
++		sink.RemoveProbe(probe)
++		audioBusRelease(owner)
++		audioBusRelease(anchor)
++		ResetAudioBus()
++	}()
++	select {
++	case <-blocked:
++	case <-time.After(time.Second):
++		t.Fatal("audio sink did not receive a buffer")
++	}
++	// Fill the mixer's input queue while its output cannot drain.
++	time.Sleep(25 * time.Millisecond)
++	done := make(chan struct{})
++	go func() {
++		audioBusRelease(owner)
++		close(done)
++	}()
++	select {
++	case <-done:
++	case <-time.After(250 * time.Millisecond):
++		t.Error("retiring a cue blocked on the shared sink")
++	}
++	unblock()
++	select {
++	case <-done:
++	case <-time.After(3 * time.Second):
++		t.Fatal("retirement did not finish after the sink resumed")
++	}
++}

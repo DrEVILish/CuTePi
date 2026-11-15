@@ -1,0 +1,227 @@
+{
+  "revision": "c98ea65",
+  "note": "Visible observation is a DRM property polling upper bound including HTTP response; FPS/drop counts are presenter-reported, not independent optical frame identity.",
+  "before": {
+    "pid": 778,
+    "fds": 60,
+    "rssKB": 193160,
+    "pipelines": 3
+  },
+  "cycles": [
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 30.425327000017433,
+      "plane": 127,
+      "steady": {
+        "seconds": 2.000045,
+        "shown": 119,
+        "fps": 59.4986612801212,
+        "dropped": 0,
+        "commitFails": 0
+      },
+      "scanout": {
+        "plane": 127,
+        "fb": 737,
+        "width": 1920,
+        "height": 1080,
+        "fourcc": "YU12",
+        "modifier": 0,
+        "pix": "yuv420p",
+        "stride_px": 1920,
+        "nonblack": 1.0
+      },
+      "alsa": {
+        "/proc/asound/card0/pcm0p/sub0/status": "state: RUNNING\nowner_pid   : 807\ntrigger_time: 65.499808032\ntstamp      : 0.000000000\ndelay       : 648\navail       : 72\navail_max   : 440\n-----\nhw_ptr      : 4001832\nappl_ptr    : 4002480\n",
+        "/proc/asound/card1/pcm0p/sub0/status": "closed\n"
+      }
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 22.944129999984852,
+      "plane": 127,
+      "steady": {
+        "seconds": 2.000008,
+        "shown": 119,
+        "fps": 59.499762000952,
+        "dropped": 1,
+        "commitFails": 0
+      },
+      "scanout": {
+        "plane": 127,
+        "fb": 730,
+        "width": 1920,
+        "height": 1080,
+        "fourcc": "YU12",
+        "modifier": 0,
+        "pix": "yuv420p",
+        "stride_px": 1920,
+        "nonblack": 1.0
+      },
+      "alsa": {
+        "/proc/asound/card0/pcm0p/sub0/status": "state: RUNNING\nowner_pid   : 807\ntrigger_time: 65.499808032\ntstamp      : 0.000000000\ndelay       : 568\navail       : 152\navail_max   : 424\n-----\nhw_ptr      : 4170632\nappl_ptr    : 4171200\n",
+        "/proc/asound/card1/pcm0p/sub0/status": "closed\n"
+      }
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 50.187347000019145,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 35.47892899999283,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 120.94350800001052,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 22.879844000016192,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 107.41271599999891,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 72.93790200000672,
+      "plane": 149
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 123.49830599998768,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 26.637380000011035,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 178.4234610000226,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 86.51832599997533,
+      "plane": 149
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 152.8949850000174,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 30.050522999999885,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 53.79936299999599,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 56.54018799998539,
+      "plane": 149
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 151.15659800000003,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 21.759375999977237,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 158.0211960000213,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 21.33694999997715,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 159.42128699998648,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 70.09500199998797,
+      "plane": 138
+    },
+    {
+      "cue": "hw-20261115-a.mp4",
+      "observedVisibleMs": 76.89709300001368,
+      "plane": 127
+    },
+    {
+      "cue": "hw-20261115-b.mp4",
+      "observedVisibleMs": 34.02664699999036,
+      "plane": 127
+    }
+  ],
+  "afterCycles": {
+    "pid": 778,
+    "fds": 55,
+    "rssKB": 234844,
+    "pipelines": 3
+  },
+  "replacement": {
+    "observedVisibleMs": 254.54332999998996,
+    "scanout": {
+      "plane": 127,
+      "fb": 732,
+      "width": 1920,
+      "height": 1080,
+      "fourcc": "YU12",
+      "modifier": 0,
+      "pix": "yuv420p",
+      "stride_px": 1920,
+      "nonblack": 1.0
+    }
+  },
+  "avsync": {
+    "observedVisibleMs": 134.56546300000127,
+    "scanout": {
+      "plane": 127,
+      "fb": 731,
+      "width": 1920,
+      "height": 1080,
+      "fourcc": "YU12",
+      "modifier": 0,
+      "pix": "yuv420p",
+      "stride_px": 1920,
+      "nonblack": 0.9999537037037037
+    },
+    "steadyAndLoop": {
+      "seconds": 22.000058,
+      "shown": 1320,
+      "fps": 59.999841818598846,
+      "dropped": 0,
+      "commitFails": 0
+    },
+    "alsa": {
+      "/proc/asound/card0/pcm0p/sub0/status": "state: RUNNING\nowner_pid   : 807\ntrigger_time: 65.499808032\ntstamp      : 0.000000000\ndelay       : 584\navail       : 136\navail_max   : 440\n-----\nhw_ptr      : 6873736\nappl_ptr    : 6874320\n",
+      "/proc/asound/card1/pcm0p/sub0/status": "closed\n"
+    }
+  },
+  "afterPanic": {
+    "pid": 778,
+    "fds": 66,
+    "rssKB": 241072,
+    "pipelines": 6
+  }
+}
