@@ -983,7 +983,8 @@ apng_open (CutepiAnimDec * s)
       if (!f.dur) f.dur = GST_SECOND / 100;
       f.dispose = body[24] <= 2 ? body[24] : 0;
       f.blend = body[25] == 1;
-      if (!f.w || !f.h || f.x + f.w > (guint) s->w || f.y + f.h > (guint) s->h) return FALSE;
+      if (s->w <= 0 || s->h <= 0 || !f.w || !f.h || f.x > (guint) s->w || f.y > (guint) s->h ||
+          f.w > (guint) s->w - f.x || f.h > (guint) s->h - f.y) return FALSE;
       if (!s->frames->len && f.dispose == 2) f.dispose = 1; /* the spec: first frame "previous" = background */
       f.data = g_array_new (FALSE, FALSE, sizeof (gsize));
       g_array_append_val (s->frames, f);

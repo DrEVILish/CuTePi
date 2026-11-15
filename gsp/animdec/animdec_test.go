@@ -799,3 +799,37 @@ func TestAVIFSequenceMatchesLibavif(t *testing.T) {
 		t.Errorf("%d frames, libavif %d, want 12", n, len(ref))
 	}
 }
+
+// Malformed frame coordinates must fail decoding rather than corrupt memory.
+// Run the decoder in a child so a native crash is reported as a test failure.
+func TestAPNGRejectsOverflowCoordinates(t *testing.T) {
+	if os.Getenv("CUTEPI_APNG_BOUNDS_CHILD") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestAPNGRejectsOverflowCoordinates$")
+		cmd.Env = append(os.Environ(), "CUTEPI_APNG_BOUNDS_CHILD=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("malformed APNG crashed or was accepted: %v\n%s", err, out)
+		}
+		return
+	}
+	gst.Init(nil)
+	Register()
+	for _, patch := range []apngFrame{
+		{x: 0xfffffff0, w: 32, h: 1},
+		{y: 0xfffffff0, w: 1, h: 32},
+		{x: 64, w: 1, h: 1},
+	} {
+		path := filepath.Join(t.TempDir(), "bad.apng")
+		patch.px = [4]byte{0, 255, 0, 255}
+		buildAPNG(t, path, 64, 64, []apngFrame{{w: 64, h: 64, px: [4]byte{255, 0, 0, 255}}, patch})
+		pipe, err := gst.NewPipelineFromString("filesrc location=" + path + " ! video/x-apng ! cutepianimdec ! fakesink sync=false")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pipe.SetState(gst.StatePlaying)
+		msg := pipe.GetPipelineBus().TimedPopFiltered(gst.ClockTime(3*time.Second), gst.MessageError|gst.MessageEOS)
+		pipe.SetState(gst.StateNull)
+		if msg == nil || msg.Type() != gst.MessageError {
+			t.Fatal("invalid frame was not rejected")
+		}
+	}
+}
