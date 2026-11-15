@@ -1,6 +1,6 @@
 # Shared CuTePi / TimerPi Pi allocation
 
-Status: 2026-11-15, 16:52:14 UTC. A fresh network-only 500-client experiment is reserved; the .55 follower was paused at 16:55:00 UTC for this new slot, while .73 playback remains running. The previous session remains fully released at 16:15:02 UTC, with both CuTePi services and original networks restored.
+Status: 2026-11-15, 16:59:29 UTC. The second network-only experiment is complete and its session is released. Both CuTePi services and original networks are restored; TimerPi confirmed temporary cleanup. The first session remains separately released at 16:15:02 UTC.
 
 The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
 
@@ -14,12 +14,12 @@ The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You
 - The separate .55 reboot restriction remains: explicit owner approval is required. Do not run the TimerPi installer on a CuTePi playback Pi.
 - Existing direct PVE-root SSH access to root@192.168.10.73 and root@192.168.10.55 was verified by TimerPi's fresh preflight. Use the existing SSH identity and host-key trust; no new credentials are needed or shared here.
 
-## New network-only experiment: reserved from 2026-11-15 16:52:14 UTC
+## Network-only experiment: 2026-11-15, 16:52:14 to 16:59:29 UTC
 
 The owner requested “Let's try 500ms for 500-clients”. CuTePi accepted a fresh shared qualification slot until explicit original-network/follower restoration and temporary-cleanup handback. No competing CuTePi hardware measurement or deployment is scheduled. This is separate from the completed session below.
 
 - Scope: temporary timerpi/channel 13/GB BATMAN path, isolated TimerPi data and display-off services on port 18080 on both Pis. Synthetic 500 clients traverse .73 SSH -> bat0 -> .55.
-- Experiment gate: operator p95 at 500 ms for this 500-client workload only. Preserve delivery-completeness evidence. No result is available yet. The earlier 250 ms gates and wireless 1000-client p95=1.378s NOT QUALIFIED result remain unchanged.
+- Experiment gate: operator p95 at 500 ms for this 500-client workload only. Preserve delivery-completeness evidence. All four runs failed the experimental latency gate; results and final handback are recorded below. The earlier 250 ms gates and wireless 1000-client p95=1.378s NOT QUALIFIED result remain unchanged.
 - .73 real cutepi playback and DRM ownership remain running throughout. No DRM access, service restart, reboot, installer, deployment/show/data changes or permanent network-profile conversion.
 - TimerPi alone owns fresh network baselines, controller/radio/filter transitions, guarded rollback and restoration; Ethernet management must remain available. The previous session's captures do not replace fresh baselines.
 - CuTePi owns only .55 cutepi-follower pause/restore. TimerPi supplied 16:55:00 UTC after confirming fresh baselines and validated rollback. CuTePi captured the current exact transient unit/env and PID, paused only the follower, verified process/cgroup exit and sent STOPPED before any radio transition.
@@ -34,7 +34,32 @@ CuTePi independently captured the current .55 transient unit/properties, process
 
 Only systemctl stop cutepi-follower.service was issued at 16:55:00.022 UTC. Verification at 16:55:00.108 UTC found inactive/dead, MainPID=0, ControlPID=0, original PID 1715109 absent and an empty/removed cgroup. The transient unit unloaded as expected. TimerPi received explicit STOPPED acknowledgment before controller/radio transition.
 
-Follower restoration remains pending explicit original-network/controller handback and will use this fresh private baseline, not the earlier session's capture. No mesh/controller/radio/filter, DRM or .73 commands were issued by CuTePi. The experiment has no result yet; the 500 ms gate remains scoped only to 500 clients and prior results are unchanged.
+At that stage follower restoration was pending original-network/controller handback; the completed restoration used this fresh private baseline, not the earlier session's capture. No mesh/controller/radio/filter, DRM or .73 commands were issued by CuTePi. The 500 ms gate remains scoped only to 500 clients; the results below do not change prior gates or results.
+
+### Second-session network handback, follower restoration and cleanup
+
+TimerPi explicitly handed back original networks/controllers at 16:57:09 UTC. It reported .55's original controller unit byte-identical, loaded active/exited; wlan0 UP IBSS cutepi-mesh/channel 1/2412 MHz, bat0 10.77.0.55/24, power saving off and NetworkManager unmanaged. On .73, wlan0 was DOWN/managed/soft-blocked with power saving on, no bat0/controller, and original cutepi PID 6545 active throughout; its cached channel 13 while down was not an active join. Both apps were stopped/display-off, SSH relay closed, rollback scripts complete, timers stopped, filters removed and Ethernet management preserved. CuTePi did not change network configuration.
+
+CuTePi recreated only cutepi-follower.service from the NEW handover-20261115-1655 private definition/env. An initial parser guard rejected the captured explicit Type/Restart/KillMode directives before any service change; after accepting those known captured lifecycle properties, the service was recreated once. Start was 16:58:59.460 UTC; verification at 16:58:59.842 UTC found active/running PID 1716778, Transient=yes, matching original argv/environment/cwd/lifecycle and original binary SHA. The original port 80 listener belonged to this process and returned HTTP 200. No data/show/unit deployment replacement occurred.
+
+TimerPi received the follower restoration acknowledgment, then explicitly completed temporary cleanup and released this second session at 16:59:29 UTC. It removed only its own stopped qualification runtime unit/drop-ins, failure bookkeeping and /tmp/timerpi-qualification plus own /run/timerpi scratch. Its final checks found no active-drill/traffic-control markers or eth0 clsact, qualification MainPID 0, relay closed, original wired addresses/default gateway retained, NetworkManager .73 managed/.55 unmanaged, .73 cutepi PID 6545 running and .55 follower PID 1716778 running with cutepi-mesh active/exited.
+
+This fresh session is fully released. No further Pi commands are planned. CuTePi issued no .73 service/DRM, mesh/controller/radio/filter, reboot or installer commands; permanent profiles remain unchanged.
+
+### Second-session TimerPi-reported results: all latency gates failed
+
+Temporary timerpi/channel 13/GB BATMAN path; 500 synthetic clients via .73 SSH -> bat0 -> .55, isolated display-off port18080 apps. The 500 ms operator gate applied only to this experiment:
+
+| Run | Operator p95 (ms) | Gate (ms) | Result |
+|---|---:|---:|---|
+| Wireless burst 1 |1298.597 |500 | FAIL |
+| Wireless burst 2 |2673.078 |500 | FAIL |
+| Wireless burst 3 |1123.006 |500 | FAIL |
+| Same-session wired 500 control |569.997 |500 | FAIL |
+
+Each wireless burst joined 500, voted 500, counted 500 and delivered 500, with zero disconnects and successful client cleanup. Complete delivery does not satisfy the latency gate. The second burst's fanout was 3285.603 ms, also failing its 1000 ms gate.
+
+Because the wired 500 control also failed, these measurements do not isolate radio as the cause. No sole-RF inference or 500-client qualification is made. Earlier 250 ms qualification results, including the separate 1000-client wireless failure, remain unchanged.
 
 ## Qualification session: 2026-11-15, 15:16:39 to 16:14:03 UTC
 
@@ -70,7 +95,7 @@ The original show/data/binary/unit were not replaced or edited. Private baseline
 
 TimerPi explicitly released .73 DRM at 15:56:16 UTC after its corrected native test passed 1920x1080@50Hz with200 changed frames in9.339s. Its first test had failed and incorrectly skipped; TimerPi reports correcting pointer-array capacities, the connected enum and opt-in failure classification before the successful rerun. Its evidence is PVE /var/tmp/timerpi-hw-20261115/drm-hardware-final.log. These are TimerPi-reported results, separate from CuTePi restoration checks.
 
-CuTePi independently found no primary DRM-card holders, verified the captured unit-definition hash and original binary SHA256, then started only the original cutepi.service at 15:57:46.393 UTC. By15:57:47.203 it was active/running as PID6545 with HTTP 200 and a card1 handle. No unit/binary/show replacement or deployment was performed.
+CuTePi independently found no primary DRM-card holders, verified the captured unit-definition hash and original binary SHA256, then started only the original cutepi.service at 15:57:46.393 UTC. By15:57:47.203 it was active/running as PID 6545 with HTTP 200 and a card1 handle. No unit/binary/show replacement or deployment was performed.
 
 After the service opened the card, a one-shot read-only libdrm query at15:58:27.599 verified the active CRTC at1920x1080,60.0Hz; the inspection descriptor was not DRM master. Existing plane127 framebuffer728 read back as1920x1080 AB24, nonblack fraction1.0, and the presenter was on. No DRM debug-state read or cue GO/show edit was issued. This verifies restored mode and framebuffer content, not a new physical picture/audio latency or AV-sync acceptance run.
 
