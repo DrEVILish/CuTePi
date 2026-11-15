@@ -78,6 +78,13 @@ func Ramp(plane uint32, from, to, opacity float64, start time.Time, dur time.Dur
 // the commit).
 func Detach(plane uint32) { C.planewall_detach(C.uint32_t(plane)) }
 
+// WaitShown waits for the first commit after the call that shows plane with
+// a frame (a layer just raised is then on screen), at most timeout. False on
+// timeout or with the presenter closed.
+func WaitShown(plane uint32, timeout time.Duration) bool {
+	return C.planewall_wait_shown(C.uint32_t(plane), C.int(timeout.Milliseconds())) != 0
+}
+
 // Stats is the presenter's commit count, failures and the intervals between
 // commits.
 type Stats struct {

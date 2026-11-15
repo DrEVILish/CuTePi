@@ -1,0 +1,19 @@
+# BATMAN-adv mesh on wlan0 at boot (tools/mesh/batman-wifi.sh, DESIGN §6.8d).
+# Test-only and not installed by any script: copy to /etc/systemd/system/,
+# put MESH_ADDR=10.77.0.<n>/24 (and any MESH_* override) in
+# /etc/default/cutepi-mesh, then `systemctl enable --now cutepi-mesh`.
+# Stopping it takes the mesh down and hands wlan0 back to NetworkManager.
+[Unit]
+Description=CuTePi BATMAN-adv mesh (bat0 over Wi-Fi IBSS)
+After=NetworkManager.service
+Before=cutepi.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/cutepi-mesh
+ExecStart=/opt/cutepi/tools/mesh/batman-wifi.sh up ${MESH_ADDR}
+ExecStop=/opt/cutepi/tools/mesh/batman-wifi.sh down
+
+[Install]
+WantedBy=multi-user.target

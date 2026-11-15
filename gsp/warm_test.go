@@ -117,12 +117,12 @@ func TestWarmSlotReplacementAndPanic(t *testing.T) {
 		t.Fatalf("Warm x: %v", err)
 	}
 	_, _, first := slotState()
-	if err := Warm(file, LoadOpts{WarmPreroll: true}); err != nil {
+	if err := Warm(file, LoadOpts{WarmPreroll: true, Volume: -3}); err != nil {
 		t.Fatalf("Warm y: %v", err)
 	}
 	_, _, second := slotState()
 	if second == nil || second == first {
-		t.Fatalf("second Warm must install a FRESH pipeline in the slot")
+		t.Fatalf("a Warm with other opts must install a FRESH pipeline in the slot")
 	}
 
 	Panic()
@@ -291,4 +291,71 @@ func TestWarmOptsEquality(t *testing.T) {
 	if (LoadOpts{WarmPreroll: true} == LoadOpts{}) {
 		t.Errorf("WarmPreroll zero-participation: true opts equals empty opts")
 	}
+}
+
+// Arming the cue already in the slot keeps that slot (the keeper and
+// armNextCue may both arm the selected cue), and an arm's start seek counts
+// once: startPlayback skips only the seek the slot made, and only the first
+// time it starts.
+func TestWarmKeepsArmAndPreSeekOnce(t *testing.T) {
+	gstAvailable(t)
+	quiescePlayback(t)
+	file := warmFixture(t, "warm-keep.wav", tinyWav(1))
+	opts := LoadOpts{WarmPreroll: true}
+	if err := Warm(file, opts); err != nil {
+		t.Fatalf("Warm: %v", err)
+	}
+	_, _, first := slotState()
+	if err := Warm(file, opts); err != nil {
+		t.Fatalf("Warm again: %v", err)
+	}
+	if _, _, again := slotState(); again == nil || again != first || !IsWarm(file, opts) {
+		t.Fatal("arming the armed cue rebuilt or dropped its slot")
+	}
+	warmSeeked.Store(first, warmSeek{in: 2, rate: 1})
+	if preSeeked(first, 3, 1, false) {
+		t.Error("a different in-point counted as pre-seeked")
+	}
+	warmSeeked.Store(first, warmSeek{in: 2, rate: 1})
+	if !preSeeked(first, 2, 1, false) || preSeeked(first, 2, 1, false) {
+		t.Error("the slot's seek must count exactly once")
+	}
+	Panic() // Stop keeps the slot; Panic clears it
+}
+
+// The spare slot (the next cue, WarmNext): arming the selected cue that is
+// already the spare moves that pipeline into the slot without a rebuild, and
+// a GO takes a cue from the spare as from the slot.
+func TestWarmSparePromoteAndInstall(t *testing.T) {
+	gstAvailable(t)
+	Panic()
+	file := warmFixture(t, "warm-spare.wav", tinyWav(1))
+	opts := LoadOpts{WarmPreroll: true}
+	if err := Warm(file, opts); err != nil {
+		t.Fatalf("Warm: %v", err)
+	}
+	mgr.mu.Lock() // as WarmNext leaves it (WarmNext itself needs a KMS wall)
+	p := mgr.takeWarm()
+	spare.p, spare.file, spare.opts = p, file, opts
+	mgr.mu.Unlock()
+	if !IsWarm(file, opts) || IsWarmSlot(file, opts) {
+		t.Fatal("a spare arm must count as armed but not as the slot")
+	}
+	if err := Warm(file, opts); err != nil {
+		t.Fatalf("Warm (promote): %v", err)
+	}
+	if _, _, w := slotState(); w != p || spare.p != nil {
+		t.Fatal("arming the spare's cue must move its pipeline into the slot")
+	}
+	mgr.mu.Lock()
+	p = mgr.takeWarm()
+	spare.p, spare.file, spare.opts = p, file, opts
+	mgr.mu.Unlock()
+	if !InstallWarm(file, opts) {
+		t.Fatal("GO did not take the spare's cue")
+	}
+	if spare.p != nil {
+		t.Error("the spare kept the cue GO took")
+	}
+	Panic()
 }

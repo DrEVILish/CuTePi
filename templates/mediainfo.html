@@ -4,7 +4,7 @@
      version-guarded partial — every render keeps both truthful. -->
 <div id="mediainfo" class="header-status" data-test-showing="{{ if .TestShowing }}1{{ else }}0{{ end }}">
   <div class="go-cluster row is-items-center is-gap-xs">
-    <button type="button" id="go-btn" class="btn btn-go btn-go"
+    <button type="button" id="go-btn" class="btn btn-go"
       hx-post="/api/cue/selected/play" hx-target="#cuesheet" hx-swap="outerHTML"
       title="Fire the selected cue (Space)" aria-label="GO">
       GO<svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
@@ -16,26 +16,28 @@
     </div>
   </div>
 
-  <div class="now-cluster text-center mx-auto">
+  <div class="now-cluster">
     {{ if .Filename }}
     <div class="now-title">
-      <span class="text-muted small">NOW&nbsp;</span>
+      <span class="badge">NOW</span>
       {{ if .PlayingCueNum }}<span class="go-num">{{ .PlayingCueNum }}</span>{{ end }}
       {{ $t := or .PlayingCueTitle .Filename }}<span title="{{ $t }}">{{ $t }}</span>
     </div>
-    <div class="row is-items-center is-gap-xs mt-1">
-      <button type="button" class="btn btn-sm {{ if .Paused }}btn-warning{{ else }}btn-secondary{{ end }}" id="pause-btn" hx-post="/api/togglePause" hx-swap="none"
+    <div class="row is-items-center is-gap-xs">
+      <button type="button" class="btn btn-sm btn-icon {{ if .Paused }}btn-primary{{ else }}btn-secondary{{ end }}" id="pause-btn" hx-post="/api/togglePause" hx-swap="none"
         title="{{ if .Paused }}Paused — click to resume{{ else }}Pause{{ end }}" aria-label="{{ if .Paused }}Resume{{ else }}Pause{{ end }}" aria-pressed="{{ if .Paused }}true{{ else }}false{{ end }}">
-        <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ if .Paused }}play{{ else }}pause{{ end }}"/></svg>{{ if .Paused }}&nbsp;PAUSED{{ end }}
+        <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ if .Paused }}play{{ else }}pause{{ end }}"/></svg>
       </button>
-      <input type="range" class="ctp-slider ctp-scrubber flex-grow-1"
-        id="nowplaying-scrubber" value="{{ .PositionRaw }}" min="0" max="{{ .DurationRaw }}" step="0.05"
-        data-playing="{{ if .Playing }}1{{ else }}0{{ end }}"
-        aria-label="Seek within the clip">
-      <small class="text-nowrap" id="now-time" title="{{ .Duration }} total">{{ .Position }} / -<span id="now-remaining" class="remaining-slow">{{ .Remaining }}</span></small>
+      {{ if .Paused }}<span class="badge badge-warning">PAUSED</span>{{ end }}
+      <div class="scrubber">
+        <input type="range" id="nowplaying-scrubber" value="{{ .PositionRaw }}" min="0" max="{{ .DurationRaw }}" step="0.05"
+          data-playing="{{ if .Playing }}1{{ else }}0{{ end }}"
+          aria-label="Seek within the clip">
+        <time id="now-time" title="{{ .Duration }} total">{{ .Position }} / -<span id="now-remaining" class="remaining-slow">{{ .Remaining }}</span></time>
+      </div>
     </div>
     {{ else }}
-    <small class="text-muted">Nothing playing</small>
+    <span class="status status-idle">Nothing playing</span>
     {{ end }}
   </div>
 </div>

@@ -47,6 +47,7 @@ type ExportCue struct {
 	CropR         string  `json:"cropR,omitempty"`
 	CropT         string  `json:"cropT,omitempty"`
 	CropB         string  `json:"cropB,omitempty"`
+	Align         string  `json:"align,omitempty"`
 	StopOthers    *bool   `json:"stopOthers,omitempty"` // absent (older shows) = true
 	Layer         string  `json:"layer,omitempty"`      // "" = top
 	LayerUnder    string  `json:"layerUnder,omitempty"` // under: the cue number it goes beneath
@@ -93,6 +94,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 		CropR         string  `db:"crop_r"`
 		CropT         string  `db:"crop_t"`
 		CropB         string  `db:"crop_b"`
+		Align         string  `db:"align"`
 		StopOthers    bool    `db:"stop_others"`
 		Layer         string  `db:"layer"`
 		LayerUnder    string  `db:"layer_under_num"`
@@ -110,7 +112,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			cuesheet.cueDuration, cuesheet.postWait, cuesheet.hold,
 			cuesheet.loop, cuesheet.loop_count, cuesheet.autoContinue,
 			cuesheet.color, cuesheet.parent, cuesheet.fadeOut,
-			cuesheet.fadeAction, cuesheet.fade_curve, cuesheet.fit_mode, cuesheet.rotation, cuesheet.flip, cuesheet.opacity, cuesheet.geom_x, cuesheet.geom_y, cuesheet.geom_w, cuesheet.geom_h, cuesheet.crop_l, cuesheet.crop_r, cuesheet.crop_t, cuesheet.crop_b, cuesheet.volume, cuesheet.fadeIn, cuesheet.rate, cuesheet.balance, cuesheet.mute,
+			cuesheet.fadeAction, cuesheet.fade_curve, cuesheet.fit_mode, cuesheet.rotation, cuesheet.flip, cuesheet.opacity, cuesheet.geom_x, cuesheet.geom_y, cuesheet.geom_w, cuesheet.geom_h, cuesheet.crop_l, cuesheet.crop_r, cuesheet.crop_t, cuesheet.crop_b, cuesheet.align, cuesheet.volume, cuesheet.fadeIn, cuesheet.rate, cuesheet.balance, cuesheet.mute,
 			cuesheet.stop_others, cuesheet.layer,
 			COALESCE((SELECT u.cueNum FROM cuesheet u WHERE u.cue_id = cuesheet.layer_under), '') AS layer_under_num
 		FROM cuesheet
@@ -154,6 +156,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			CropR:         r.CropR,
 			CropT:         r.CropT,
 			CropB:         r.CropB,
+			Align:         r.Align,
 			StopOthers:    &r.StopOthers,
 			Layer:         r.Layer,
 			LayerUnder:    r.LayerUnder,
@@ -410,10 +413,10 @@ func importCueTx(tx *sqlx.Tx, c ExportCue) (cuePos int, err error) {
 	_, err = tx.Exec(`
 			INSERT INTO cuesheet (cuePos, cueNum, media_id, title, posStart, posEnd,
 			preWait, cueDuration, postWait, hold, loop, loop_count, color,
-			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index, stop_others, layer)
+			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, align, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index, stop_others, layer)
 		VALUES (:cuePos, :cueNum, :mediaID, :title, :posStart, :posEnd,
 			:preWait, :cueDuration, :postWait, :hold, :loop, :loop_count, :color,
-			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0, :stopOthers, :layer)
+			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :align, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0, :stopOthers, :layer)
 	`,
 		sql.Named("cuePos", cuePos),
 		sql.Named("mediaID", mediaID),
@@ -444,6 +447,7 @@ func importCueTx(tx *sqlx.Tx, c ExportCue) (cuePos int, err error) {
 		sql.Named("cropR", c.CropR),
 		sql.Named("cropT", c.CropT),
 		sql.Named("cropB", c.CropB),
+		sql.Named("align", c.Align),
 		sql.Named("autoContinue", boolInt(c.AutoContinue)),
 		sql.Named("volume", c.Volume),
 		sql.Named("fadeIn", c.FadeIn),
@@ -588,6 +592,15 @@ func importEndpointTx(tx *sqlx.Tx, title, rawURL string) (int, error) {
 	u, err := validateEndpointURL(rawURL)
 	if err != nil {
 		return 0, err
+	}
+	// A key in an imported URL (a show from before keys were kept apart)
+	// becomes a stored credential, never part of the cue.
+	u, key := splitScreenKey(u)
+	if key != "" {
+		if _, err := tx.Exec(`INSERT INTO endpoint_secret (url, secret) VALUES (?, ?)
+			ON CONFLICT(url) DO UPDATE SET secret = excluded.secret`, u.String(), key); err != nil {
+			return 0, err
+		}
 	}
 	if title == "" {
 		title = u.Host

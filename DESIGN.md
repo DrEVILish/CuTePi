@@ -98,9 +98,9 @@ selection, settings).
 - **yt-dlp**: URL import is a core, imperative feature (not a convenience).
 - **Live endpoint cues**: TimerPi display pages are video-only and use
   WebSocket updates with a fallback transport. They have no natural end and
-  stay on the wall until Stop/Clear or another cue is triggered. Pairing,
-  authentication and credential storage are deferred until the playback path
-  works; see §12.14.
+  stay on the wall until Stop/Clear or another cue is triggered. TimerPi
+  screens pair through TimerPi's waiting room; their screen key is a stored
+  credential kept out of URLs, exports and logs (§12.14).
 
 ## 3. Architecture & repo layout
 
@@ -180,7 +180,7 @@ Tables come from the schema in `ctp/db.go` (source of truth). Conceptual
 Exactly 100vh: topbar (natural height) + content row (media pool | cuesheet panes) with no page-level scroll; only the panes scroll internally (`scrollbar-gutter: stable`).
 Themes come **only** from **ftl-themes** (git submodule `third_party/ftl-themes`, contract v4, v4.1, tracking
 `main`); CuTePi ships no themes of its own. The picker lists the submodule's `dist/themes.json` (34 themes, default
-`ftl:xbmc`); each theme links its bundle `/ftl/themes/<slug>.css`, sets `html[data-theme=<slug>]`, and its icon sprite
+`ftl:blue-future`); each theme links its bundle `/ftl/themes/<slug>.css`, sets `html[data-theme=<slug>]`, and its icon sprite
 `dist/icons/<slug>.svg`. The choice is browser-local (`localStorage` `cutepi.theme`); older saved values (`lcars`,
 `app:blue-future`) map to the ftl theme of the same name.
 - **Sub-themes and tint** (contract "Palette variants" and "Theme tint"). Beneath the theme, Settings › Appearance
@@ -245,7 +245,9 @@ One row, left to right:
   the old 250 ms double-click delay). The first click of a double-click therefore selects too; if that response lands
   once the inline editor is open (or the double-click has just asked for one), its sheet swap is skipped, and so are
   sheet refreshes while an editor is open: the selection is saved, and the editor's save or Escape shows it.
-- All cells editable by double-click; save on blur/enter. **Escape cancels** the edit: the editor closes, the old value
+- All cells editable by double-click; save on blur/enter. The single-column route (`POST`/`PUT
+  /api/cue/:cuePos/edit/:col`) also takes `geom_x/y/w/h`, `crop_l/r/t/b` and `align`, validated as in the
+  inspector; a bad value or a column that is not editable is a 400. **Escape cancels** the edit: the editor closes, the old value
   stays and nothing is saved (the Escape does not reach the transport, so it never fades out the show).
   Time parser: `hh:mm:ss.ms` or a bare number = seconds. Times (PreWait, Duration, PostWait) have **no upper limit**.
 - **Cue numbers are unique** across cues and group headers. A blank number is allowed on any number of rows, and
@@ -315,7 +317,12 @@ One row, left to right:
       **Fit** (whole picture, aspect kept, letterboxed), **Fill width** (as wide as the box; top/bottom overflow
       cropped), **Fill height** (as tall as the box; left/right overflow cropped), **Fill** (covers the box; the
       overflowing sides cropped, aspect kept), **Stretch** (fills the box exactly, aspect not kept). Overflow crops are
-      centred.
+      centred unless an alignment is set.
+    - **Align**: two segmented groups, **None** / Left / H-centre / Right and **None** / Top / V-centre / Bottom
+      (stored as `align`, e.g. `right bottom`; **None** clears that axis, `""` = unaligned). A fit picture sits
+      against that edge of its box; a fill mode's overflow comes off the opposite screen side, mapped back through
+      the rotation and mirror to the source edge that is cropped; a box smaller than the display with X/Y blank moves
+      to that edge of the display. Unset: the box at X/Y, the picture centred.
     - **Crop**: Left, Right, Top, Bottom of the source picture, each in source pixels (`120`) or a percentage of its
       width/height (`10%`), applied before the fit. The display hardware crops (the plane reads only that part of the
       frame): no CPU, full frame rate. A crop that would leave under 16 px is ignored.
@@ -374,10 +381,13 @@ Tabs, grouped by purpose:
   (validate-then-render: the pool only shows validated media); duration/resolution/codec failures reject the import.
   YouTube/URL via yt-dlp with stage logging.
   Uploads, deletions, and thumbnail changes broadcast a targeted WebSocket refresh.
-- **Playback warning (planned)**: from the probed codec, resolution and frame rate, import estimates whether the file
-  plays at full rate on this hardware (hardware decoder or software, and its measured capacity) and shows a warning on
-  the pool tile and in the inspector when it will not, e.g. "HEVC 2160p: software decode, about 20 fps expected on this
-  Pi". It informs; it never refuses a file.
+- **Playback warning (2026-11-12)**: from the probed codec, resolution and frame rate, CuTePi estimates whether the
+  file plays at full rate on this hardware and shows a SLOW badge on the pool tile (the reason in its tooltip and info
+  panel) and a "Playback warning" row in the inspector's Media tab when it will not, e.g. "PRORES 1080p: software
+  decode, about 27 fps expected on this Pi (needs 60)". It informs; it never refuses a file. The estimate
+  (`media.PlaybackWarning`) scales the steady 1080p rates measured on the Pi 4's plane wall (README) by pixel count
+  against the lower of the file's rate and the display's; H.264 above 1920x1088 is always flagged (software decode).
+  Codecs without a measured limit, and machines other than a Pi 4, get no warning. A prepared copy (§12.17) clears it.
 - Ensure acurate and live updating progress bars for all upload / media import tasks.
 - **Name clashes**: before any bytes are sent, the browser asks the server (`POST /upload/check`) which chosen files
   share a name with a file already in the pool, or with another file in the same batch. If any do, a dialog lists
@@ -491,10 +501,41 @@ assets (`gsp` test; skips when absent).
   windowed sink; decode is hardware-first (v4l2 h264/hevc) with software
   fallback via GStreamer autoplugging.
 - **Warm slot**: the next cue can be prerolled (`Warm`) and activated on GO (`InstallWarm`) for ~0-latency starts; a
-  400 ms prewarm budget falls back to a cold build. Images are exempt from warm. On the KMS wall the warm cue prerolls
-  on its own plane at alpha 0 (invisible) — nothing to relink; on fbdev it prerolls into a `fakesink` and the wall sink
-  is relinked at activation. Geometry, rotation and mirror come from the cue's own options at build time, so a
-  prewarmed cue is framed exactly like a cold one.
+  400 ms prewarm budget falls back to a cold build. On the KMS wall (2026-11-12) the warm cue is built exactly as it
+  plays: its first frame sits on its own plane at alpha 0 outside the visible stack (as the panic image), already at
+  the trim in-point (the start seek is made while it waits and not repeated at GO), its sound on the audio bus, silent
+  until it plays; GO only raises the layer and starts the clock (warm swap 1-3 ms). Stills warm too. On fbdev it
+  prerolls into a `fakesink` and the wall sink is relinked at activation (a re-preroll); stills do not warm there.
+  The selected cue is armed by the cue standby keeper (§12.14, `routes/livestandby.go`), then the next cue in a
+  second, spare slot (`WarmNext`), so GO, GO at 0.5-1 s spacing finds both armed; when the selection moves onto
+  the spare's cue it becomes the slot without a rebuild, and GO takes a cue from either. A cue that is playing is
+  armed too (GO on it starts a fresh copy: 15-35 ms, was 130-170 ms cold). Hardware H.264 arms in either slot. The
+  decoder "wedge until restart" seen with H.264 arms (2026-11-12/13; a GO after an HEVC cue and a live page waited
+  15 s and failed) was a leaked decoder: GStreamer opens `/dev/video10` without close-on-exec, so a live-page renderer
+  child (`--livepage-render`, and the WebKit processes it starts) spawned while an H.264 decoder was open kept that
+  decoder open after its pipeline was retired, and while it was held no other H.264 decoder got a frame (a
+  `gst-launch` decode outside the service too; it decoded again the moment those processes were killed). Both
+  WebKit children now close every inherited fd that lacks close-on-exec first thing (`closeInheritedFDs`, main.go).
+  Measured limit: while a 1080p60 H.264 cue plays, a second H.264 decoder gets no frames at all (a 30 fps one
+  leaves room), so an H.264 arm made then hits the 5 s drop below; the playing cue drops no frames from it. An arm that has not prerolled within 5 s is dropped, not kept (it held
+  its decoder), and that file is not armed again for a minute. A GO that lands while its cue is still being armed
+  waits for that arm instead of building the cue a second time. Arming the armed cue again keeps it; Stop keeps
+  both slots (they are still the selection's); Panic empties them. A trim in-point mid-GOP costs the arm the
+  decode up to it (bbb_sunflower's 136.5 s in-point: ~1.65 s), so a GO right after highlighting such a cue waits
+  that long for the correct first frame. Geometry, rotation and mirror come from the cue's own
+  options at build time, so a prewarmed cue is framed exactly like a cold one.
+- **Cut over a shown cue (2026-11-12)**: a cue started from the warm slot or a live page, without a crossfade, goes on
+  top and what it replaces is removed in one step once it is on screen, so a cut has no black gap and the old cue's
+  teardown is not in GO's path. A cold file load still removes the old cues at GO (their decoding would slow its
+  preroll).
+- **Retire (2026-11-13)**: every pipeline ends in `retirePipeline`: NULL, then everything that holds it goes: its
+  bus watch is removed (a pipeline in NULL flushes its bus, so the old wake-up message posted to it was dropped and
+  the watch, with the pipeline in its closure, stayed), the decodebin `pad-added` handler is dropped, and the maps
+  keyed by the pipeline are cleared. Per-pipeline signals (`pad-added`, `deep-element-added`) use C handlers
+  (`gsp/signals.go`), not go-glib's `Connect`: go-glib v1.4.0 keeps a reference of every `Connect` closure itself, so
+  a closure (and the pipeline it captured) was never freed. Before this every cue pipeline, armed or played, was kept
+  for good (2 h soak: +1224 fds/h, +314 MB/h). `pipelinesAlive` in `GET /api/debug/planewall` counts the cue
+  pipelines not yet finalized (a weak ref), so a leak shows as a count that keeps rising.
 - **Soundtrack**: slideshow audio cues become a background-music playlist on
   their own `playbin` pipeline (`gsp.BackgroundPlaylist`) under the slides
   for the whole run. The soundtrack plays **only as part of a slideshow** —
@@ -631,7 +672,7 @@ wall pipeline (always running)                                    ▼
 - **Audio** goes through the audio bus (§6.1.2), one mixer on the device. The wall shows a frame
   later than its time: the presenter measures it on every frame (frame time to the vblank that latched it, a moving
   average; 107–117 ms measured, plus half a refresh to the middle of the screen: 115–126 ms in all). The bus's
-  device sink gets that as its `ts-offset` when it is built and whenever an input joins, so the sound plays when the picture is seen (`autoaudiosink`
+  device sink gets that less the bus's own latency (§6.1.2) as its `ts-offset` whenever an input joins, so the sound plays when the picture is seen (`autoaudiosink`
   passes it to the sink inside). Not the pipeline latency: a non-live cue pipeline does not pass a configured latency
   on to its sinks (set to 120 ms, the audio sink received 0). `GET /api/debug/glwall` shows `displayDelayMs` and the
   current cue's `cueAudioOffsetMs`. Not measured acoustically (no ALSA loopback on the test machine); the monitor's
@@ -790,7 +831,7 @@ alpha preserved. Same rules: no opaque conversion in the cue chain, background b
 
 - Kind stays *image* in the media pool (thumbnail = first frame), but playback treats it like video: it runs from the
   first frame with its own frame timing, and its media duration is the sum of its frame delays (ffprobe's format
-  duration, recorded at import). A pool badge showing "animated" with the frame rate is planned.
+  duration, recorded at import). The pool tile shows an ANIM badge with the probed frame rate, and the inspector's Media tab an "Animation" row.
 - Single-frame vs animated is read from the file header (`media.ImageAnimation`): a second GIF image descriptor,
   an APNG `acTL` chunk before the first `IDAT`, the WebP `VP8X` animation flag, the AVIF `avis` brand, the JPEG XL
   image header's `have_animation`, plus the loop count (GIF NETSCAPE2.0, APNG `num_plays`, WebP `ANIM`, JPEG XL
@@ -856,6 +897,54 @@ Any number of cues can run at once, each on its own display layer, stacked; the 
   the configured sink), so running cues are heard together at their own volumes. The HDMI device takes one stream
   only (TEST_REPORT "Performance round, 2026-10-07": ALSA `dmix` cannot produce its format), so this is also what
   lets a crossfade between two cues with sound play both.
+  - Each input's channel (`interaudiosrc` `buffer-time`) holds up to 1 s. With alsasink's default 200 ms ring
+    buffer the bus ran about 280 ms of latency and each channel carried a backlog of about 210 ms. At the old 100 ms
+    cap the backlog overflowed and was flushed: on the test Pi 93% of a tone was silent and no A/V sync beep was heard
+    (2026-11-13; broken since the bus was added on 2026-10-07).
+  - **Latency and A/V alignment (2026-11-13).** The sink's ring buffer is 15 ms in 5 ms periods (`busSinkBuffer`,
+    set on the sink inside `autoaudiosink` too, `processing-deadline` 0), the mixer's latency 0 with 5 ms output
+    buffers, each input's period and `latency-time` 5 ms: the bus's latency query gives 30 ms (`busLatency`, checked
+    by `TestAudioBusLatency`). Every streaming thread of the bus runs at SCHED_FIFO 8 (below the presenter's 10; set
+    on the stream-status message in its own thread, put back when it leaves, since pooled threads go on to serve
+    cue pipelines). With every core of the test Pi busy (four busy loops beside an HEVC 1080p60 cue and two live
+    pages standing by) the HDMI device had no xrun in 60 s; 20 ms without the priority had 5-12 a minute. The HDMI
+    device takes these sizes (`hw_params`: `buffer_size 720`, `period_size 240` at 48 kHz, IEC958 through the `hdmi`
+    plugin); the controller's own FIFO is not counted. alsasink's defaults had put the sound ~280 ms late.
+  - Every input plays `busLatency` ahead of its time (`interaudiosink` `ts-offset`), so its sound leaves the device
+    when its frame is latched on the presenter. A cue on the presenter starts `pwStartLatency` (35 ms) ahead, which
+    covers the 30 ms plus the input's 5 ms render delay, so the first sound is not late. On the GPU wall the bus sink
+    is delayed by the display delay less `busLatency` instead (one rule in `audioBusAttach`).
+  - **Clock.** The bus runs on the system clock, like the cues and the presenter; the sink follows it, skipping or
+    repeating samples to stay within ±1 ms (`drift-tolerance` 2 ms; the default ±20 ms let the offset saw-tooth over
+    a 60 ms range in 10 minutes against a loopback whose clock was off by 150 ppm). alsasink offers its own clock only
+    once its device is open, so which clock the bus took was a race; on the device's clock the channels drain at the
+    device's rate and the sound drifts from the picture without bound. The HDMI clock runs +4.3 ppm against
+    CLOCK_MONOTONIC (hw_ptr over 10 minutes), 2.6 ms in 10 minutes before correction.
+  - **Audio settings apply at once (2026-11-13).** A change of device, rate or channels rebuilds the bus even with
+    inputs attached (`ResetAudioBus`): the new bus reads every existing channel again, so playing and armed cues
+    sound on the new output without a refire (`TestAudioBusResetKeepsInputs`). Before, the bus was only rebuilt
+    once idle, which armed cues and standby pages never let it be. A cue playing across the change keeps the
+    rebuild's gap as extra delay in its channel until it is fired again (`interaudiosrc` drains one period per
+    period); cues fired after it are aligned as usual.
+  - **Each input is resampled to the mixer's rate** (`audioresample` between `interaudiosrc` and the mixer). The mixer
+    converts format and channels but not rate: a 44.1 kHz cue on a bus running at 48 kHz was refused (not-negotiated,
+    "Internal data stream error") and silent (`tears_of_steel_prores_proxy_1080p24.mov`: no sound; now heard), and a
+    test after one at another rate found the bus dead (`TestAudioBusMixedRates`, `TestAudioBusInputAfterIdle`).
+  - The mixer's silence (no input sounding) goes to the sink as plain silence, not as GAP buffers: a pad probe on
+    the mixer clears the flag. The sink waits on a GAP until its time plus the whole bus latency, about 200 ms after
+    it takes sound, so a cue starting on a silent bus lost its first ~200 ms (`TestAudioBusSilenceIsNotGap`).
+  - Measured (ALSA loopback capture, 2026-11-13): a 66 s tone with no gap; a chirp cue's first sample heard on a cold,
+    idle or busy bus; two overlapping cues mixed at their own levels with a 2 s fade-in; the ESC fade ramps out over
+    1 s; the A/V sync clip over 70 s (3 segment-seek loops) with all 71 beeps. The beep leaves CuTePi 288–291 ms after
+    its flash frame is latched (presenter commit times from `GET /api/debug/planewall`, the capture's ALSA
+    `trigger_time`, both CLOCK_MONOTONIC). That was the bus latency, then uncompensated.
+  - Measured after the alignment (same method; the flash frame's index read off the paused picture with
+    `tools/screen/scanout.py`; the loopback on the jiffies timer, whose 4 ms ticks give the 5 ms periods 15-36 xruns a
+    minute that the HDMI device does not have): the A/V sync clip over 66 s (3 loop crossings), every beep's sound
+    5.9-6.7 ms after the flash frame is latched (about 2 ms before the scan reaches mid-screen), 3840 of 3841 refreshes
+    with a new frame on the vblank grid. Over 10 minutes the offset moved 7.7 ms on that loopback (its xruns); not
+    measurable on HDMI. GO (an armed cue) to its first frame 17-44 ms (before 15-30), to its first sound 43-47 ms
+    (before 107-115), the first beep 0-28 ms after the first flash (before 78-96 ms, §6.1.4 Start of a cue).
 - **Stored** per cue as `stop_others` (1), `layer` (`top`) and `layer_under` (a `cue_id`, 0 = none). The inspector
   takes cue N by its number and refuses an unknown cue or the cue itself. A `.CTP` show carries them as `stopOthers`
   (absent in older shows = on), `layer` and `layerUnder` (the cue number); on import the link is made after every
@@ -872,8 +961,14 @@ user chose the presenter for the test Pi, after the GPU wall was found to draw n
 to hold a 1080p video layer to about 16 fps (TEST_REPORT P2). Support set on the presenter, three passes merged:
 78 of 107 supported (README).
 
-- **Start of a cue (2026-10-20).** A cue's pipeline runs with a 100 ms start latency (`pwStartLatency`): the
-  decoders fill ahead before its first frame of running playback is due, and sound waits the same. Before that, the
+- **Start of a cue (2026-10-20).** A cue's pipeline runs with a start latency (`pwStartLatency`): the
+  decoders fill ahead before its first frame of running playback is due, and sound waits the same. 100 ms until
+  2026-11-13, now 35 ms (the audio bus's 30 ms plus the input's render delay, §6.1.2): HEVC and H.264 1080p60 still
+  ran 6-7, 12-13 and 18-19 frames in the first 100, 200 and 300 ms from the first moving frame, ProRes 24p and 30 fps
+  H.264 at their rates. The prerolled first frame used to go on screen at once and stay there for the start latency,
+  so the clip's first flash was seen 78-96 ms before its beep (beyond EBU R37's 60 ms). An untimed GO now shows it at
+  its own time, as a timed start does (`showAt`), but no later than 25 ms after `startPlayback` begins
+  (`pwFirstFrameMax`), so GO to the first frame stays under 50 ms. With no start latency (before 2026-10-20) the
   first 100-300 ms after Go were short of frames (HEVC 2 and 4 frames in the first two 100 ms, H.264 3, MPEG-2 5,
   against 6). The prerolled frame is put on the plane at opacity 0; the fade-in clock (and the sound's gain with it)
   starts when the plane has shown 4 new frames of running playback, whatever the video's frame rate, or 400 ms after
@@ -935,7 +1030,7 @@ to hold a 1080p video layer to about 16 fps (TEST_REPORT P2). Support set on the
   decoder's own buffer. The gather runs in `prepare`, before the sink waits for the frame's time. The GL context is on
   the process's one GL display (`glwall.SharedGLDisplay`). These files use `decodebin3` (chosen from the import
   metadata, `hevc/yuv420p`): `decodebin` exposes the stateless decoder's pad with system-memory caps and never
-  renegotiates. 10-bit HEVC keeps the decoder's system-memory copy (slow) until it has a gather of its own.
+  renegotiates. 10-bit HEVC (P030) takes the same gather (the Main 10 bullet above).
   `CUTEPI_PLANEWALL_DUMP=N` dumps the Nth HEVC frame as displayed; `tools/codec-corpus/sandcheck.py` checks it
   against FFmpeg's software decode.
 - **Late pads.** A cue shown before its video pad appeared (decodebin3 reaches PAUSED first) is shown as soon as its
@@ -951,14 +1046,28 @@ to hold a 1080p video layer to about 16 fps (TEST_REPORT P2). Support set on the
   - Counters: `GET /api/debug/planewall` (commits, failures, commit intervals; per visible layer frames shown,
     frames replaced before reaching the screen, opacity steps, and the time of the commit they are as of), which
     `tools/codec-corpus/support.py` reads on this wall.
-- **Not done yet:** 10-bit HEVC gather; 90°/270° rotation stays a software stage; the crossfade's "incoming is on
-  screen" signal is still the sink's first buffer, not the first commit carrying it.
+- **Crossfade start (2026-11-12).** The cues a crossfade fades away wait for the incoming cue to be on screen: on
+  the presenter that is the first commit after its layer is raised (`planewall.WaitShown`, capped at 250 ms), not
+  the moment the service asked for it, so the old picture never starts fading a refresh early.
+- **Rotation.** 180° and the mirror flips are plane properties (no copy). 90° and 270° stay a software stage: the
+  Pi 4's planes offer only `rotate-0`, `rotate-180`, `reflect-x` and `reflect-y` (read from plane 127's `rotation`
+  property, 2026-11-12).
 
 ### 6.2 Trim, Hold, Loop, Volume, Seek
 
 - **Trim**: on load, seek to `posStart`; reaching `posEnd` = EOS. No trim if both 0.
 - **Hold**: on EOS of a held video cue, seek to final frame and pause (frame stays until Stop/Panic); an image cue with blank duration holds indefinitely (infinite hold) — a slideshow group's per-image duration overrides this for its members.
-- **Loop**: on EOS (natural or trim-Out), seek back to the in-point and continue. `loop_count` 0 = infinite, N = N plays; loop wins over auto-continue.
+- **Loop**: at the end (natural or trim-Out), seek back to the in-point and continue. `loop_count` 0 = infinite, N = N plays; loop wins over auto-continue.
+  - Gapless: a pass that will restart plays as a segment (`gst.SeekFlagSegment`, `clip.loopsAgain`; the first pass
+    gets that seek at start). Its end posts SEGMENT_DONE instead of EOS, and the restart is a non-flushing segment
+    seek queued behind the pass's last frames: no flush, no re-preroll, the running time carries on, and sound and
+    picture keep their offset. The last pass of a finite count, a still, a live page and a trim out-point (the
+    position poll) end and restart as before (EOS, flushing seek). Turning Loop off mid-pass ends that pass a few
+    in-flight frames early.
+  - Measured (A/V sync clip, 1080p60, plane presenter, 70 s = 3 restarts, kprobe trace on the vblank grid): before,
+    each restart froze the picture about 117 ms (two refreshes with no commit, a pass took 20.117 s); after, 4,199
+    commits in 4,201 refreshes with a new frame on every refresh between the first and the stop, 0 dropped, and
+    audio and video segment bases equal on every pass (0 ms change per loop).
 - **Volume**: per-cue dB (−60..+12, default 0 = 0dB), converted
   `10^(dB/20)` for the GStreamer volume element; live-set via `SetVolume`.
 - **Seek**: absolute, clamped to clip duration and trim Out. Live Seek disabled during Show Mode
@@ -1020,14 +1129,21 @@ No polling anywhere — every widget (nowplaying, cuesheet, clocks) renders
 from socket pushes. The topbar shows the socket state as a status dot.
 - **The browser never acts ahead of the server.** Every change shown (selection, transport state, edits) comes from the
   server's reply; nothing is predicted or applied optimistically. Speed comes from fast replies and fewer requests.
-- A sync is a signal only: each widget asks its status endpoint (`/api/cuesheet/status?version=`,
-  `/api/nowplaying/status?version=`) and fetches the partial only when its version moved.
+- A sync carries the versions, read as it is sent: `{"type":"sync","v":{"boot","sheet","state"}}` (`sheet` as
+  `/api/cuesheet/status` returns it, `state` as `/api/nowplaying/status`; `routes.syncVersions`, which first folds the set of
+  running cues into `sheet`). Each widget fetches its partial only when its pane is behind them, with no status round trip;
+  syncs queued behind a slow socket collapse to one carrying the newest versions. `boot` changes with each server process:
+  after a restart the counters start again, so the client stops treating the sheet on screen as newer.
+- One fetch per pane at a time (`single()` in `ui.js`): a signal during a fetch runs one more pass after it, so responses
+  never land out of order. No older sheet replaces a newer one, whichever path brings it (refresher, action response,
+  drag and drop). The media pool refetches on every `media` signal and on every (re)connect.
 - Every cuesheet render carries its version (`data-version` on `#cuesheet`, read before the sheet, so the stamp is never
   newer than the content: a change landing during a render costs at most one extra fetch, never a stale sheet). A sheet that arrived
   as an action's response (row click, GO, edit, delete) therefore counts as seen: the sync for that same change does not
   fetch it again. While an htmx request targeting `#cuesheet` is in flight, the refresher waits for it, since the sync
   for a change usually arrives before the response of the request that made it. The inspector follows each new
-  `#cuesheet` node once.
+  `#cuesheet` node once, one fetch at a time from its own htmx queue. Every sheet render carries the Edit/Show mode
+  (`data-show-mode`), so a switch in one window reaches the others.
 - One read of the sheet per render: the GO bar and Now Playing derive the selection walk from the sheet the handler
   already loaded (`ctp.SheetUnits`, `ctp.UnitIndex`).
 
@@ -1048,8 +1164,184 @@ A scheduled cue fires within 1 s of its time or it has failed:
 Every failure is recorded: the cue's result shows the error, the log viewer gets a warning (`SCH-E600` failed attempt,
 `SCH-E610` cue failed, `SCH-E620` stall, `SCH-E630` fired over 1 s late, `SCH-E640` query failed, `SCH-E650` prewarm failed)
 and the audit trail gets a `schedule_failed` record.
-Multi-node sync-fire (several Pis firing the same second) assumes NTP-synced clocks and identical shows — each node fires on its own clock
-crossing. Decision-accurate, not output-accurate: pipeline build takes ~100s of ms, so frame-exact joint output needs timed pre-roll (v2).
+Multi-node sync-fire (several Pis firing the same second) assumes synced clocks and identical shows: each node fires on its own clock
+crossing, and since 2026-11-12 with a timed start (§6.8c), so the first frame lands on the second itself rather than a build later.
+
+### 6.8c Timed start and linked units (2026-11-12)
+
+A cue can be fired for an **instant**: its pipeline prerolls (or takes the warm slot) ahead of it, is pinned to the system clock, and its
+base time is set so running time 0, less the pipeline latency (the presenter's 100 ms start latency), falls on the instant
+(`gsp.StartAt`, applied at the next PLAYING of the next loaded pipeline). The first running frame then reaches the screen at the instant
+plus at most one refresh: HDMI outputs are not genlocked, so each display shows it at its own next vblank.
+
+- **Where instants come from:** `POST /api/cue/:pos/play?at=<unix ms>` (within the next minute); the scheduler (§6.8b), which now fires
+  400 ms early with the scheduled second armed; and **linked units**.
+- **Linked units:** see §6.8d. In Synced playback a cue's play button still fires the same **cue number** on each linked unit for an
+  instant one **lead** ahead (`POST /api/cue/bynum/<num>/play?linked=1&at=…`, answered 202 at once; a unit fired by a link does not pass
+  it on) and arms the same instant locally; GO fires each unit's own selected cue.
+- **Lead** (`linkLead`, `routes/linked.go`; was a fixed 350 ms): just enough for the slowest unit. Each unit keeps its last five cue
+  load times (`loadAndPlayCueKeep`, GO to the PLAYING call) and reports their median in its hello (`prepMs`); each tracks the slowest
+  recent hello round trip per peer (a max that decays 10 % per 500 ms poll). Lead = round trip + max(`gsp.MinStartLead`, slowest load +
+  `MinStartLead`/2) + 10 ms, at most 500 ms (a slower unit starts late and logs it rather than every GO waiting on it), over the units that answer: a peer arms on arrival (StartAt needs `MinStartLead`) and
+  applies the instant after its load (applyStartAt needs half of it left). Before a unit has fired it counts 250 ms. Settings ›
+  Linked units shows it. `MinStartLead` is 10 ms since the warm slot waits on its own plane and starts in 1-3 ms (§6.1; it was
+  150 ms while the slot was relinked and re-prerolled at GO), so between units with a warm display path the lead is the round trip
+  plus ~20 ms: ~25 ms on a wired LAN, ~35-45 ms over the mesh.
+- **First frame at the instant:** a timed start no longer raises its prerolled first frame when it prerolls (that put it up
+  100-500 ms early, at each unit's own load time) but at the instant (`showAt`, `gsp/startat.go`), and only then releases the cues it
+  replaces and starts its fade-in. The level is written one refresh ahead, as the presenter builds each commit in the refresh before
+  it latches (a write at the instant landed a refresh after the first frame's own commit): the first frame goes up within a refresh
+  of the instant, like the running frames.
+- **Clocks:** the units must share time. On a wired LAN NTP (systemd-timesyncd or chrony against one local server) gives about 1 ms;
+  PTP (`linuxptp`, software timestamping on the Pi 4) better. Without synced clocks the units start together only to within their offset.
+- **BATMAN-adv:** a batman-adv mesh (`bat0`, layer 2 over Wi-Fi or Ethernet) is a transport, not a sync method: it carries the link
+  requests and the time sync like any LAN. Run chrony (or `ptp4l -2` on `bat0`) over it; expect a few ms of clock agreement over a Wi-Fi
+  mesh (airtime contention), sub-ms over wired hops. The lead grows with the mesh's measured round trip (a unit whose request still
+  arrives too late starts at once and logs it), so a mesh works for linked units as long as the clocks are synced over it.
+  `tools/mesh/batman-wifi.sh up 10.77.0.<n>/24` sets one up over Wi-Fi IBSS (the Pi 4's brcmfmac has no 802.11s), eth0 untouched,
+  power save off, a fresh `bat0` with a fixed address on every `up` (a kept `bat0` whose address changed kept announcing the old one:
+  100 % loss toward it until re-created). A rejoined unit is reachable again ~20 s after `up`. It is runtime only;
+  `deploy/cutepi-mesh.service` (address in `/etc/default/cutepi-mesh`) brings it up at boot and is installed nowhere by default.
+- **Measured (test Pi, plane presenter, 1080p60):** fired with an instant 1 s ahead, the first running frame reached the screen 11-14 ms
+  after it in 8 of 8 runs (spread 3.3 ms); fired by a link (instant 350 ms ahead) 2.9-14.3 ms after it in 6 of 6. Untimed fires showed
+  it 163-178 ms after the request. A second Pi was not available: two-unit agreement is the sum of their clock offset and one refresh,
+  measured on one unit only.
+
+
+### 6.8d Linked units: Synced playback and Active/active backup (2026-11-12)
+
+Settings › Network › **Linked units** pairs CuTePi units and puts them in one mode (every paired unit shares it): **Off**, **Synced
+playback** (own shows, own media) or **Active/active backup** (one shared show, the same media). Code: `routes/link.go` (pairing,
+peer protocol, election, replication, forwarding), `routes/linkmedia.go`, `routes/mdns.go`, `ctp/link.go`, `public/src/link.js`.
+
+- **Discovery:** each unit advertises `_cutepi._tcp` (TXT `id=<stable id>`) through avahi-daemon's D-Bus API (the service user cannot
+  write `/etc/avahi/services`; the avahi D-Bus policy lets any user publish and browse) and browses for the others, IPv4, on every
+  interface: a unit on the LAN and the mesh is listed once per address. Without avahi (a container) discovery is off; units are linked
+  by a typed address (`192.168.1.20`, `cutepi-2.local`, `10.77.0.55`, `http://host:3001`).
+- **Pairing:** "Link" on unit A sends `POST /api/peer/pair/request` {id, name, port, mode, nonce} to B, with B's operator password when
+  B has one (the only peer route the password covers). B lists the request (Settings and the warning strip); its operator accepts.
+  B then makes a 256-bit pairing secret and sends it to A (`POST /api/peer/pair/accept`, authenticated by A's one-time nonce), at the
+  address the request came from and the port A gave. Both store the peer in `link_peer` (id, name, base URL, secret): apart from
+  config.json like the screen keys, never exported, logged or shown; the base URLs shown carry no secret. Unlink removes it on both.
+  The requester's mode is adopted by the acceptor; for Active/active backup the **requester's show is kept** and the acceptor's is
+  replaced (the accept prompt says so).
+- **Peer calls** are plain HTTP on the units' web port, over any network they share (wired LAN, or the batman-adv mesh `bat0`: a peer
+  can be addressed by its mesh address). Each carries `X-CuTePi-Key: <sender id> <secret>`, checked in constant time; with it the
+  operator password is not asked. A call made with `?linked=1` is acted on and not passed on. Plain HTTP means the secret is readable
+  on the wire, like the operator password: keep the show network closed.
+- **Migration:** the old `linked_peers` setting becomes Synced playback peers at the first start (no secret: a password embedded in the
+  URL still authenticates them; they cannot report their state or clock until linked again) and is cleared.
+- **Poll:** every 500 ms each unit asks each peer `GET /api/peer/hello` (id, mode, term, the primary it follows, the show version it
+  holds), 400 ms timeout; a peer silent for 1.5 s is down. Every 10 s it measures each peer's **clock offset** NTP-style over `GET
+  /api/peer/time` (of 5 exchanges, the one with the shortest round trip; offset = peer time − midpoint) and shows it; over 5 ms it warns
+  (Settings and the warning strip). The remedy is a synced clock, not a feature: run chrony against one local server (or `ptp4l`) on
+  every unit, as in §6.8c. CuTePi installs neither.
+
+**Synced playback.** GO on any unit (Web UI, HyperDeck, OSC: `fireSelected`) takes an instant one lead ahead (§6.8c) and sends `POST
+/api/cue/selected/play?linked=1&at=<ms>` to every peer: each fires **its own** selected cue at that instant with the timed start
+(§6.8c) and applies its own GO-advance. Stop, ESC/Fade out and Panic made in the Web UI are sent as `POST /api/<action>?linked=1`.
+Explicit fires by number (`/api/cue/bynum/<num>/play?linked=1&at=`) work as before. Calls to one peer go through one ordered queue.
+
+**Active/active backup.**
+
+- **Replicated:** cues (every column but the media row id and the fire result), groups, sheet order, cue numbers, the selection (anchor
+  and set), show mode and GO-advance. **Per unit:** display, audio, network, instance name, panic image, theme, test patterns, live-page
+  screen keys, the media pool and the fire results. A cue names its media by file name (live pages by URL); a unit lacking the file gets
+  a missing pool entry (the media diff lists it).
+- **Primary and forwarding:** one unit is the primary. A show edit, selection change or transport request (an allow-list of routes,
+  `backupRoutes`; everything else stays per unit) made on another unit is forwarded to the primary as it is (method, path, body,
+  `HX-*` headers), and its answer is relayed to the browser after this unit has pulled the version the edit produced; the relayed sheet
+  carries this unit's sheet version, so the page keeps comparing like with like.
+- **Sequencing:** after each request it handles, each poll (edits by the scheduler or the remote protocols) and before serving the show,
+  the primary reads the replicated show (`ctp.ExportShowSnapshot`, deterministic JSON); when it differs from the last one it is the next
+  version (term, seq) and is pushed to every unit (`POST /api/peer/show`, the per-peer ordered queue). A unit applies a version only
+  when it is newer than the one it holds and comes from its primary (or a newer term), in one transaction that keeps cue ids and
+  positions (`ctp.ApplyShowSnapshot`). Each message carries the whole replicated show (tens of KB for a 50-cue show), so applying the
+  newest is applying every edit in order: a gap (a lost push, a unit restarted) closes on the next poll, when the hello shows the
+  primary holds another version and the unit pulls it (`GET /api/peer/show`). A new or returning unit starts from that full show.
+  Consecutive edits between two reads share one version: units only ever hold versions the primary actually passed through.
+- **Drift:** a change made on a backup unit outside the primary (a pool file deleted there cascades to its cues; a remote-protocol edit)
+  is undone at the next poll by applying the primary's last version again, so the shared show changes only through the primary. A pool
+  file deleted on the primary deletes its cues on every unit, as on a single unit.
+- **Transport:** the primary replays each transport request it handles (play, pause, seek, volume, stop, ESC, fade out, panic, a cue's
+  or group's play, active-cue stop/fade) to every unit with `?linked=1`; a cue fire gets `at=` one lead ahead (§6.8c) and the primary arms the
+  same instant, so the walls start together. **GO** forwarded to (or made on) the primary fires the selected cue there and sends `POST
+  /api/cue/<pos>/play?linked=1&at=…` (by replicated position) to the others; the GO-advance then reaches them as the next version. A
+  GO made by a remote protocol on a backup unit is sent to the primary. Selection and playback thus stay in lock step: the backup sits
+  one click behind the same state. A backup unit warms the newly selected cue when a version moves the selection (as `fireSelected` does on
+  the primary), so the next shared GO finds it prerolled there too.
+- **Election (no split brain within reach):** a unit follows the primary claim it sees with the highest term (then lowest id). When its
+  primary is silent for 1.5 s (or a forwarded request finds it gone) it has **no primary and refuses edits and transport with 503**
+  (`X-CuTePi-Link-Election: 1`), waits 1 s so every unit has seen the loss, then the best-ranked unit it can reach takes over with a new
+  term: the newest show version first, then the **lowest stable id** (a random id made once per unit). A unit that comes back joins
+  the primary it finds and pulls its show; two primaries that meet (a healed partition) resolve to the higher term (then lower id), and
+  the other's edits made while apart are replaced by the winner's show. Two units cannot tell a crashed peer from a cut cable: with the
+  cable cut both sides keep working, each with one primary, and converge to one show when they meet again.
+- **Timeouts:** poll 500 ms, hello timeout 400 ms, down after 1.5 s silence, settle 1 s; takeover 2.5-3 s after the primary's last
+  answer, or about 1.5 s after an edit finds it gone. Peer calls 2 s, forwarded requests 60 s (a show import).
+- **Media:** each unit lists its pool by name, size and a sampled content hash (SHA-256 of the size, first and last 512 KiB; whole-file
+  hashing of a show's media would read GBs off the SD card), cached by size and mtime. Every 30 s each unit compares its pool with each
+  peer's; differences show in Settings and in the warning strip, listing what is missing where and which files differ. **Sync media**
+  (only on that action) copies every file a peer lacks to it and asks the peer for every file this unit lacks; files whose content
+  differs are left to the operator. An upload or URL/yt-dlp download finished on one unit is copied to the others at once. Copies go
+  through the receiving unit's own `/upload` (probed, decode-checked and registered like any upload; a name already there is skipped).
+- **Failover page (phase 2):** the page holds a WebSocket to each paired unit besides its own (`public/src/link.js`). It gets, from its
+  own unit, each peer's address and a **page token** per peer: HMAC-SHA-256 of the page's origin and an expiry (12 h) under the pairing
+  secret (the secret never reaches the page). Its unit tells each peer that origin (`POST /api/peer/origin`); a peer answers CORS
+  (preflight included), WebSocket upgrades and the cross-site check (`SameOrigin`, `ws.SameOrigin` via `ws.AllowOrigin`) for those
+  origins only, and accepts the token (`X-CuTePi-Link`; on the WebSocket the subprotocol after `cutepi-link`, so it never sits in a logged URL)
+  for that Origin in place of the operator password.
+  No Host check is involved: the server still answers under any name. When the page's own WebSocket drops, every request (htmx and
+  ui.js alike go through `fetch`) goes to a reachable peer instead, its sync messages drive the panes, and a warning names the unit lost
+  and the one in use; a 503 during an election is retried every 400 ms (up to 8 times). A page loaded from any unit follows and leads
+  at once: they all show the one replicated show. The peer address is the one its unit uses for it: the browser must reach it too.
+
+**Measured.** In CT 110 (two instances, fakesink): an edit forwarded from the backup answered in 11 ms and both shows were identical
+after it; 60 concurrent edits from both units (titles of one cue from both sides, volumes) ended identical on both (24 versions, the
+order the primary applied them); killing the primary: edits refused with 503 for 1.4 s, then accepted by the new primary (2.5-3 s
+without an edit to notice sooner, 4.2 s before the settle wait was cut to 1 s); a restarted unit rejoined as backup and pulled the
+show it missed. Failover page (Playwright, page from A, A killed): the warning showed 0.3 s after the kill; selection (ArrowDown, during
+the election: 1.3 s with retries), an edit (shown on both pages in 1.0 s) and GO went through B; a page opened on B afterwards showed
+the same selection at once; selection changes crossed between pages loaded from different units in 0.3-0.5 s. Media: a file deleted on
+the backup was listed as missing there; Sync media copied it back (0.2 s); uploads on either unit arrived on the other within 3 s.
+On the two Pis (2026-11-12; test Pi `.73` with the plane presenter, 1080p, and a second Pi 4 `.55` without a display,
+fakesink; wired LAN): mDNS listed each unit on the other (`http://192.168.10.55`, `http://192.168.10.73`) and pairing from it worked;
+the measured clock offset was 1.2 ms (.55 ahead; round trip 0.7 ms; both ran systemd-timesyncd against the public pool). The test Pi's
+start was traced in the kernel (kprobe on `drm_atomic_set_fb_for_plane` plus `drm:drm_vblank_event`, its own ftrace instance): the
+prerolled first frame is put on the plane 100-350 ms early and held; the first running frame's commit came 0.3-1.4 ms after the
+instant and reached the screen at the next vblank, **6-17 ms after the instant** (Synced playback, GO on .73: 8-17 ms in 4 clean runs;
+Active/active GO pressed on .55 and fired by the primary .73: 6-15 ms in 4 of 4). `.55`'s timed start was armed 234-241 ms ahead
+(Synced) and 94-128 ms ahead (backup GO via the primary) every time, so it started on its clock at the instant: the two walls agree to
+about the 1.2 ms clock offset plus the test Pi's one refresh. A cold first load of a clip (640 ms on the test Pi) can exceed the 350 ms
+lead: that unit then starts at once and logs it. Stop on .55 and Panic on .73 were mirrored. Active/active: an edit forwarded from
+the backup answered in 32 ms (10 ms on the primary) and both shows were identical after it; 45 concurrent edits from both units ended
+identical on both. Stopping the primary's service: edits on the other unit got 503 until 1.6 s after the stop, then worked; the
+restarted unit came back as backup and had the edit made while it was down. Media: the warning listed every file missing on .55; Sync
+media copied 33 files (1.3 GB) in about 105 s; one file (HEVC Main 10) was refused by .55's own import check (it cannot play it there)
+and stays listed. An upload on .55 was on .73 0.4 s after it finished.
+Again on the two Pis with the measured lead (2026-11-12, linked over the mesh `bat0`, `.55` password-protected): HTTP round trip
+.73→.55 median 2.6 ms (max 8.4) on eth0, 14.8 ms (max 22.6) over the mesh (ping 0.5 / 7.2 ms). Load times: .73 warm swap 96-153 ms,
+cold still 80-150 ms, cold clip 200-460 ms; .55 (fakevideosink) warm swap 260-340 ms, slower than its cold preroll (240-290 ms); a
+1080p30 H.264 clip that it re-prerolls in over 400 ms falls back to a 1.5 s cold load. Synced playback, warm GO on .73 (10 fires): lead
+420-445 ms (set by .55's loads), and both units made the instant every time (.73 with 160-350 ms to spare, .55 with 80-185 ms); the
+first held frame was on .73's plane 67-83 ms after GO (kprobe on `drm_mode_atomic_ioctl`'s return), unlinked 80-127 ms. With the old
+fixed 350 ms, .55's warm swaps left it under applyStartAt's 75 ms floor and it started at once, ~45 ms early. So a linked GO now
+starts together but is not faster: GO to the first running frame is the lead plus one refresh, and the lead cannot fall under ~250 ms
+(150 ms on two units with instant loads) until gsp's warm slot needs no re-preroll at activation. Password-protected peer: pairing
+without the password, or with a wrong one, is refused ("password-protected"); with it, pairing, polls and fires work. Failover
+(Active/active, wired): stopping the primary's service, the other unit refused edits with 503 from 0.3 s to 2.2 s after the stop,
+then took over; the stopped unit came back as backup with an identical show; the same the other way round (503 0.3-2.1 s). Media
+sync: 32 of 33 files copied in 95 s, the note then read "copies from here done"; the HEVC Main 10 file was refused by .55 (HTTP 422).
+Three or more units were not tested (two Pis).
+After the warm slot moved onto its own plane (2026-11-12, both Pis rebuilt; .73 measured by kernel trace of the presenter's commits):
+unlinked warm GO on .73 raised the first frame 6-36 ms after GO (warm swap 1-3 ms), but motion only started 147-153 ms after GO
+(untimed starts keep the presenter's 100 ms start latency). A timed GO for an instant 25-30 ms ahead (what a linked GO between two
+display units gets) raised the first frame 14-37 ms after GO, within a refresh of the instant, and bbb_sunflower's next frame came
+50 ms after that (72-75 ms after GO). Before `showAt` the same GO showed the frame a refresh late (54-63 ms); before that change the
+held frame went up at the swap whatever the instant. bbb_sunflower no longer stalls ~2 s after a warm swap (30 fps from 0.3 s). Linked
+over the mesh with .55, the lead stays 280-500 ms: .55 has no display (fakesink), so it has no warm plane path (stills do not warm,
+clips re-prerolled over 400 ms fall back to cold loads of 180 ms for a still and 1.3 s for bbb_sunflower); .73 put the frame up at the
+instant every time, .55 made it for the stills (126-228 ms to spare) and started bbb_sunflower 0.9 s late (logged).
 
 ### 6.8 Identity guards (three places, one invariant)
 
@@ -1379,7 +1671,9 @@ Companion side.
   The one real pipeline change on the list; costs decode headroom on the Pi.
   Add this as a new browser pop-out window.
 
-- **active/active machine sync** — a second Pi mirrors the show over the
+- **active/active machine sync** — implemented 2026-11-12 as Linked units, Active/active backup (§6.8d), with the phase 2 failover
+  page; the request as written:
+  a second Pi mirrors the show over the
   network: every playback decision is replayed to the standby over WS so it
   sits one click behind the same state; mid-show failover is a single
   operator action. Requires a command-replay protocol, media mirroring
@@ -1395,11 +1689,71 @@ Companion side.
 - If Server A disconnects, Client A must still function correctly and talk to Server B. A error warning must be displayed but UI functionality must not be interupted.
   
 
-### 12.11 A/V sync test signal (later phase)
+### 12.11 A/V sync test signal (2026-11-12)
 
-A test signal for checking audio/video sync end to end: a full-screen flash on the wall exactly when a short tone plays
-on the audio output (e.g. once a second), with an optional on-screen sweep/counter, so the delay between picture and
-sound can be measured at the venue (camera + microphone, or a sync meter). Planned for a later phase; not implemented.
+A test signal for measuring audio/video sync end to end at the venue, with a phone, a photodiode and microphone, or a
+sync meter. It is the Tests list's "A/V sync (flash + beep)" pattern (`avsync`). Unlike the other patterns it is a
+file: generated once per display mode (`media.GenerateAVSync`) into
+`$WORKING_DIR/testsignals/avsync-v2-<W>x<H>-<Hz>.mkv` and played looped through the ordinary file path (decode -> wall +
+audio sink), so it measures what a cue shows and sounds. The clip has the display mode's size up to 1080p (the hardware
+H.264 decoder's limit; a larger mode gets the 1080p clip scaled up) and its refresh rate, and holds 10 cycles of 2 s.
+The picture is laid out on a 16:9 sheet scaled to fit; a mode of another shape shows more grid around it.
+
+**Cycle.** A cycle is N = 2 x rate frames (120 at 60 Hz). Everything is drawn from the frame index f within the cycle,
+not from a clock, so every frame is defined:
+
+| Frames | Picture | Sound |
+|---|---|---|
+| 0, 1: the sync point | background white instead of the grid; green marker (top right); pointer at the dial's 0 lit | 1 kHz at -6 dBFS, from the first sample of frame 0, two frames long |
+| 0 to N/2-1 | blue marker (bottom left); countdown digit 2 | |
+| N/2, N/2+1: the half cycle | white marker (bottom right) | 500 Hz at -12 dBFS, from the first sample of frame N/2, two frames long |
+| N/2 to N-1 | countdown digit 1 | |
+
+Both tones start at phase 0 and are the same on both channels. The sound is PCM, so no encoder priming moves them.
+
+**Layout.**
+- **Dial** (centre). A red hand turns once a cycle, one tick a frame (every second frame above 60 Hz), labelled every
+  20 frames: the hand points at f. A white pointer on the bezel moves with it and crosses a tolerance arc at 0 with
+  the meter's zones. The centre shows the countdown digit, "AV SYNC", the cycle length and the rate.
+- **Info panel** (top left). Timecode HH:MM:SS:FF, frame f/N, milliseconds into the cycle, clip size, cycle n/10,
+  BT.709 / SDR (the clip is tagged so) and the rate.
+- **Offset meter** (top centre). A -80 to +80 ms scale. On the frames within 80 ms of the sync point the cursor and the
+  OFFSET number show that frame's own start time from the tone's onset: 0.0 on frame 0, +16.7 on frame 1 and -16.7
+  on frame N-1 at 60 Hz. REMAINING and FRAMES count down to the next sync point.
+- **Timeline** (bottom). The cycle from 0 s to 2 s, with a cursor.
+- **Corner markers.** Discs a sixth of the picture's height across, a dark disc in a white ring when off: green, blue
+  and white as in the table. The blue one is a 0.5 Hz square wave whose rising edge is the sync point, which tells the
+  two ticks apart on a photodiode trace. A photodiode works on a marker or anywhere on the background, which is white
+  on the two sync frames.
+
+**Reading the offset from a phone recording.** Film the screen with the phone where it also hears the sound, then step
+through the recording frame by frame. On the frame where the beep starts, read the meter: the cursor's position and
+the OFFSET number are how late the sound is. Right of 0 (positive) the sound is late, left (negative) it is early; in
+sync, the beep starts on the frame that reads 0.0. A reading is the start of a display frame, so the true offset lies
+between it and the next step (16.7 ms at 60 Hz), and the camera adds one of its own frames: film at the phone's
+highest frame rate. Beyond 80 ms the cursor is off the scale; read the dial instead, whose hand shows the offset in
+frames. Sound takes 2.9 ms a metre to reach the phone, and that is part of the reading.
+
+**Limits.** EBU R37 allows sound to be at most 40 ms early and 60 ms late at the end of the chain (and 5 ms early to
+15 ms late at each stage on the way), checked against the recommendation's published figures. The meter and the
+dial's arc are red outside the 40/60 ms limits, amber in the outer half of that tolerance (20 to 40 ms early, 30 to
+60 ms late) and green in the inner half. The scale runs to 80 ms rather than 60 so that the late limit is on it.
+
+**Generation.** Go draws the picture with its own anti-aliased shapes (no new dependency): the three faces once
+(countdown 2, countdown 1, white background), then per frame only the moving parts over the face, converted to
+BT.709 4:2:0 where they changed. ffmpeg writes the faces' text in one short pass (`drawtext`, DejaVu Sans Mono) and in
+the main pass adds the counters from the frame number and encodes: H.264 (x264 ultrafast, CRF 18, a keyframe a
+second) with PCM audio from `aevalsrc`, counted in samples, in Matroska. First use waits for the generation: 27.8 s
+for 1080p60 on the test Pi (1200 frames, 15.7 MB). The file name carries the signal's version
+(`media.AVSyncVersion`), and generating a clip deletes those of older versions.
+
+**Checked.** `TestGenerateAVSync` decodes a clip and checks every frame's background flash, the three markers and the
+meter cursor's position against the frame index, the frame count, and every audio sample (both tones exact from
+their onset sample, silence elsewhere, channels equal); `TestAVSyncLayout` checks the zone limits and marker phases.
+On the test Pi the clip plays through the plane presenter at the display rate with no frame dropped
+(`/api/debug/planewall`: 30 frames every half second) and the scanned-out plane shows the picture
+(`tools/screen/scanout.py`). The loop is gapless (§6.2 Loop): no refresh without a new frame across the restart. The venue
+offset itself is what the signal is for; CuTePi does not measure it.
 
 ### 12.13 Awards Mode (group playback toggle)
 
@@ -1504,6 +1858,55 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   heavier site caches more: google.co.uk grew ~30 MB per fire to ~900 MB
   over 20 fires, and the same growth occurs with `wpevideosrc` outside
   CuTePi, so it is WebKit's cache, not a pipeline leak.
+- **Standby (pre-loaded)**: every live cue of the sheet stands by from
+  start-up on, the selected cue's and the next cue's first, up to
+  `liveStandbyMax` pages (`gsp/livestandby.go`, `routes/livestandby.go`): the
+  renderer child starts, WebKit loads and lays the page out off screen, and
+  its frames are dropped at the cue pipeline's stopped appsrc. GO plays that
+  pipeline; a page that has stood by for 2 s is shown with its first frame,
+  a younger one within 800 ms of GO (`liveStandbyShowWait`). No new page
+  starts while a fired cue is starting or within 1.5 s of a fire; a cue
+  already running is not stood by again (its page is rebuilt after it).
+  Changing a cue's options replaces its page; a page nobody has wanted for
+  2 min ends; a renderer that failed while standing by is dropped and the GO
+  loads cold. Only where pages render out of process (KMS wall, display
+  rotation). The same keeper arms the selected file cue in gsp's warm slot
+  and the next one in the spare (§6.1) once the selection has rested 150 ms,
+  and not while a fired cue is starting or within 500 ms of it.
+  *Paced while waiting:* a page that has stood by 5 s is paced to 2 frames a
+  second (`liveStandbyFPS`): the renderer child leaves WebKit's frames
+  unpulled (`MSG_PACE`, `gsp/scanout/remote.c`), and WebKit paints a frame
+  only once the last one was taken, so it stops painting in between; the
+  frames were dropped at the stopped appsrc anyway. GO resumes every frame
+  and drops the ones queued meanwhile, so the first frame shown is painted
+  after GO. Two pages standing by (TimerPi, BBC), 30 s averages: WebKit and
+  renderers 37.5-38 % of a core unpaced, 5.4-5.6 % paced; GO to the page
+  still 29-49 ms (wall otherwise idle).
+  *Memory bound:* a standing page costs ~0.4-0.5 GB RSS on the Pi 4
+  (renderer child 133 MB, WebKit network process 70 MB, web process 180 MB
+  for a TimerPi page, 300 MB for bbc.co.uk; the processes share libraries),
+  so `liveStandbyMax` is sized from MemTotal: 512 MB a page after 1.5 GB for
+  the service and the system, 1 to 3 (3 on a 4 GB Pi, 1 on 2 GB). With two
+  pages standing by the test Pi used 0.9 GB of 3.8 GB; WebKit 19 % CPU (BBC)
+  and 2 % (TimerPi) steady.
+  *Measured on the Pi 4, 2026-11-12 (GO to the first commit showing the cue,
+  kernel trace of the presenter's atomic commits):* before, a live cue
+  highlighted 0.5-2 s before GO took 800-810 ms (its page was only started
+  0.3 s after the selection) and 22-31 ms from 3 s; now 26-45 ms however
+  briefly it was highlighted, 56-85 ms when a 1080p60 video is playing at GO
+  (the page's video tail is built at its first frame, ~25-55 ms under that
+  load). After a service restart the pages take ~3.5-4 s to load: a GO 0.3,
+  1, 2, 3 and 4 s after the service answers took 1.7, 2.1, 0.84, 0.43 s and
+  66 ms. Earlier: GO to the page on screen
+  10-21 ms with standby (3 of 3 runs each for a TimerPi page and
+  bbc.co.uk), against 1.4 s and 4.2-4.5 s cold with the assets already in the
+  disk cache. Standing by costs WebKit 4% CPU (TimerPi) to 37% (BBC); a
+  1080p30 H.264 cue played beside either with no dropped frames (603-604
+  shown per 20 s, 0 dropped, as without standby). The cache keeper's
+  pre-loads wait while a page stands by or a cue is armed, so with live cues
+  in the sheet the standby pages, which load the same assets, take their place.
+  A hidden armed file cue (alpha-0 plane) beside a playing 1080p60 HEVC cue:
+  60.0 frames a second either way.
 - **Renderer spike / fallback**: if WPE cannot meet the wall's resource budget,
   evaluate a headless render-to-texture path. Do not use a normal desktop
   browser or let a renderer compete with the wall for the display. Record the
@@ -1565,16 +1968,28 @@ fade behavior; Stop/Clear and Panic retain their normal semantics.
   *Measured on a Pi 4, TimerPi page:* on screen 0.7 s after Fire with a warm
   cache, 1.9–2.5 s cold. Removing a site took its 25 cached records to 0
   and left other sites' records alone.
-- **Pairing credential (deferred)**: authentication and credential design are
-  explicitly deferred until unauthenticated playback works end to end. Before
-  authenticated endpoints ship, support a room-scoped revocable TimerPi device token.
-  Store credentials separately from display titles and cue text; never include
-  them in logs, errors, WebSocket state, or exported show manifests by default.
-  Build the authenticated request only at runtime and redact the token from
-  renderer diagnostics. Prefer a renderer request/header mechanism; if the
-  TimerPi contract requires a URL parameter, ensure the URL is not persisted
-  and is stripped from logs/history. Provide re-pair / revoke guidance in the
-  editor. Define storage permissions and backup behavior for credentials.
+- **Pairing and screen keys (2026-11-12).** TimerPi trusts a screen whose URL carries its screen `key`
+  (`/d/<room>?screen=<name>&key=<key>`, TimerPi PROTOCOL "Trusted vs public"): only then does it get stage messages,
+  notes and presenter items. CuTePi pairs the way any TimerPi screen does, through TimerPi's waiting room:
+  "Pair with a TimerPi screen" in the live-cue modal registers CuTePi (`POST /api/waiting/register {name, host,
+  token}`, the token a fresh random secret for this pairing), an Event Technician captures it in TimerPi (Screens ->
+  Waiting) and picks the room, and CuTePi's poll of `/api/waiting/mine` (every 2 s, up to 15 min) returns room, screen
+  name and key. CuTePi then adds a live cue for `/d/<room>?screen=<name>`.
+  - **The key is a credential, kept apart.** It is never part of a cue's URL: `endpoint_secret` holds it, keyed by
+    the clean page URL (one key per TimerPi screen). A key pasted in a URL (add, inspector edit or a `.CTP` import)
+    is split off into the same store. So it never reaches the sheet, the inspector's URL field, show exports, logs,
+    WebSocket state or Now Playing. Only the renderer gets the keyed URL (`gsp.EndpointAuth`), and the out-of-process
+    renderer receives it in its environment (mode 0400: the service user and root), not on its command line, which
+    every local user can read. The pairing token is never logged or returned to the browser.
+  - **Revoke / re-pair:** the inspector shows "Screen key stored" with **Forget key** (the page then loads as an
+    untrusted screen); pairing again stores a fresh key. A key goes with the last live page that uses it
+    (`PruneEndpoints`). Revoking it on TimerPi's side is TimerPi's screen management.
+  - **Backups:** the key lives in `ctp.db` (the service user's data directory, not world-readable); a `.CTP` export
+    does not carry it, so an imported show re-pairs.
+  - **Checked (2026-11-12):** against a real TimerPi build (a throwaway instance): the stored key equals TimerPi's own
+    screen key for the captured screen; the cue URL, export, cuesheet HTML and service log do not contain it; on the
+    test Pi the paired cue rendered (98% non-black on its plane), no process had the key on its command line, and
+    only the renderer's 0400 environment held it.
 - **Playback integration**: implement endpoint playback as a video source
   feeding CuTePi's existing wall sink, not a separately displayed window.
   Make source switching use the same serialized
@@ -1809,4 +2224,26 @@ h264-pi4 repository (`OPEN-CODECS.md`, `results/`).
 - **Not usable on the Pi 4:** the VideoCore MJPEG decoder (its end of stream hangs the firmware until a reboot;
   demoted), OpenVVC (wrong output), VVC in FFmpeg (16 fps), Daniel2 and MLVC (no ARM/NPU support), CEF for live
   pages (16.8-28 fps through its CPU path; no dmabuf output without a display server).
+
+### 12.17 Show compiler: prepared copies (2026-11-12)
+
+PERFORMANCE_PROPOSALS Proposal 2, the part that needs no new display path. "Prepare for this Pi" in the Show modal
+queues the sheet's videos that the playback warning (§5.7) flags ("Prepare every video" queues every video on the
+sheet). Each gets a copy in the form the Pi 4 decodes in hardware: HEVC Main 8-bit 4:2:0 (x265 ultrafast, CRF 16),
+no larger than the display (scaled down only, aspect kept, no padding), its own frame rate unless above the display's,
+a closed GOP every half second (instant trim, loop and seek), interlaced sources deinterlaced to one picture per field
+(bwdif), audio as FLAC. Copies live in `$WORKING_DIR/prepared/<file>.hevc.mkv`.
+
+- **Playback.** A cue plays the copy while it is newer than its source (`gsp.SourceLookup`); its codec lookup then
+  answers `hevc/yuv420p` (the presenter's HEVC route) and its field order progressive. The original is never changed;
+  deleting the media deletes the copy; replacing the source makes the copy stale.
+- **Encoding** runs one file at a time at `nice 19` and is held with SIGSTOP whenever anything plays (resumed when the
+  wall is idle), so it never takes CPU from a show. The queue is in memory (a restart drops queued jobs; finished
+  copies stay).
+- **Not prepared:** video with alpha (an HEVC copy needs colour and matte recombined on the GPU, which the plane wall
+  has not got), and anything without a video stream.
+- **Pool and inspector:** a PREP badge on the tile; the inspector's Media tab says the prepared copy plays.
+- **Measured (test Pi, 2026-11-12):** a 10 s 3840x2160 60 fps H.264 file played at 1.0 fps shown (software decode);
+  prepared in 56 s while idle, its cue played at 60.0 fps, the plane scanning out the hardware decoder's NV12 SAND
+  frames (100% non-black).
 

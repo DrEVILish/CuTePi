@@ -17,10 +17,52 @@ var (
 		// the push channel with the operator's cached credentials. Clients
 		// that send no Origin (non-browser tools) are allowed.
 		CheckOrigin: SameOrigin,
+		// A linked unit's failover page sends its token as a subprotocol
+		// (DESIGN §6.8d): accepted, so the browser keeps the socket.
+		Subprotocols: []string{"cutepi-link"},
 	}
-	mu      sync.Mutex
-	clients = make(map[*client]bool)
+	mu       sync.Mutex
+	clients  = make(map[*client]bool)
+	versions func() any // under mu; see OnSync
+
+	syncMu  sync.Mutex
+	syncCur []byte // newest sync message, under syncMu
 )
+
+// OnSync sets the reader of the state versions every sync message carries
+// ({"type":"sync","v":...}): clients compare them with what they show and
+// fetch only the panes that are behind, with no status round trip. It runs
+// ahead of each sync fan-out, so it may first fold derived state (which cues
+// are running) into those versions, and may itself bump and broadcast: the
+// extra signal coalesces into the pending flag.
+func OnSync(f func() any) {
+	mu.Lock()
+	versions = f
+	mu.Unlock()
+}
+
+// syncMessage reads the versions now and makes that the newest sync message.
+// Read and store under one lock, so a slower broadcast can never replace
+// newer versions with older ones.
+func syncMessage() []byte {
+	mu.Lock()
+	f := versions
+	mu.Unlock()
+	syncMu.Lock()
+	defer syncMu.Unlock()
+	msg := map[string]any{"type": "sync"}
+	if f != nil {
+		msg["v"] = f()
+	}
+	syncCur, _ = json.Marshal(msg)
+	return syncCur
+}
+
+func currentSync() []byte {
+	syncMu.Lock()
+	defer syncMu.Unlock()
+	return syncCur
+}
 
 // SameOrigin reports whether r's Origin (or, lacking one, Referer) names
 // r's own Host. Requests with neither header are not browser-driven and
@@ -40,8 +82,12 @@ func SameOrigin(r *http.Request) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	return strings.EqualFold(u.Host, r.Host)
+	return strings.EqualFold(u.Host, r.Host) || (AllowOrigin != nil && AllowOrigin(u.Scheme+"://"+u.Host))
 }
+
+// AllowOrigin, when set, admits other origins: a paired unit's failover
+// pages (routes, DESIGN §6.8c).
+var AllowOrigin func(origin string) bool
 
 // client is one connected browser. Broadcasts never write to the socket
 // directly: they set a pending flag and wake the client's own writer
@@ -82,7 +128,7 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 	clients[c] = true
 	mu.Unlock()
 	_ = conn.SetWriteDeadline(time.Now().Add(writeDeadline))
-	if err := conn.WriteJSON(map[string]string{"type": "sync"}); err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, syncMessage()); err != nil {
 		drop(c)
 		return
 	}
@@ -129,7 +175,7 @@ func (c *client) writer(done <-chan struct{}) {
 			for _, kind := range []struct {
 				send bool
 				msg  []byte
-			}{{sendSync, syncMsg}, {sendMedia, mediaMsg}} {
+			}{{sendSync, currentSync()}, {sendMedia, mediaMsg}} {
 				if !kind.send {
 					continue
 				}
@@ -173,12 +219,12 @@ func BroadcastMedia() {
 	broadcast(true)
 }
 
-var (
-	syncMsg, _  = json.Marshal(map[string]string{"type": "sync"})
-	mediaMsg, _ = json.Marshal(map[string]string{"type": "media"})
-)
+var mediaMsg, _ = json.Marshal(map[string]string{"type": "media"})
 
 func broadcast(media bool) {
+	if !media {
+		syncMessage() // before any flag is set: every send carries these versions or newer
+	}
 	mu.Lock()
 	snapshot := make([]*client, 0, len(clients))
 	for c := range clients {

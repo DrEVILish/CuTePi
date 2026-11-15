@@ -3,7 +3,6 @@ const fileInput = document.getElementById('file-input');
 const form = document.getElementById('dropform');
 const fileList = document.getElementById("filelist");
 
-dropzone.classList.add('has-advanced-upload');
 let droppedFiles = new DataTransfer();
 
 function preventDefaults(e) {
@@ -20,12 +19,12 @@ dropzone.addEventListener('click', (e)=>{
 dropzone.addEventListener('dragover', (e)=>{
   preventDefaults(e);
   e.dataTransfer.dropEffect = 'copy'
-  dropzone.classList.add('drag-over');
+  dropzone.classList.add('is-dragover');
 });
 dropzone.addEventListener('dragenter', preventDefaults);
 dropzone.addEventListener('dragleave', (e) => {
   preventDefaults(e)
-  dropzone.classList.remove('drag-over');
+  dropzone.classList.remove('is-dragover');
 });
 
 dropzone.addEventListener('drop', (e)=>{
@@ -70,7 +69,7 @@ const uploadStatus = document.getElementById("upload-status");
 function setUploaderFeedback(text, cls) {
   if (uploadStatus) {
     uploadStatus.textContent = text;
-    uploadStatus.className = "small " + (cls || "");
+    uploadStatus.className = cls || "";
   }
 }
 
@@ -78,17 +77,17 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const files = fileInput.files;
   if (!files || files.length === 0) {
-    setUploaderFeedback("No file chosen.", "text-warning");
+    setUploaderFeedback("No file chosen.", "status status-warn");
     return;
   }
   // Warn before sending more than the media disk can hold (§5.7).
   if (!(await cutepiCheckSpace(Array.from(files)))) {
-    setUploaderFeedback("Upload cancelled — not enough disk space.", "text-warning");
+    setUploaderFeedback("Upload cancelled — not enough disk space.", "status status-warn");
     return;
   }
   const choice = await cutepiUploadChoice(files);
   if (!choice.go) {
-    setUploaderFeedback("Upload cancelled.", "text-warning");
+    setUploaderFeedback("Upload cancelled.", "status status-warn");
     return;
   }
   const formData = new FormData();
@@ -110,7 +109,7 @@ form.addEventListener("submit", async (e) => {
       setUploaderFeedback(text);
     });
   } catch (err) {
-    setUploaderFeedback("Upload failed (network error).", "text-danger");
+    setUploaderFeedback("Upload failed (network error).", "status status-error");
     return;
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove("disabled"); }
@@ -118,11 +117,11 @@ form.addEventListener("submit", async (e) => {
   const ok = res.status >= 200 && res.status < 300;
   if (uploadProgress) uploadProgress.value = ok ? 100 : 0;
   if (!ok) {
-    setUploaderFeedback("Upload failed (" + res.status + "): " + uploadErrorText(res.status, res.text), "text-danger");
+    setUploaderFeedback("Upload failed (" + res.status + "): " + uploadErrorText(res.status, res.text), "status status-error");
     return;
   }
   const summary = cutepiUploadSummary(res.result);
-  setUploaderFeedback(summary, "text-success");
+  setUploaderFeedback(summary, "status status-ok");
   fileList.innerHTML = "";
   fileInput.value = "";
   droppedFiles = new DataTransfer();

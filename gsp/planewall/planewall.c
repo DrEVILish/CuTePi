@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /* planewall: the plane wall's presenter and its sink (DESIGN §6.1.4).
  *
  * One presenter thread owns every overlay plane CuTePi shows cues on. Each
@@ -738,6 +739,16 @@ static gpointer present (gpointer d) {
   struct sched_param sp = { .sched_priority = 10 };
   if (pthread_setschedparam (pthread_self (), SCHED_FIFO, &sp) != 0)
     g_printerr ("planewall: SCHED_FIFO: %s\n", g_strerror (errno));
+  /* CUTEPI_PRESENTER_CPU=n: run the presenter on core n only (pair it with
+   * isolcpus=n so nothing else is scheduled there; PERFORMANCE_PROPOSALS 3). */
+  const char *cpu = g_getenv ("CUTEPI_PRESENTER_CPU");
+  if (cpu && *cpu) {
+    cpu_set_t set;
+    CPU_ZERO (&set);
+    CPU_SET (atoi (cpu), &set);
+    if (pthread_setaffinity_np (pthread_self (), sizeof set, &set) != 0)
+      g_printerr ("planewall: CPU %s: %s\n", cpu, g_strerror (errno));
+  }
   frame *next[MAXP];
   int off[MAXP], inc[MAXP];
   for (;;) {
@@ -963,6 +974,23 @@ void planewall_plane_stats (uint32_t plane, uint64_t * shown, uint64_t * dropped
   *first = s ? s->first_seen : 0;
   *t_us = P.last_us;            /* the commit these counts are as of */
   g_mutex_unlock (&P.lock);
+}
+
+/* Wait for the first commit after this call that shows plane with a frame:
+ * the moment a layer just raised (stack, opacity) is on screen. 1 if so,
+ * 0 on timeout or a closed presenter. */
+int planewall_wait_shown (uint32_t plane, int timeout_ms) {
+  int ok = 0;
+  g_mutex_lock (&P.lock);
+  plane_st *s = plane_of (plane);
+  uint64_t g0 = P.gen;
+  gint64 until = g_get_monotonic_time () + (gint64) timeout_ms * 1000;
+  while (s && P.open && !P.quit) {
+    if (P.gen != g0 && s->on && s->shown) { ok = 1; break; }
+    if (!g_cond_wait_until (&P.done, &P.lock, until)) break;
+  }
+  g_mutex_unlock (&P.lock);
+  return ok;
 }
 
 /* ---- cutepiplanesink ---------------------------------------------------- */

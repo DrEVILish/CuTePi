@@ -255,6 +255,12 @@ const (
 	SCHPrewarm     = "SCH-E650" // a scheduled cue's prewarm failed (it loads cold)
 )
 
+// LNK - linked units (routes/link.go, DESIGN §6.8c).
+const (
+	LNKInfo = "LNK-E700" // pairing, mode, primary changes
+	LNKWarn = "LNK-E710" // a peer call, replication or media copy failed
+)
+
 // AUD - structured playback audit records (also exposed to the Web UI).
 const (
 	AUDAudit = "AUD-E500" // structured playback audit event (cue start/stop etc)

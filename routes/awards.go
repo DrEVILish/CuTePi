@@ -94,6 +94,10 @@ func sameInts(a, b []int) bool {
 // awardsGO runs one GO press on an awards-mode group. It always owns the
 // selection (no advance, no prewarm) — the caller skips those.
 func awardsGO(g ctp.Group) error {
+	return awardsGOAt(g, time.Time{})
+}
+
+func awardsGOAt(g ctp.Group, at time.Time) error {
 	// Fresh settings every press: the inspector may have changed shuffle /
 	// loop / fade between GOs.
 	if fresh, err := ctp.GetGroup(g.GroupID); err == nil {
@@ -152,6 +156,9 @@ func awardsGO(g ctp.Group) error {
 	cue, err := ctp.GetCue(strconv.Itoa(pos))
 	if err != nil {
 		return err
+	}
+	if !at.IsZero() {
+		gsp.StartAt(at)
 	}
 	if err := loadCueSource(cue, cueOpts(cue, false)); err != nil {
 		ctp.SetCueResult(cue.CuePos, ctp.CueResultError)

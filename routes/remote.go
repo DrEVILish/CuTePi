@@ -19,6 +19,7 @@ package routes
 
 import (
 	"strconv"
+	"time"
 
 	"CuTePi/ctp"
 	"CuTePi/gsp"
@@ -32,9 +33,24 @@ import (
 // result in cuesheet HTML; remote protocols have no session to re-render —
 // clients pick the change up from WS sync / the cuesheet poller.
 func FireSelected() error {
+	return fireSelected(time.Time{}, false)
+}
+
+// fireSelected is FireSelected for a start instant at (zero: now). A GO made
+// here (not fromLink) is mirrored to the linked units (DESIGN §6.8c); a
+// backup unit's goes to the primary, which fires it on every unit.
+func fireSelected(at time.Time, fromLink bool) error {
+	if !fromLink && linkForwardGo() {
+		return nil
+	}
 	if gid, gerr := ctp.SelectedGroupPos(); gerr == nil && gid > 0 {
 		if g, err := ctp.GetGroup(gid); err == nil {
-			if handled := playGroup(g); handled {
+			if !fromLink {
+				if t := linkMirrorGo(0, gid); !t.IsZero() {
+					at = t
+				}
+			}
+			if handled := playGroup(g, at); handled {
 				return nil
 			}
 			if ctp.GetGoAdvance() {
@@ -53,17 +69,21 @@ func FireSelected() error {
 		gsp.Play()
 		return nil
 	}
+	if !fromLink {
+		if t := linkMirrorGo(pos, 0); !t.IsZero() {
+			at = t
+		}
+	}
+	if !at.IsZero() {
+		gsp.StartAt(at)
+	}
 	if err := loadAndPlayCue(cue); err != nil {
 		return err
 	}
-	// Deck-style preload: after the advance, the newly-selected cue (audio-
-	// only) sits prerolled, so the NEXT GO lands instantly instead of paying
-	// a build+preroll.
+	// The newly selected cue is armed by the cue standby keeper
+	// (livestandby.go), so the NEXT GO lands instantly.
 	if ctp.GetGoAdvance() {
 		_ = ctp.SelectStep(1)
-	}
-	if pos, perr := ctp.SelectedCuePos(); perr == nil && pos != 0 {
-		armNextCue(gsp.Generation(), pos)
 	}
 	return nil
 }

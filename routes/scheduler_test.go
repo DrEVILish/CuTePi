@@ -162,7 +162,7 @@ func audited(event string, pos int) bool {
 // not fired late; it is recorded as failed (error result, log, audit).
 func TestSchedulerStallFailsMissedCue(t *testing.T) {
 	logs.Clear()
-	due := scheduleFixture(t, "schedstall.wav", 1500*time.Millisecond)
+	due := scheduleFixture(t, "schedstall.wav", 1500*time.Millisecond).Truncate(time.Second)
 	before := due.Add(-1500 * time.Millisecond)
 	schedulerTick(before) // the last pass before the stall: nothing due yet
 	time.Sleep(time.Until(due.Add(1300 * time.Millisecond)))
@@ -272,5 +272,29 @@ func TestScheduledSecondFailureIsFinal(t *testing.T) {
 	}
 	if !logged(logs.SCHFireFailed, "attempt 2") || !logged(logs.SCHFailed, "both attempts") || !audited("schedule_failed", 1) {
 		t.Fatalf("final failure not recorded: %+v", logs.Recorded())
+	}
+}
+
+func TestSchedulerStallKeepsCurrentRecoveryCue(t *testing.T) {
+	logs.Clear()
+	due := scheduleFixture(t, "sched-recovery.wav", 1500*time.Millisecond).Truncate(time.Second)
+	now := due.Add(500 * time.Millisecond)
+	schedulerStalled(due.Add(-2*time.Second), now)
+	cue, err := ctp.GetCue("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cue.LastResult == ctp.CueResultError {
+		t.Fatal("cue inside recovery window was marked failed")
+	}
+	scheduleMu.Lock()
+	decided := len(scheduleFired) != 0
+	scheduleMu.Unlock()
+	if decided {
+		t.Fatal("cue inside recovery window was consumed by stall handling")
+	}
+	rows, err := ctp.GetScheduledCuesSince(now.Add(-time.Second), now)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("recovery query = %v, %v; want one cue", rows, err)
 	}
 }

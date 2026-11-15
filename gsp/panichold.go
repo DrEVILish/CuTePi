@@ -122,7 +122,7 @@ func PanicToHold(file string) bool {
 	stopBackground()
 	retireOutgoing()
 	// 3. Retire the rest underneath and adopt the standby as the transport.
-	mgr.swap(p, file, panicHoldOpts())
+	mgr.swap(p, file, panicHoldOpts(), false)
 	if err := watchAndPlay(p); err != nil {
 		logs.Printf(logs.GSPPipeStopped, "gsp: panic image failed to start: %v", err)
 	}

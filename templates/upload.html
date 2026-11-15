@@ -3,29 +3,26 @@
 {{ template "header.html" }}
 
 <body class="app-body upload-body">
-  <nav class="navbar navbar-dark bg-dark">
-    <div class="container-fluid d-flex is-justify-between is-items-center">
-      <a class="navbar-brand mb-0" href="/" aria-label="CuTePi control centre">
-        <img class="cutepi-logo" src="/img/cutepi-logo.svg" alt="CuTePi">
-        <span class="text-muted fs-6">Upload</span>
-      </a>
-      <a class="btn btn-ghost" href="/" title="Open the control centre" aria-label="Open the control centre">
-        <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-eye"/></svg>&nbsp;Control centre
-      </a>
-    </div>
-  </nav>
+  <div class="app">
+  <header class="app-bar">
+    <a class="nav-brand" href="/" aria-label="CuTePi control centre">
+      <img class="cutepi-logo" src="/img/cutepi-logo.svg" alt="CuTePi">
+    </a>
+    <a class="btn btn-ghost app-status-end" href="/">
+      <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-arrow-left"/></svg>&nbsp;Control centre
+    </a>
+  </header>
 
-  <div class="container py-4 upload-container">
-    <div class="card bg-dark border-secondary">
-      <div class="card-body">
-        <h2 class="h5 mb-m">Add media</h2>
+  <main class="app-main upload-container">
+    <div class="card">
+        <h1 class="panel-header">Add media</h1>
         <form
           id="dropform"
           action="/upload"
           method="post"
           enctype="multipart/form-data"
         >
-          <div id="dropzone">
+          <div id="dropzone" class="dropzone">
             <input
               id="file-input"
               type="file"
@@ -34,19 +31,20 @@
               hidden
             />
             <label for="file-input">
-              <strong>Choose a file</strong>
-              <span class="dragndrop"> or drag it here</span>
+              <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
+              <strong>Choose files</strong>
+              <span class="dragndrop"> or drag them here</span>
             </label>
           </div>
           <ul id="filelist"></ul>
-          <progress id="progress" value="0" max="100"></progress>
-          <div id="upload-status" class="small" role="status" aria-live="polite"></div>
-          <div class="d-flex is-justify-end mt-m">
-            <button id="upload" type="submit" class="btn btn-primary btn-lg w-100">Upload</button>
+          <progress id="progress" class="progress" value="0" max="100" aria-label="Upload progress" hidden></progress>
+          <div id="upload-status" role="status" aria-live="polite"></div>
+          <div class="modal-footer">
+            <button id="upload" type="submit" class="btn btn-primary">Upload</button>
           </div>
         </form>
-      </div>
     </div>
+  </main>
   </div>
 
   <script src="/src/dropzone.js?v={{ assetStamp }}"></script>

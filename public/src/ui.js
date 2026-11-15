@@ -161,14 +161,14 @@ htmx.on("htmx:after:request", (e) => {
         }
         if (body.remoteStatus && window.renderRemoteStatus) window.renderRemoteStatus(body.remoteStatus);
         status.textContent = body.message || "Saved.";
-        status.className = "settings-status text-success";
+        status.className = "settings-status status status-ok";
       } catch (err) {
         status.textContent = "Saved (could not read response).";
-        status.className = "settings-status text-success";
+        status.className = "settings-status status status-ok";
       }
     } else {
       status.textContent = "Save failed - check the values on each tab.";
-      status.className = "settings-status text-danger";
+      status.className = "settings-status status status-error";
     }
   }
   void ui;
@@ -186,7 +186,8 @@ function hideModal(id) {
 }
 
 // Swap #id for a rendered partial whose root is #id again and re-process its
-// htmx attributes. Returns the new element, or null when either is missing.
+// htmx attributes. Returns the new element, or null when either is missing
+// or the partial is older (data-version) than the one on screen.
 function replaceById(id, html) {
   const current = document.getElementById(id);
   if (!current) return null;
@@ -197,9 +198,31 @@ function replaceById(id, html) {
     console.error("CuTePi: unexpected partial response for #" + id);
     return null;
   }
+  if (parseInt(replacement.dataset.version, 10) < parseInt(current.dataset.version, 10)) return null;
   current.replaceWith(replacement);
   if (window.htmx) htmx.process(replacement);
+  // The sheet carries the Edit/Show mode: a switch in another window lands.
+  if (replacement.dataset.showMode) applyShowMode(replacement.dataset.showMode === "true");
   return replacement;
+}
+
+// htmx.ajax requests all come from body and share its queue, whose default
+// ("queue first") drops a third request while two are pending: a quick run
+// of actions (Shift+arrows, sort) lost one. Queue them all, in order.
+document.body.setAttribute("hx-sync", "queue all");
+
+// One pass of an async refresher at a time: a call during a pass folds into
+// one more pass after it, so an older response never lands after a newer one.
+function single(fn) {
+  let running = false, again = false;
+  return async function run() {
+    if (running) { again = true; return; }
+    running = true;
+    try { await fn(); } finally {
+      running = false;
+      if (again) { again = false; run(); }
+    }
+  };
 }
 
 // --- Upload helpers (§5.7) -------------------------------------------------
@@ -230,10 +253,10 @@ function cutepiCheckSpace(files) {
 // drag-and-drop). set(pct, text) updates it; done(text, ok) fades it out.
 function cutepiProgress(label) {
   const el = document.createElement("div");
-  el.className = "upload-progress-card";
+  el.className = "toast upload-progress-card";
   el.setAttribute("role", "status");
   el.setAttribute("aria-live", "polite");
-  el.innerHTML = '<div class="small upload-progress-text"></div><progress max="100" value="0"></progress>';
+  el.innerHTML = '<div class="upload-progress-text"></div><progress class="progress" max="100" value="0" aria-label="Upload progress"></progress>';
   const text = el.querySelector(".upload-progress-text");
   const bar = el.querySelector("progress");
   text.textContent = label;
@@ -246,7 +269,7 @@ function cutepiProgress(label) {
     done(t, ok) {
       bar.value = 100;
       text.textContent = t;
-      el.classList.add(ok ? "is-ok" : "is-error");
+      el.classList.add(ok ? "toast-success" : "toast-danger");
       setTimeout(() => el.remove(), ok ? 2500 : 6000);
     },
   };
@@ -304,23 +327,23 @@ async function cutepiUploadChoice(files) {
 function askUploadConflict(names) {
   return new Promise((resolve) => {
     const back = document.createElement("div");
-    back.className = "upload-conflict-backdrop";
+    back.className = "modal-overlay upload-conflict-backdrop";
     const box = document.createElement("div");
-    box.className = "upload-conflict card bg-dark border-secondary";
+    box.className = "upload-conflict modal modal-sm";
     box.setAttribute("role", "alertdialog");
     box.setAttribute("aria-modal", "true");
     box.setAttribute("aria-labelledby", "upload-conflict-title");
     const title = document.createElement("h2");
     title.id = "upload-conflict-title";
-    title.className = "h6";
+    title.className = "modal-header";
     title.textContent = names.length === 1
       ? "A file with this name is already in the media pool"
       : names.length + " files with these names are already in the media pool";
     const list = document.createElement("ul");
-    list.className = "small";
+    list.className = "list";
     names.forEach((n) => { const li = document.createElement("li"); li.textContent = n; list.appendChild(li); });
     const actions = document.createElement("div");
-    actions.className = "upload-conflict-actions";
+    actions.className = "modal-footer";
     const done = (v) => { document.removeEventListener("keydown", onKey, true); back.remove(); resolve(v); };
     const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(null); } };
     [["Cancel", null, "btn-ghost"], ["Skip", "skip", "btn-secondary"],
@@ -355,40 +378,39 @@ function cutepiUploadSummary(header) {
   }
 }
 
-// One dismissible bootstrap toast per error; the container is created lazily
-// so every page that loads ui.js gets feedback with no markup changes.
+// One dismissible toast per message (ftl-themes .toast). The region is a
+// manual popover so it sits in the top layer, above an open modal; created
+// lazily so every page that loads ui.js gets feedback with no markup.
 function showToast(message, kind) {
   let holder = document.getElementById("ctp-toasts");
   if (!holder) {
     holder = document.createElement("div");
     holder.id = "ctp-toasts";
-    holder.className = "toast-container position-fixed bottom-0 end-0 p-3";
-    holder.style.zIndex = 2000; // above modals (1055)
+    holder.className = "toast-region";
+    holder.setAttribute("popover", "manual");
     document.body.appendChild(holder);
   }
-  const el = document.createElement("div");
-  el.className = "toast align-items-center border-0 " + (kind === "success" ? "text-bg-success" : "text-bg-danger");
-  el.setAttribute("role", "alert");
-  el.innerHTML =
-    '<div class="d-flex"><div class="toast-body"></div>' +
-    '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div>';
-  el.querySelector(".toast-body").textContent = message;
+  const el = document.createElement("div"), text = document.createElement("span"), close = document.createElement("button");
+  el.className = "toast " + (kind === "success" ? "toast-success" : "toast-danger");
+  el.setAttribute("role", kind === "success" ? "status" : "alert");
+  text.textContent = message;
+  close.type = "button";
+  close.className = "btn-close";
+  close.setAttribute("aria-label", "Dismiss");
+  const drop = () => { el.remove(); if (!holder.children.length && holder.hidePopover) try { holder.hidePopover(); } catch (_) {} };
+  close.addEventListener("click", drop);
+  el.append(text, close);
   holder.appendChild(el);
-  if (window.bootstrap && bootstrap.Toast) {
-    new bootstrap.Toast(el, { delay: 6000 }).show();
-    el.addEventListener("hidden.bs.toast", () => el.remove());
-  } else {
-    // No bootstrap JS (shouldn't happen): show it raw so it is never silent.
-    el.classList.add("show");
-    setTimeout(() => el.remove(), 6000);
-  }
+  // Re-show on every toast: a modal opened since the last one sits above it.
+  if (holder.showPopover) { try { holder.hidePopover(); } catch (_) {} holder.showPopover(); }
+  setTimeout(drop, 6000);
 }
 
 // Theme registry: header.html's boot script already rendered the id ->
 // {name, href} map into the page, so start from that (it is what picked the
 // stylesheet before first paint) and refresh from /api/themes — same source,
 // routes.Themes — so a theme file added while the page is open validates too.
-const DEFAULT_THEME_ID = document.documentElement.dataset.themeId || "ftl:xbmc";
+const DEFAULT_THEME_ID = document.documentElement.dataset.themeId || "ftl:blue-future";
 const appThemeMap = {};
 try {
   const boot = document.getElementById("cutepi-theme-css");
@@ -704,13 +726,13 @@ window.addEventListener("keydown", (e) => {
     if (!needEditMode()) return;
     const rows = [...document.querySelectorAll('#cuesheet tr.cue[data-cue-pos]')];
     const positions = rows
-      .filter((r) => r.classList.contains("table-warning") || r.dataset.cueSel === "1")
+      .filter((r) => r.classList.contains("is-selected") || r.dataset.cueSel === "1")
       .map((r) => parseInt(r.dataset.cuePos, 10))
       .filter((n) => Number.isFinite(n));
     // Selected group blocks come as their own payload: whole folder tree
     // and its member cues disappear (§5.4).
     const groups = [...document.querySelectorAll("#cuesheet tr.cue-group-header[data-group-id]")]
-      .filter((r) => r.classList.contains("table-warning"))
+      .filter((r) => r.classList.contains("is-selected"))
       .map((r) => parseInt(r.dataset.groupId, 10))
       .filter((n) => Number.isFinite(n));
     if (!positions.length && !groups.length) return;
@@ -752,7 +774,7 @@ window.addEventListener("keydown", (e) => {
     if (!clipped) return; // fits: normal overlay
     hidePopout(thumb);
     const pop = document.createElement("div");
-    pop.className = "media-info-popout";
+    pop.className = "popover media-info-popout";
     pop.innerHTML = info.innerHTML;
     document.body.appendChild(pop);
     const r = thumb.getBoundingClientRect();
@@ -812,7 +834,7 @@ window.addEventListener("keydown", (e) => {
     pin = el;
     if (!pop) {
       pop = document.createElement("div");
-      pop.className = "hover-popout";
+      pop.className = "popover hover-popout";
       document.body.appendChild(pop);
       tick = setInterval(render, 1000);
     }
@@ -910,7 +932,7 @@ filterMedia();
     const t = document.getElementById("mediapool-toggle");
     if (t) {
       t.setAttribute("aria-pressed", state ? "false" : "true");
-      t.classList.toggle("active", !state);
+      t.classList.toggle("is-active", !state);
     }
     try {
       localStorage.setItem(STORAGE_COLLAPSED, state ? "1" : "0");
@@ -985,7 +1007,7 @@ filterMedia();
     const t = document.getElementById("activecues-toggle");
     if (t) {
       t.setAttribute("aria-pressed", state ? "false" : "true");
-      t.classList.toggle("active", !state);
+      t.classList.toggle("is-active", !state);
     }
     try {
       localStorage.setItem(STORAGE_COLLAPSED, state ? "1" : "0");
@@ -1125,6 +1147,26 @@ document.addEventListener("dragstart", (e) => {
     if (bar) e.preventDefault();
   });
 
+// Other running cues' row bars (display only): the server renders each with
+// its position when the sheet is rendered; between renders the bar glides
+// on from there at the cue's rate (wrapping when it loops), as the focus's
+// bar follows the Now Playing clock. A paused or held cue stays put.
+(function () {
+  function tick() {
+    const now = Date.now();
+    for (const bar of document.querySelectorAll("#cuesheet .cue-progress-track")) {
+      if (!bar.dataset.t) bar.dataset.t = now; // first seen = when this render landed
+      const dur = parseFloat(bar.dataset.dur) || 0;
+      if (dur <= 0) continue;
+      let pos = parseFloat(bar.dataset.pos) || 0;
+      if (bar.dataset.paused !== "1") pos += (now - bar.dataset.t) * (parseFloat(bar.dataset.rate) || 1);
+      pos = bar.dataset.loop === "true" ? pos % dur : Math.min(pos, dur);
+      bar.firstElementChild.style.width = (pos / dur * 100) + "%";
+    }
+  }
+  setInterval(tick, 100);
+})();
+
 // --- Cue context menu (right-click on a cue row) ---
 // A lightweight single-instance menu offering per-cue actions: play, loop,
 // colour, fade-and-stop-others (duration + scope), autofollow and delete.
@@ -1152,28 +1194,29 @@ function patternOptions() {
     if (menuEl) return menuEl;
     menuEl = document.createElement("div");
     menuEl.id = "cue-context-menu";
-    menuEl.className = "cue-context-menu";
+    menuEl.className = "context-menu cue-context-menu";
+    menuEl.setAttribute("role", "menu");
     menuEl.hidden = true;
     // Play deliberately lives on the transport and the cue row, not here.
     menuEl.innerHTML = `
-      <div class="cue-context-item cue-context-color">
-        <svg class="icon -palette"><use href="/ftl/assets/icons/icons.svg#icon-palette"/></svg> Colour:
-        <select title="Cue colour">${patternOptions()}</select>
+      <div class="context-menu-item cue-context-color">
+        <label class="row is-items-center is-gap-xs" for="cue-menu-colour"><svg class="icon -palette"><use href="/ftl/assets/icons/icons.svg#icon-palette"/></svg> Colour</label>
+        <select class="select input-sm" id="cue-menu-colour" title="Cue colour">${patternOptions()}</select>
       </div>
-      <div class="cue-context-divider"></div>
-      <div class="cue-context-item cue-context-fade">
-        <svg class="icon -volume-off"><use href="/ftl/assets/icons/icons.svg#icon-volume-mute"/></svg> Fade-stop others
-        <select title="Scope"><option value="peers">Peers</option><option value="list">List/Cart</option><option value="all">All</option></select>
-        <input type="text" placeholder="0:00" title="Fade/stop time (mm:ss)" value="0:00">
+      <div class="context-menu-divider" role="separator"></div>
+      <div class="context-menu-item cue-context-fade">
+        <label class="row is-items-center is-gap-xs" for="cue-menu-fade"><svg class="icon -volume-off"><use href="/ftl/assets/icons/icons.svg#icon-volume-mute"/></svg> Fade-stop others</label>
+        <select class="select input-sm" id="cue-menu-fade" title="Scope"><option value="peers">Peers</option><option value="list">List/Cart</option><option value="all">All</option></select>
+        <input class="input input-sm" type="text" placeholder="0:00" title="Fade/stop time (mm:ss)" aria-label="Fade/stop time" value="0:00">
       </div>
-      <div class="cue-context-item" data-cue-action="autofollow"><svg class="icon -arrow-right-circle"><use href="/ftl/assets/icons/icons.svg#icon-arrow-right"/></svg> <span>Auto-continue: off</span></div>
-      <div class="cue-context-divider"></div>
-      <div class="cue-context-item" data-cue-action="newgroup"><svg class="icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> <span>New group</span></div>
-      <div class="cue-context-divider"></div>
-      <div class="cue-context-item" data-sheet-order="sort"><svg class="icon -sort"><use href="/ftl/assets/icons/icons.svg#icon-sort"/></svg> Sort by cue number</div>
-      <div class="cue-context-item" data-sheet-order="renumber"><svg class="icon -hash"><use href="/ftl/assets/icons/icons.svg#icon-hash"/></svg> Renumber cues</div>
-      <div class="cue-context-divider"></div>
-      <div class="cue-context-item cue-context-danger" data-cue-action="delete"><svg class="icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete cue</div>`;
+      <button type="button" role="menuitem" class="context-menu-item" data-cue-action="autofollow"><span class="row is-items-center is-gap-xs"><svg class="icon -arrow-right-circle"><use href="/ftl/assets/icons/icons.svg#icon-arrow-right"/></svg> <span class="menu-label">Auto-continue: off</span></span></button>
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item" data-cue-action="newgroup"><span class="row is-items-center is-gap-xs"><svg class="icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> <span class="menu-label">New group</span></span></button>
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item" data-sheet-order="sort"><span class="row is-items-center is-gap-xs"><svg class="icon -sort"><use href="/ftl/assets/icons/icons.svg#icon-sort"/></svg> Sort by cue number</span></button>
+      <button type="button" role="menuitem" class="context-menu-item" data-sheet-order="renumber"><span class="row is-items-center is-gap-xs"><svg class="icon -hash"><use href="/ftl/assets/icons/icons.svg#icon-hash"/></svg> Renumber cues</span></button>
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item is-danger" data-cue-action="delete"><span class="row is-items-center is-gap-xs"><svg class="icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete cue</span></button>`;
     document.body.appendChild(menuEl);
     return menuEl;
   }
@@ -1264,12 +1307,12 @@ function patternOptions() {
     m.dataset.cueColor = row.dataset.cueColor || "";
 
     // Auto-continue label
-    m.querySelector('[data-cue-action="autofollow"] span').textContent =
+    m.querySelector('[data-cue-action="autofollow"] .menu-label').textContent =
       "Auto-continue: " + (m.dataset.cueAutoContinue === "true" ? "on" : "off");
     // "Add to New Group" for a multi-selection, plain "New group" for one.
     let bulkCount = 0;
     try { bulkCount = JSON.parse(m.dataset.bulk || "[]").length; } catch (err) {}
-    m.querySelector('[data-cue-action="newgroup"] span').textContent =
+    m.querySelector('[data-cue-action="newgroup"] .menu-label').textContent =
       bulkCount > 1 ? "Add to New Group" : "New group";
     // Fade scope + time
     const fadeSel = m.querySelector(".cue-context-fade select");
@@ -1438,22 +1481,23 @@ function patternOptions() {
     if (menuEl) return menuEl;
     menuEl = document.createElement("div");
     menuEl.id = "group-context-menu";
-    menuEl.className = "cue-context-menu";
+    menuEl.className = "context-menu cue-context-menu";
+    menuEl.setAttribute("role", "menu");
     menuEl.hidden = true;
     menuEl.innerHTML = `
-      <div class="cue-context-item" data-group-action="inspector"><svg class="icon -sliders"><use href="/ftl/assets/icons/icons.svg#icon-settings"/></svg> Inspector</div>
-      <div class="cue-context-item" data-group-action="collapse"><svg class="icon -chevron-down"><use href="/ftl/assets/icons/icons.svg#icon-chevron-down"/></svg> <span>Collapse</span></div>
-      <div class="cue-context-item cue-context-color">
-        <svg class="icon -palette"><use href="/ftl/assets/icons/icons.svg#icon-palette"/></svg> Colour:
-        <select title="Group colour">${patternOptions()}</select>
+      <button type="button" role="menuitem" class="context-menu-item" data-group-action="inspector"><span class="row is-items-center is-gap-xs"><svg class="icon -sliders"><use href="/ftl/assets/icons/icons.svg#icon-settings"/></svg> Inspector</span></button>
+      <button type="button" role="menuitem" class="context-menu-item" data-group-action="collapse"><span class="row is-items-center is-gap-xs"><svg class="icon -chevron-down"><use href="/ftl/assets/icons/icons.svg#icon-chevron-down"/></svg> <span class="menu-label">Collapse</span></span></button>
+      <div class="context-menu-item cue-context-color">
+        <label class="row is-items-center is-gap-xs" for="group-menu-colour"><svg class="icon -palette"><use href="/ftl/assets/icons/icons.svg#icon-palette"/></svg> Colour</label>
+        <select class="select input-sm" id="group-menu-colour" title="Group colour">${patternOptions()}</select>
       </div>
-      <div class="cue-context-divider"></div>
-      <div class="cue-context-item" data-group-action="newgroup"><svg class="icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> New group</div>
-      <div class="cue-context-divider"></div>
-      <div class="cue-context-item" data-sheet-order="sort"><svg class="icon -sort"><use href="/ftl/assets/icons/icons.svg#icon-sort"/></svg> Sort by cue number</div>
-      <div class="cue-context-item" data-sheet-order="renumber"><svg class="icon -hash"><use href="/ftl/assets/icons/icons.svg#icon-hash"/></svg> Renumber cues</div>
-      <div class="cue-context-divider"></div>
-      <div class="cue-context-item cue-context-danger" data-group-action="delete"><svg class="icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete group</div>`;
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item" data-group-action="newgroup"><span class="row is-items-center is-gap-xs"><svg class="icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> New group</span></button>
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item" data-sheet-order="sort"><span class="row is-items-center is-gap-xs"><svg class="icon -sort"><use href="/ftl/assets/icons/icons.svg#icon-sort"/></svg> Sort by cue number</span></button>
+      <button type="button" role="menuitem" class="context-menu-item" data-sheet-order="renumber"><span class="row is-items-center is-gap-xs"><svg class="icon -hash"><use href="/ftl/assets/icons/icons.svg#icon-hash"/></svg> Renumber cues</span></button>
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item is-danger" data-group-action="delete"><span class="row is-items-center is-gap-xs"><svg class="icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete group</span></button>`;
     document.body.appendChild(menuEl);
     return menuEl;
   }
@@ -1484,7 +1528,7 @@ function patternOptions() {
     const m = ensureMenu();
     m.dataset.groupId = row.dataset.groupId || "";
     const collapsed = row.dataset.groupCollapsed === "true";
-    m.querySelector('[data-group-action="collapse"] span').textContent =
+    m.querySelector('[data-group-action="collapse"] .menu-label').textContent =
       collapsed ? "Expand" : "Collapse";
     // Colour select shows the group's stored colour and persists on change.
     const col = m.querySelector(".cue-context-color select");
@@ -1548,13 +1592,14 @@ function patternOptions() {
     if (menuEl) return menuEl;
     menuEl = document.createElement("div");
     menuEl.id = "sheet-context-menu";
-    menuEl.className = "cue-context-menu";
+    menuEl.className = "context-menu cue-context-menu";
+    menuEl.setAttribute("role", "menu");
     menuEl.hidden = true;
     menuEl.innerHTML = `
-      <div class="cue-context-item" data-sheet-action="newgroup"><svg class="icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> New group</div>
-      <div class="cue-context-divider"></div>
-      <div class="cue-context-item" data-sheet-order="sort"><svg class="icon -sort"><use href="/ftl/assets/icons/icons.svg#icon-sort"/></svg> Sort by cue number</div>
-      <div class="cue-context-item" data-sheet-order="renumber"><svg class="icon -hash"><use href="/ftl/assets/icons/icons.svg#icon-hash"/></svg> Renumber cues</div>`;
+      <button type="button" role="menuitem" class="context-menu-item" data-sheet-action="newgroup"><span class="row is-items-center is-gap-xs"><svg class="icon -folder-plus"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> New group</span></button>
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item" data-sheet-order="sort"><span class="row is-items-center is-gap-xs"><svg class="icon -sort"><use href="/ftl/assets/icons/icons.svg#icon-sort"/></svg> Sort by cue number</span></button>
+      <button type="button" role="menuitem" class="context-menu-item" data-sheet-order="renumber"><span class="row is-items-center is-gap-xs"><svg class="icon -hash"><use href="/ftl/assets/icons/icons.svg#icon-hash"/></svg> Renumber cues</span></button>`;
     document.body.appendChild(menuEl);
     // Clicks anywhere else dismiss the menu (same contract as the other menus).
     document.addEventListener("pointerdown", (e) => {
@@ -1601,17 +1646,18 @@ function patternOptions() {
     if (menuEl) return menuEl;
     menuEl = document.createElement("div");
     menuEl.id = "media-context-menu";
-    menuEl.className = "cue-context-menu";
+    menuEl.className = "context-menu cue-context-menu";
+    menuEl.setAttribute("role", "menu");
     menuEl.hidden = true;
     menuEl.innerHTML = `
-      <button type="button" class="cue-context-item" data-media-action="add"><svg class="icon -plus-circle"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> Add</button>
-      <div class="cue-context-divider"></div>
-      <button type="button" class="cue-context-item" data-media-action="refresh"><svg class="icon -camera"><use href="/ftl/assets/icons/icons.svg#icon-camera"/></svg> Refresh thumbnail</button>
-      <button type="button" class="cue-context-item" data-media-action="analyse"><svg class="icon -music-note-beamed"><use href="/ftl/assets/icons/icons.svg#icon-music-note"/></svg> Analyse</button>
-      <button type="button" class="cue-context-item" data-media-action="panichold"><svg class="icon -life-preserver"><use href="/ftl/assets/icons/icons.svg#icon-help-circle"/></svg> Set as holding image</button>
-      <button type="button" class="cue-context-item" data-media-action="testpattern"><svg class="icon -tv"><use href="/ftl/assets/icons/icons.svg#icon-video"/></svg> <span>Add to test patterns</span></button>
-      <div class="cue-context-divider"></div>
-      <button type="button" class="cue-context-item cue-context-danger" data-media-action="delete"><svg class="icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete</button>`;
+      <button type="button" role="menuitem" class="context-menu-item" data-media-action="add"><span class="row is-items-center is-gap-xs"><svg class="icon -plus-circle"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg> Add</span></button>
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item" data-media-action="refresh"><span class="row is-items-center is-gap-xs"><svg class="icon -camera"><use href="/ftl/assets/icons/icons.svg#icon-camera"/></svg> Refresh thumbnail</span></button>
+      <button type="button" role="menuitem" class="context-menu-item" data-media-action="analyse"><span class="row is-items-center is-gap-xs"><svg class="icon -music-note-beamed"><use href="/ftl/assets/icons/icons.svg#icon-music-note"/></svg> Analyse</span></button>
+      <button type="button" role="menuitem" class="context-menu-item" data-media-action="panichold"><span class="row is-items-center is-gap-xs"><svg class="icon -life-preserver"><use href="/ftl/assets/icons/icons.svg#icon-help-circle"/></svg> Set as holding image</span></button>
+      <button type="button" role="menuitem" class="context-menu-item" data-media-action="testpattern"><span class="row is-items-center is-gap-xs"><svg class="icon -tv"><use href="/ftl/assets/icons/icons.svg#icon-video"/></svg> <span class="menu-label">Add to test patterns</span></span></button>
+      <div class="context-menu-divider" role="separator"></div>
+      <button type="button" role="menuitem" class="context-menu-item is-danger" data-media-action="delete"><span class="row is-items-center is-gap-xs"><svg class="icon -trash3"><use href="/ftl/assets/icons/icons.svg#icon-trash"/></svg> Delete</span></button>`;
     document.body.appendChild(menuEl);
     return menuEl;
   }
@@ -1639,7 +1685,7 @@ function patternOptions() {
     fetch("/api/testpatterns").then((r) => r.json()).then((d) => {
       if (m.dataset.mediaFilename !== name) return;
       const pinned = (d.custom || []).indexOf(name) > -1;
-      const lbl = m.querySelector('[data-media-action="testpattern"] span');
+      const lbl = m.querySelector('[data-media-action="testpattern"] .menu-label');
       if (lbl) lbl.textContent = pinned ? "Remove from test patterns" : "Add to test patterns";
     }).catch(() => {});
   }
@@ -1705,7 +1751,8 @@ function patternOptions() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     const tile = e.target instanceof Element ? e.target.closest("#mediapool .media-tile") : null;
-    if (!tile) return;
+    // Enter on the tile's own menu button opens the menu, it does not add a cue.
+    if (!tile || e.target.closest("button")) return;
     e.preventDefault();
     addMediaToCuesheet(tile.dataset.mediaName || "");
   });
@@ -1737,7 +1784,7 @@ function patternOptions() {
           showToast("Holding image failed: " + err.message);
         });
     } else if (action === "testpattern") {
-      const pinned = item.querySelector("span").textContent.startsWith("Remove");
+      const pinned = item.querySelector(".menu-label").textContent.startsWith("Remove");
       const form = new URLSearchParams({on: pinned ? "0" : "1"});
       fetch("/api/testpattern/" + encodeURIComponent(filename), {method: "POST", body: form})
         .then((res) => {
@@ -1842,16 +1889,16 @@ function initNowPlaying() {
 initNowPlaying();
 
 // --- Now Playing: change-detection refresh (WebSocket-driven) ---
-// Every WebSocket sync pulls GET /api/nowplaying/status, which returns
-// {"changed": bool, "version": "<state>.<cuesheet>"}; the widget is
-// re-rendered (via GET /api/nowplaying) only when the version differs from
-// what this client last saw. Each client tracks its own last-seen version;
+// Every WebSocket sync carries the widget's version ("<state>.<cuesheet>",
+// as GET /api/nowplaying/status returns it); the widget is re-rendered (via
+// GET /api/nowplaying) only when it differs from what this client last
+// showed. Each client tracks its own last-seen version;
 // the server keeps no per-client state. No-op on pages without #mediainfo
 // (e.g. /upload).
 (function () {
   if (!document.getElementById("mediainfo")) return;
 
-  let lastSeen = 0;
+  let lastSeen = "", want = "";
 
   // No polling (§6.7): every server signal (cutepi-sync) pulls once,
   // version-guarded. The server pushes one sync per displayed second while
@@ -1886,7 +1933,9 @@ initNowPlaying();
       c.classList.remove("go-imminent");
       return c.outerHTML;
     };
-    return Array.from(root.querySelectorAll("button, [data-shape]"), norm).join("|") +
+    // .go-now too: the selection can move (GO advance, another window)
+    // while the same clip plays, and the patch below never touches it.
+    return Array.from(root.querySelectorAll("button, [data-shape], .go-now"), norm).join("|") +
       "|" + ((root.querySelector(".now-title") || {}).textContent || "");
   }
   function patchInPlace(el, next) {
@@ -1906,16 +1955,11 @@ initNowPlaying();
     return true;
   }
 
-  async function refresh() {
+  const refresh = single(async function () {
     if (pressing) { missed = true; return; }
+    if (want === lastSeen) return;
+    const target = want;
     try {
-      const status = await fetch(
-        "/api/nowplaying/status?version=" + lastSeen,
-        { headers: { "Accept": "application/json" } }
-      );
-      const body = await status.json();
-      lastSeen = body.version;
-      if (!body.changed) return;
       // While the user is actively dragging the scrubber, don't replace the
       // widget (the swap would reset the thumb mid-drag). The next signal
       // catches up once the drag ends.
@@ -1938,6 +1982,8 @@ initNowPlaying();
       if (oldGo && newGo) newGo.classList.toggle("go-imminent", oldGo.classList.contains("go-imminent"));
       if (pressing) { missed = true; return; }
       setTestPressed(replacement.dataset.testShowing === "1");
+      // Seen only once shown: a skipped pass (drag, press, error) retries.
+      lastSeen = target;
       if (patchInPlace(el, replacement)) { initNowPlaying(); return; }
       el.replaceWith(replacement);
       if (window.htmx) htmx.process(replacement);
@@ -1945,10 +1991,13 @@ initNowPlaying();
     } catch (e) {
       // Transient network/server error; the next sync retries.
     }
-  }
+  });
   // WebSocket "sync" wakes this refresher immediately (single writer for the
-  // widget, same rationale as the cuesheet refresher).
-  document.addEventListener("cutepi-sync", refresh);
+  // widget: one pass at a time, see single()).
+  document.addEventListener("cutepi-sync", (e) => {
+    if (e.detail?.state) want = e.detail.state;
+    refresh();
+  });
 
 })();
 
@@ -1965,7 +2014,6 @@ initNowPlaying();
   const bodyEl = document.getElementById("cueinspector-body");
   if (!bodyEl) return;
 
-  let timer = null;
   // Ordering guard: while an inspector save (PUT from #inspector-form) is in
   // flight, a WS signal may schedule an inspector refetch that would swap a
   // PRE-save render (and reset the just-dragged trim handles). Defer any
@@ -1978,7 +2026,7 @@ initNowPlaying();
   // cuesheet, re-fetch the SELECTED entity from the freshly-rendered sheet -
   // and keep a group inspector alive when the sheet selects nothing.
   function inspectorURL() {
-    const selected = document.querySelector("#cuesheet tr.table-warning");
+    const selected = document.querySelector("#cuesheet tr.is-selected");
     const body = document.getElementById("cueinspector-body");
     const shown = body ? parseInt(body.dataset.groupId || "", 10) : 0;
     if (selected) {
@@ -2000,16 +2048,21 @@ initNowPlaying();
   document.addEventListener("ctp-trim-released", () => {
     if (refreshDirty && !saveInFlight) { refreshDirty = false; refresh(); }
   });
+  // One fetch at a time, from its own htmx queue: htmx.ajax's default source
+  // (body) is shared, and a queued call there kept the target it resolved
+  // when queued, so once an earlier swap replaced that node its newer
+  // inspector was thrown away. A call meanwhile reruns after, with the
+  // selection and node current by then.
+  const source = document.getElementById("cueinspector-panel") || document.body;
+  const fetchInspector = single(async () => {
+    // Cache-bust: without no-store headers the browser may reuse a cached
+    // inspector for the previously selected entity and the wrong panel
+    // appears.
+    try { await htmx.ajax("GET", inspectorURL(), {source, target: "#cueinspector-body", swap: "outerHTML"}); } catch (e) {}
+  });
   function refresh() {
     if (saveInFlight || window.ctpTrim?.pressing()) { refreshDirty = true; return; }
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      // Cache-bust: without no-store headers the browser may reuse a cached
-      // inspector for the previously selected entity and the wrong panel
-      // appears.
-      const url = inspectorURL();
-      try { htmx.ajax("GET", url, {target: "#cueinspector-body", swap: "outerHTML"}); } catch (e) {}
-    }, 0);
+    fetchInspector();
   }
 
   // Both entry points below see the same render: follow each new #cuesheet
@@ -2183,7 +2236,7 @@ document.addEventListener("click", (e) => {
     const t = document.getElementById("cueinspector-toggle");
     if (t) {
       t.setAttribute("aria-pressed", state ? "false" : "true");
-      t.classList.toggle("active", !state);
+      t.classList.toggle("is-active", !state);
     }
     try { localStorage.setItem(STORAGE_COLLAPSED, state ? "1" : "0"); } catch (e) {}
   }
@@ -2217,7 +2270,7 @@ document.addEventListener("click", (e) => {
   // Arrow-key/click selection can land the chosen cue outside the visible
   // part of a full cuesheet; pull the nearest scroller so the row shows.
   function scrollSelectionIntoView() {
-    const sel = document.querySelector("#cuesheet .table-warning");
+    const sel = document.querySelector("#cuesheet .is-selected");
     if (sel) sel.scrollIntoView({ block: "nearest" });
   }
   // Images have no audio playback at all: hide the Audio tab (button + pane)
@@ -2227,7 +2280,10 @@ document.addEventListener("click", (e) => {
     const body = document.querySelector("#cueinspector-body");
     const noAudio = !!body && body.hasAttribute("data-no-audio-tab");
     document.body.classList.toggle("ctp-no-audio-tab", noAudio);
-    if (noAudio && ["audio", "video"].includes(storedTab())) setTab("time");
+    // Only Audio: an image's Video tab exists (a live page's does not, and
+    // setTab already falls back to Time for a missing pane). Resetting Video
+    // here sent every save on an image cue back to the Time tab.
+    if (noAudio && storedTab() === "audio") setTab("time");
   }
   // A group inspector has no tabs: disable the strip while it's showing.
   function syncGroupView() {
@@ -2356,14 +2412,10 @@ document.addEventListener("click", (e) => {
 // pulls once to catch up.
 (function () {
   if (!document.getElementById("cuesheet")) return;
-  let lastSeen = 0;
-  // Seed lastSeen by fetching current version once; avoids an immediate
-  // redundant full render on load.
-  fetch("/api/cuesheet/status?version=0", {headers: {"Accept": "application/json"}})
-    .then((r) => r.json()).then((b) => { lastSeen = b.version; }).catch(() => {});
-  // A sheet that arrived some other way (an action's response: a row
-  // click, GO, an edit) carries its version: no need to fetch it again when
-  // the sync for that same change arrives.
+  // The sheet on screen carries the version it was rendered at (the page
+  // load, an action's response, this refresher): that is the only "last
+  // seen". A separate seed fetch could read a newer version than the page
+  // showed and then skip that change for good.
   function domVersion() {
     const el = document.getElementById("cuesheet");
     const v = el ? parseInt(el.dataset.version, 10) : NaN;
@@ -2372,15 +2424,30 @@ document.addEventListener("click", (e) => {
   // The server signals a change as soon as it is made, often before the
   // response of the request that made it (which carries the new sheet) has
   // landed. While such a request is in flight, wait for it, then check.
+  // Listen on document: htmx fires a detached element's events there (a GO
+  // button or arrow-key trigger the swap replaced), and a missed end left
+  // inFlight up for good, freezing this window's sheet.
   let inFlight = 0, deferred = false;
+  let want = 0; // the newest sheet version a sync announced
   const sheetRequest = (e) => e.detail?.ctx?.target?.id === "cuesheet";
-  document.body.addEventListener("htmx:before:request", (e) => { if (sheetRequest(e)) inFlight++; });
-  document.body.addEventListener("htmx:finally:request", (e) => {
+  document.addEventListener("htmx:before:request", (e) => { if (sheetRequest(e)) inFlight++; });
+  document.addEventListener("htmx:finally:request", (e) => {
     if (!sheetRequest(e)) return;
     inFlight = Math.max(0, inFlight - 1);
     if (inFlight === 0 && deferred) { deferred = false; setTimeout(refresh, 0); }
   });
-  async function refresh() {
+  // An older sheet never replaces a newer one: an action's response can land
+  // after this refresher already showed a later change.
+  document.addEventListener("htmx:before:swap", (e) => {
+    if (!sheetRequest(e)) return;
+    const m = /id="cuesheet" data-version="(\d+)"/.exec(e.detail.ctx.text || "");
+    if (m && parseInt(m[1], 10) < domVersion()) e.preventDefault();
+  });
+  document.addEventListener("htmx:after:swap", (e) => {
+    const m = sheetRequest(e) && document.getElementById("cuesheet")?.dataset.showMode;
+    if (m) applyShowMode(m === "true");
+  });
+  const refresh = single(async function () {
     // Nor over an open inline editor: its save (or Escape) re-renders the
     // sheet, and that request's end runs the deferred check.
     if (inFlight > 0 || window.inlineEditing?.()) {
@@ -2390,31 +2457,20 @@ document.addEventListener("click", (e) => {
       return;
     }
     try {
-      if (domVersion() > lastSeen) lastSeen = domVersion();
-      const status = await fetch("/api/cuesheet/status?version=" + lastSeen, {headers: {"Accept": "application/json"}});
-      const body = await status.json();
-      // Always advance lastSeen to server version to avoid tight loop
-      lastSeen = body.version;
-      if (!body.changed) return;
+      if (want <= domVersion()) return;
       const res = await fetch("/api/cuesheet", {headers: {"Accept": "text/html"}});
-      const html = await res.text();
-      const current = document.getElementById("cuesheet");
-      if (!current) return;
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = html.trim();
-      const replacement = wrapper.firstElementChild;
-      if (!replacement) return;
-      current.replaceWith(replacement);
-      if (window.htmx) htmx.process(replacement);
+      if (res.ok) replaceById("cuesheet", await res.text());
     } catch (e) {
-      // transient
+      // transient: the DOM keeps its version, so the next signal retries
     }
-  }
+  });
   document.addEventListener("cutepi-ws", (e) => { if (e.detail.connected) refresh(); });
-  // WebSocket "sync" wakes this refresher (single writer: it is the only
-  // thing that swaps the cuesheet on a server signal, so two signals can't
-  // race each other's re-render).
-  document.addEventListener("cutepi-sync", refresh);
+  // WebSocket "sync" wakes this refresher (single writer: one pass at a
+  // time, see single(), so two signals can't race each other's re-render).
+  document.addEventListener("cutepi-sync", (e) => {
+    if (typeof e.detail?.sheet === "number") want = e.detail.sheet;
+    refresh();
+  });
 })();
 
 // Server push is the only status channel (§6.7): the server signals every
@@ -2425,23 +2481,31 @@ document.addEventListener("click", (e) => {
   if (!window.WebSocket || !document.getElementById("cuesheet")) return;
   let socket;
   let retry;
+  let boot;
+  // The pool's one writer on a signal: one fetch at a time, so responses
+  // land in order. Also run on every (re)connect: a media change made while
+  // the socket was down has no later signal.
+  const refreshPool = single(async function () {
+    if (!document.getElementById("mediapool")) return;
+    try {
+      const res = await fetch("/mediapool", {headers: {"Accept": "text/html"}});
+      if (res.ok) replaceById("mediapool", await res.text());
+    } catch (e) { /* transient: the next signal or reconnect retries */ }
+  });
   function connect() {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     socket = new WebSocket(scheme + "://" + location.host + "/api/ws");
     socket.onmessage = (event) => {
-      let type;
+      let type, v;
       try {
-        type = JSON.parse(event.data).type;
+        ({type, v = {}} = JSON.parse(event.data));
       } catch (e) {
         return;
       }
       if (type === "media") {
-        // Skip while a manual swap owns the pool (the YouTube downloader and
-        // rename flows fetch it themselves); otherwise refetch like before.
-        if (window.__poolBusy) return;
-        if (document.getElementById("mediapool")) {
-          htmx.ajax("GET", "/mediapool", {target: "#mediapool", swap: "outerHTML"});
-        }
+        // Never skipped: a change that lands while another flow swaps the
+        // pool (the YouTube downloader) would have no later signal.
+        refreshPool();
         return;
       }
       if (type !== "sync") return;
@@ -2450,9 +2514,19 @@ document.addEventListener("click", (e) => {
       // used to race the refresher's replaceWith: the htmx response could land
       // in a node the refresher had just detached, losing that update until
       // the next tick - and the double re-render flickered).
-      document.dispatchEvent(new Event("cutepi-sync"));
+      // A restarted server counts from zero again: the sheet on screen is
+      // from the old count, so any new render may replace it.
+      if (boot !== undefined && v.boot !== boot) {
+        const sheet = document.getElementById("cuesheet");
+        if (sheet) sheet.dataset.version = "0";
+      }
+      boot = v.boot;
+      // The versions ride along (sheet, state): each refresher fetches only
+      // if its pane is behind them, with no status round trip.
+      document.dispatchEvent(new CustomEvent("cutepi-sync", {detail: v}));
     };
     socket.onopen = () => {
+      refreshPool();
       document.dispatchEvent(new CustomEvent("cutepi-ws", {detail: {connected: true}}));
     };
     socket.onclose = () => {
@@ -2464,6 +2538,13 @@ document.addEventListener("click", (e) => {
     socket.onerror = () => socket.close();
   }
   connect();
+  // Network back (Wi-Fi rejoined, laptop woke): reconnect now, not on the
+  // next 2s retry.
+  window.addEventListener("online", () => {
+    if (socket.readyState !== WebSocket.CLOSED) return;
+    clearTimeout(retry);
+    connect();
+  });
 })();
 
 // Topbar wall clock: locale HH:MM:SS, one client-side tick, no server
@@ -2495,12 +2576,14 @@ document.addEventListener("click", (e) => {
   const setOn = () => {
     clearTimeout(offTimer);
     el.hidden = false;
-    el.classList.add("ws-status-on");
+    el.classList.add("is-on");
+    el.classList.remove("is-error");
     el.setAttribute("aria-label", "Live updates connected");
   };
   const setOff = () => {
     el.hidden = false;
-    el.classList.remove("ws-status-on");
+    el.classList.remove("is-on");
+    el.classList.add("is-error");
     el.setAttribute("aria-label", "Live updates offline");
   };
   document.addEventListener("cutepi-ws", (e) => {
@@ -2542,9 +2625,7 @@ document.addEventListener("click", (e) => {
 
   function refreshPool() {
     if (!window.htmx || !document.getElementById("mediapool")) return;
-    window.__poolBusy = true;
     htmx.ajax("GET", "/mediapool", {target: "#mediapool", swap: "outerHTML"});
-    setTimeout(function () { window.__poolBusy = false; }, 2000);
   }
 
   function swapPool(html) {
@@ -2554,10 +2635,8 @@ document.addEventListener("click", (e) => {
     wrap.innerHTML = html.trim();
     var replacement = wrap.firstElementChild;
     if (replacement && replacement.id === "mediapool") {
-      window.__poolBusy = true;
       el.replaceWith(replacement);
       if (window.htmx) htmx.process(replacement);
-      setTimeout(function () { window.__poolBusy = false; }, 2000);
     }
   }
 
@@ -2833,10 +2912,9 @@ function cutepiFieldProblem(el) {
 function cutepiFieldTip(el, message) {
   const r = el.getBoundingClientRect();
   const tip = document.createElement("div");
-  tip.className = "tooltip bs-tooltip-bottom show cutepi-field-tip";
+  tip.className = "toast toast-danger cutepi-field-tip"; // stock surface, placed under the field
   tip.setAttribute("role", "alert");
-  tip.innerHTML = '<div class="tooltip-inner"></div>';
-  tip.firstChild.textContent = message;
+  tip.textContent = message;
   tip.style.cssText = "position:fixed;z-index:2100;left:" + Math.max(8, r.left) + "px;top:" + (r.bottom + 4) + "px";
   document.body.appendChild(tip);
   setTimeout(() => tip.remove(), 3500);
@@ -2896,3 +2974,10 @@ document.addEventListener("click", (e) => {
   e.stopImmediatePropagation();
   bootstrap.Modal.getOrCreateInstance(overlay).hide();
 }, true);
+
+// Main menu (a popover, templates/mediacontrols.html): close it once an
+// item is picked, so the modal or confirm it opens is not behind the menu.
+document.addEventListener("click", (e) => {
+  const item = e.target instanceof Element && e.target.closest("#app-menu .dropdown-item");
+  if (item) document.getElementById("app-menu").hidePopover();
+});

@@ -48,10 +48,6 @@ double glwall_ramp_shape(int curve, double t);
 /* How long after its time a frame is seen (mid-screen): the presenter's
  * moving average of time -> latch, plus half a refresh (ns). */
 int64_t glwall_display_delay(void);
-/* Delay a cue's audio sink (its ts-offset) by the display delay, so sound
- * and picture stay together. A non-live cue pipeline does not pass a
- * configured latency on to its sinks (measured: 0), so it is set per sink. */
-void glwall_align_audio(GstElement *sink);
 /* The largest ts-offset on a pipeline's sinks other than the video appsink, ns (-1: none). */
 int64_t glwall_audio_offset(GstElement *pipeline);
 /* keep_aspect: letterbox inside the rectangle (fit) rather than stretch. */

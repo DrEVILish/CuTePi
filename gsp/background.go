@@ -148,6 +148,7 @@ func playOneTrack(filename string, linear float64, done <-chan struct{}) (stoppe
 	}
 
 	result := make(chan error, 1)
+	defer p.GetPipelineBus().RemoveWatch() // a stopped track never sends EOS: the watch would keep the bus
 	p.GetPipelineBus().AddWatch(func(msg *gst.Message) bool {
 		switch msg.Type() {
 		case gst.MessageEOS:

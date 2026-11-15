@@ -49,7 +49,7 @@ func TestRespondErrorPlainTextForHTMX(t *testing.T) {
 		t.Fatalf("navigation error Content-Type = %q, want text/html", ct)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "<html") || !strings.Contains(body, "<pre") || !strings.Contains(body, "no URL provided") {
+	if !strings.Contains(body, "<html") || !strings.Contains(body, `class="empty-state"`) || !strings.Contains(body, "no URL provided") {
 		t.Fatalf("navigation error should be the full error page, got:\n%s", body)
 	}
 }
@@ -141,5 +141,25 @@ func TestRedactPathsAndImportError(t *testing.T) {
 	}
 	if importError(nil, "x", "y") != nil {
 		t.Fatal("importError(nil) must be nil")
+	}
+}
+
+// An unknown path: a browser gets the error page with a way back, an API or
+// script client the plain-text 404.
+func TestNotFoundPageForBrowsersOnly(t *testing.T) {
+	r := setupTestServer(t)
+	r.NoRoute(notFound)
+	for _, tc := range []struct{ path, accept, want string }{
+		{"/no-such-page", "text/html,*/*", `href="/"`},
+		{"/no-such-page", "", "404 page not found"},
+		{"/api/no-such", "text/html", "404 page not found"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req.Header.Set("Accept", tc.accept)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), tc.want) {
+			t.Fatalf("GET %s (Accept %q) = %d, want 404 containing %q, got:\n%s", tc.path, tc.accept, w.Code, tc.want, w.Body.String())
+		}
 	}
 }

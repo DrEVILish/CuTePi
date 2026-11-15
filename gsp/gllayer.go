@@ -394,6 +394,22 @@ func configureDeinterlace(byFactory map[string][]*gst.Element, caps *gst.Caps, f
 // open).
 var CodecLookup func(filename string) string
 
+// EndpointAuth is the URL the renderer opens for a live page: the cue's
+// URL plus its stored screen key (set by main). Only the renderer sees it;
+// everything else in gsp keeps the clean URL (logs, Now Playing).
+var EndpointAuth func(url string) string
+
+func endpointOpenURL(u string) string {
+	if EndpointAuth != nil {
+		return EndpointAuth(u)
+	}
+	return u
+}
+
+// SourceLookup is the file to play for a pool filename instead of the
+// original: its prepared copy (show compiler), or "" (set by main).
+var SourceLookup func(filename string) string
+
 // glTailFormat is the format the GL tail is chosen by: the pad's own when
 // fixed, else "RGBA" for a file recorded as having alpha. Unfixed caps (a
 // caps query's answer) list what the decoder could produce, not what it
@@ -600,6 +616,15 @@ func glAttachLocked(p *gst.Pipeline, l *glLayer) bool {
 				layer.SetCrop(cl, cr, ct, cb)
 			}
 		}
+		if l.srcW > 0 && l.srcH > 0 { // an aligned fit: the picture's own rectangle
+			o := l.opts
+			if dir != dirIdentity { // srcW x srcH is already cropped and turned
+				o.Rotation, o.Flip, o.CropL, o.CropR, o.CropT, o.CropB = 0, "", "", "", "", ""
+			}
+			if lay := computeLayout(o, l.srcW, l.srcH, bw, bh, false); lay.fitW > 0 && lay.fitH > 0 {
+				x, y, bw, bh = x+lay.fitX, y+lay.fitY, lay.fitW, lay.fitH
+			}
+		}
 		layer.SetRect(x, y, bw, bh, l.opts.FitMode != "stretch")
 	}
 	return true
@@ -659,7 +684,7 @@ func glDirection(rotation int, flip string) videoDir {
 // glCropEdges moves a crop given on the source picture's edges (left,
 // right, top, bottom) to where those edges are after the flip: the mixer
 // crops what reaches it, the flipped picture.
-func glCropEdges(d videoDir, l, r, t, b int) (int, int, int, int) {
+func glCropEdges[T int | float64](d videoDir, l, r, t, b T) (T, T, T, T) {
 	switch d {
 	case dir90R: // source left becomes the top, top becomes the right
 		return b, t, l, r

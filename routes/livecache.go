@@ -158,7 +158,7 @@ func preloadNext(live []ctp.LiveSource) {
 	start := time.Now()
 	// Stops (the WebKit child and its helper processes killed) as soon as
 	// anything plays, is armed or starts to build.
-	err := gsp.PreloadPage(next.URL, func() bool { return !gsp.BusySince(start) })
+	err := gsp.PreloadPage(ctp.WithScreenName(next.URL, InstanceName()), func() bool { return !gsp.BusySince(start) })
 	liveCacheMu.Lock()
 	defer liveCacheMu.Unlock()
 	switch {

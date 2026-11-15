@@ -85,6 +85,28 @@ func TestLoopSteps(t *testing.T) {
 	}
 }
 
+// A looping pass plays as a segment (gapless restart, §6.2) exactly when
+// loopSteps will restart at its end; the last finite pass ends in a plain EOS.
+func TestLoopsAgain(t *testing.T) {
+	cases := []struct {
+		c    clip
+		want bool
+	}{
+		{clip{loop: true, loopRemain: 0}, true},
+		{clip{loop: true, loopRemain: 3}, true},
+		{clip{loop: true, loopRemain: 2}, true},
+		{clip{loop: true, loopRemain: 1}, false}, // last pass
+		{clip{loop: false}, false},
+		{clip{loop: true, still: true}, false},
+		{clip{loop: true, liveEndpoint: true}, false},
+	}
+	for i, tc := range cases {
+		if got := tc.c.loopsAgain(); got != tc.want {
+			t.Errorf("case %d: loopsAgain() = %v, want %v", i, got, tc.want)
+		}
+	}
+}
+
 // The change counter the Now Playing poller depends on: it must bump on real
 // playback state changes (pipeline swap, play, pause, stop, panic) and stay
 // stable while idle (no pipeline), so the client only re-renders when the

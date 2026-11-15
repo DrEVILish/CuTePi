@@ -2,34 +2,38 @@
 
 
 <body class="app-body{{ if .ShowMode }} show-mode{{ end }}">
+    <a class="visually-hidden" href="#cuesheet-pane">Skip to the cue sheet</a>
     <!-- ftl-themes shell adoption (.app contract): topbar = bar,
       app-content = main, footer = status, plus a decorative rail. The
       .ftl-* classes are inert under this app's own themes (no ftl
       stylesheet is linked), so only shared ftl:* themes re-arrange. -->
     <div class="app-shell app">
-      {{ template "topbar.html" }}
+      {{ template "topbar.html" . }}
       <!-- The rail must carry a whitespace text node: a bare empty aside
         matches :empty, which some shared themes use to hide the rail. -->
       <aside class="app-rail" aria-hidden="true"> </aside>
 
-    <div class="container-fluid app-content app-main">
+    <main class="app-content app-main">
+      <!-- Linked units' warnings (link.js, DESIGN §6.8c). -->
+      <div id="linkBanner" hidden></div>
+      <div id="linkFailover" class="status status-error link-banner" role="alert" hidden></div>
       <div class="app-main-row">
         <div class="app-pane d-flex flex-column" id="mediapool-pane">
           {{ template "mediapool.html" . }}
         </div>
-        <div id="mediapool-resizer" title="Resize the media pool (drag)" aria-label="Resize the media pool"></div>
-        <div class="app-pane" id="cuesheet-pane">
+        <div id="mediapool-resizer" role="separator" aria-orientation="vertical" title="Resize the media pool (drag)" aria-label="Resize the media pool"></div>
+        <div class="app-pane" id="cuesheet-pane" tabindex="-1">
           {{ template "cuesheet.html" . }}
         </div>
-        <div id="activecues-resizer" title="Resize the active cues pane (drag)" aria-label="Resize the active cues pane"></div>
+        <div id="activecues-resizer" role="separator" aria-orientation="vertical" title="Resize the active cues pane (drag)" aria-label="Resize the active cues pane"></div>
         <div class="app-pane d-flex flex-column" id="activecues-pane">
           {{ template "activecues.html" .ActiveCues }}
         </div>
       </div>
       <div class="inspector-panel mt-xs" id="cueinspector-panel">
-        <div class="inspector-header row is-items-center is-gap-xs px-2 py-1">
-          <h6 class="mb-0 flex-shrink-0">Cue Inspector</h6>
-          <ul class="tabs inspector-tabs mb-0 flex-shrink-0" role="tablist" id="inspector-tabs">
+        <div class="inspector-header row is-items-center is-gap-xs">
+          <h2 class="pane-title">Cue inspector</h2>
+          <ul class="tabs inspector-tabs" role="tablist" id="inspector-tabs" aria-label="Cue inspector sections">
             <li role="presentation">
               <button type="button" class="tab is-active" data-inspector-tab="time" role="tab" aria-selected="true">Time</button>
             </li>
@@ -46,52 +50,52 @@
               <button type="button" class="tab" data-inspector-tab="advanced" role="tab" aria-selected="false">Colour</button>
             </li>
           </ul>
-          <span class="inspector-save-flash ms-auto" id="inspector-save-flash" title="Saved" aria-hidden="true"></span>
-          <span class="text-muted small d-none d-xl-inline flex-shrink-0">Changes save instantly</span>
+          <span class="lamp is-on inspector-save-flash" id="inspector-save-flash" title="Saved" aria-hidden="true"></span>
+          <span class="field-hint inspector-save-note">Changes save instantly</span>
         </div>
         <div class="inspector-collapse show" id="cueinspector-collapse">
           {{ if .GroupInspector }}{{ template "groupinspector.html" .GroupInspector }}{{ else }}{{ template "cueinspector.html" .Inspector }}{{ end }}
         </div>
       </div>
-      <div id="cueinspector-resizer" title="Resize the cue inspector (drag)" aria-label="Resize the cue inspector"></div>
-    </div>
+      <div id="cueinspector-resizer" role="separator" aria-orientation="horizontal" title="Resize the cue inspector (drag)" aria-label="Resize the cue inspector"></div>
+    </main>
 
     <footer id="app-footer" class="app-status row is-items-center is-gap-xs">
-      <button type="button" id="mode-toggle" class="mode-switch" role="switch"
+      <button type="button" id="mode-toggle" class="switch" role="switch"
         aria-checked="{{ if .ShowMode }}true{{ else }}false{{ end }}"
-        aria-label="Edit or Show mode"
-        title="Show mode arms scheduled triggers and test output; Edit mode is for building the show">
-        <span class="mode-knob" aria-hidden="true"></span>
-        <span class="mode-label">{{ if .ShowMode }}SHOW{{ else }}EDIT{{ end }}</span>
+        aria-label="Show mode"
+        title="Show mode arms scheduled triggers and locks editing; Edit mode is for building the show">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span class="switch-label mode-label">{{ if .ShowMode }}SHOW{{ else }}EDIT{{ end }}</span>
       </button>
-      <div class="row is-gap-xs btn-group-sm" role="group" aria-label="Panels">
-        <button type="button" class="btn btn-secondary" id="mediapool-toggle" aria-pressed="true"
+      <div class="btn-group" role="group" aria-label="Panels">
+        <button type="button" class="btn btn-sm btn-secondary" id="mediapool-toggle" aria-pressed="true"
           title="Show or hide the media pool" aria-label="Toggle the media pool">
           <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-sidebar"/></svg><span class="panel-btn-label">Pool</span>
         </button>
-        <button type="button" class="btn btn-secondary" id="cueinspector-toggle" aria-pressed="true"
+        <button type="button" class="btn btn-sm btn-secondary" id="cueinspector-toggle" aria-pressed="true"
           title="Show or hide the cue inspector" aria-label="Toggle the cue inspector">
           <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-columns"/></svg><span class="panel-btn-label">Inspector</span>
         </button>
-        <button type="button" class="btn btn-secondary" id="activecues-toggle" aria-pressed="true"
+        <button type="button" class="btn btn-sm btn-secondary" id="activecues-toggle" aria-pressed="true"
           title="Show or hide the running cues" aria-label="Toggle the active cues pane">
-          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-layers"/></svg><span class="panel-btn-label">Active</span><span class="activecues-count" id="activecues-count"></span>
+          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-layers"/></svg><span class="panel-btn-label">Active</span><span class="badge badge-accent activecues-count" id="activecues-count"></span>
         </button>
       </div>
       <div class="btn-group" role="group" aria-label="Test output">
         <button type="button" id="showTestBtn" class="btn btn-sm btn-secondary" aria-pressed="false"
           hx-post="/api/test/toggle" hx-swap="none"
           title="Toggle the test pattern on the output" aria-label="Toggle a test pattern">
-          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-video"/></svg>&nbsp;<span id="showTestLabel">Tests</span>
+          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-video"/></svg><span id="showTestLabel" class="panel-btn-label">Tests</span>
         </button>
-        <button type="button" class="btn btn-sm btn-secondary" id="showTestPicker" data-test-open
+        <button type="button" class="btn btn-sm btn-secondary btn-icon" id="showTestPicker" data-test-open
           title="Open the test pattern picker" aria-label="Open the test pattern picker">
           <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-chevron-up"/></svg>
         </button>
       </div>
-      <button type="button" class="btn btn-sm btn-secondary ms-auto" data-settings-open
+      <button type="button" class="btn btn-sm btn-secondary app-status-end" data-settings-open
         title="Open settings" aria-label="Open settings">
-        <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-settings"/></svg>&nbsp;Settings
+        <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-settings"/></svg><span class="panel-btn-label">Settings</span>
       </button>
     </footer>
     </div>

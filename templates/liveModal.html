@@ -6,32 +6,93 @@
   <div class="modal-dialog">
     <div class="modal-content modal">
       <div class="modal-header">
-        <span class="modal-title" id="liveModalLabel">
-          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-clock"/></svg>&nbsp;Add live page cue
-        </span>
+        <span class="modal-title" id="liveModalLabel">Add live page cue</span>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <form id="live-cue-form" hx-post="/api/cue/live" hx-target="#cuesheet" hx-swap="outerHTML">
         <div class="modal-body">
-          <label class="form-label" for="live-url">Page URL</label>
-          <input class="form-control" id="live-url" type="url" name="url" required
-            autocomplete="url" spellcheck="false" placeholder="https://timerpi.local/d/room">
-          <label class="form-label mt-m" for="live-title">Cue name</label>
-          <input class="form-control" id="live-title" type="text" name="title"
-            autocomplete="off" placeholder="Room A timer (blank = the page's host name)">
-          <p class="small text-muted mt-m mb-0">
+          <div class="field">
+            <label class="label" for="live-url">Page URL</label>
+            <input class="input" id="live-url" type="url" name="url" required
+              autocomplete="url" spellcheck="false" placeholder="https://timerpi.local/d/room">
+          </div>
+          <div class="field">
+            <label class="label" for="live-title">Cue name</label>
+            <input class="input" id="live-title" type="text" name="title"
+              autocomplete="off" placeholder="Room A timer (blank = the page's host name)">
+          </div>
+          <p class="field-hint">
             The page shows on the wall like a video cue, with no sound. It stays up until
             Stop, Panic or another cue replaces it; if it stops answering, the panic holding
             image shows until it comes back. Edit the URL later in the Cue Inspector.
           </p>
-          <div id="live-error" class="small text-danger mt-xs d-none" role="alert"></div>
+          <div id="live-error" class="field-error d-none" role="alert"></div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-primary" type="submit">Add cue</button>
         </div>
       </form>
+      <div class="modal-body field-group" id="live-pair">
+        <div class="field-group-title">Pair with a TimerPi screen</div>
+        <p class="field-hint">CuTePi joins the TimerPi's waiting room as a screen. Capture it there
+          (Screens &rarr; Waiting) and choose the room: the cue appears here, as a trusted screen. Its key is
+          stored apart from the URL and never exported or logged.</p>
+        <div class="field">
+          <label class="label" for="live-pair-server">TimerPi address</label>
+          <input class="input" id="live-pair-server" type="text" placeholder="http://timerpi.local" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label class="label" for="live-pair-name">Screen name</label>
+          <input class="input" id="live-pair-name" type="text" placeholder="blank = this CuTePi's name" autocomplete="off">
+        </div>
+        <div class="row is-gap-xs mt-xs">
+          <button type="button" class="btn btn-secondary btn-sm" id="live-pair-start">Start pairing</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="live-pair-cancel" hidden>Cancel</button>
+        </div>
+        <div id="live-pair-status" class="mt-xs" role="status" aria-live="polite"></div>
+      </div>
     </div>
   </div>
 </div>
+<script>
+  (function () {
+    var start = document.getElementById("live-pair-start");
+    if (!start) return;
+    var cancel = document.getElementById("live-pair-cancel");
+    var status = document.getElementById("live-pair-status");
+    var id = null, timer = null;
+    function say(t, cls) { status.textContent = t; status.className = "mt-xs " + (cls || ""); }
+    function done() { id = null; clearTimeout(timer); cancel.hidden = true; start.disabled = false; }
+    function poll() {
+      if (!id) return;
+      fetch("/api/live/pair/" + id, { headers: { Accept: "application/json" } })
+        .then(function (r) { return r.json(); })
+        .then(function (p) {
+          if (p.state === "waiting" || p.state === "cancelling") { timer = setTimeout(poll, 2000); return; }
+          if (p.state === "paired") {
+            say("Paired: cue " + p.cuePos + " added.", "status status-ok");
+            htmx.ajax("GET", "/api/cuesheet", { target: "#cuesheet", swap: "outerHTML" });
+          } else if (p.state === "cancelled") say("Pairing cancelled.");
+          else say(p.error || "Pairing failed.", "status status-error");
+          done();
+        }).catch(function () { timer = setTimeout(poll, 3000); });
+    }
+    start.addEventListener("click", function () {
+      var body = new URLSearchParams({ server: document.getElementById("live-pair-server").value, name: document.getElementById("live-pair-name").value });
+      start.disabled = true;
+      say("Registering…");
+      fetch("/api/live/pair", { method: "POST", body: body })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { say(res.j.error || "Pairing failed.", "status status-error"); done(); return; }
+          id = res.j.id;
+          cancel.hidden = false;
+          say("Waiting in " + res.j.server + "'s waiting room as \u201c" + res.j.name + "\u201d: capture it in TimerPi (Screens \u2192 Waiting).");
+          timer = setTimeout(poll, 2000);
+        }).catch(function () { say("Pairing request failed.", "status status-error"); done(); });
+    });
+    cancel.addEventListener("click", function () { if (id) fetch("/api/live/pair/" + id, { method: "DELETE" }); });
+  })();
+</script>
 
 {{ end }}

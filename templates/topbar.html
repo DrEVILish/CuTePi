@@ -1,22 +1,19 @@
 {{ define "topbar.html" }}
 
-<nav class="navbar navbar-dark app-bar">
-  <div class="container-fluid d-flex is-justify-between is-items-center">
-    <span id="ws-status" class="ws-status" role="status" aria-live="polite"
-      aria-label="Live updates offline">
-      <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-broadcast"/></svg>
-    </span>
-    <span id="topbar-clock" class="topbar-clock" role="img" title="Current time"
-      aria-label="Current time">--:--:--</span>
-    {{ template "mediainfo.html" }}
-    <div class="btn-group">
-      <button class="btn btn-secondary" id="fullscreen-btn" data-fullscreen-state="off" title="Enter fullscreen" aria-label="Enter fullscreen">
-        <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-maximize"/></svg>
-      </button>
-    </div>
-    
+<!-- Top bar: the ftl-themes .app-bar. Left to right: connection lamp and
+     wall clock, GO + what it fires, now playing, fullscreen and the menu. -->
+<header class="app-bar">
+  <span id="ws-status" class="lamp ws-status" role="status" aria-live="polite"
+    aria-label="Live updates offline"></span>
+  <time id="topbar-clock" class="readout readout-sm topbar-clock" title="Current time"
+    aria-label="Current time">--:--:--</time>
+  {{ template "mediainfo.html" . }}
+  <div class="btn-group app-bar-actions">
+    <button type="button" class="btn btn-secondary btn-icon" id="fullscreen-btn" data-fullscreen-state="off" title="Enter fullscreen" aria-label="Enter fullscreen">
+      <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-maximize"/></svg>
+    </button>
     {{ template "mediacontrols.html" }}
   </div>
-</nav>
+</header>
 
 {{ end }}

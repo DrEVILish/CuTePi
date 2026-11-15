@@ -49,6 +49,7 @@
    swaps the table's font, and em widths would drift with it. */
 #cuesheet th.col-cue-num,
 #cuesheet td.cue-num {
+  box-sizing: content-box; /* the label's width plus padding, as the time columns */
   width: 4.6rem;
   min-width: 4.6rem;
   overflow: hidden;
@@ -63,6 +64,10 @@
    column; the values themselves stay right-aligned. */
 #cuesheet th.cue-time,
 #cuesheet td.cue-time {
+  /* 13ch of text plus the cell's padding: the ftl reset makes every box
+     border-box, which took the padding out of the 13ch and clipped the last
+     digit on all themes. */
+  box-sizing: content-box;
   width: 13ch;
   min-width: 13ch;
   white-space: nowrap;
@@ -83,40 +88,16 @@
   text-align: left;
 }
 
-#cuesheet thead th {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  background: var(--ctp-surface-2, #26163e);
-}
-
-/* Empty cuesheet: a single guidance row inside the always-rendered
-   table, so the table chrome + striped filler still fill the pane. */
-.cuesheet-empty td {
-  text-align: center;
-  padding: 4rem 0;
-  color: var(--ctp-muted);
-  border-style: hidden;
-}
+/* Empty cuesheet: the stock .empty-state inside one guidance row, so the
+   table chrome and the ruled filler still fill the pane. */
 #cuesheet.dnd-dragover .cuesheet-empty td {
-  color: var(--ctp-accent-2) !important;
-  background: rgba(216, 92, 255, 0.08);
+  outline: 2px dashed var(--ctp-flare);
+  outline-offset: -4px;
 }
 
-/* Continue the table's alternating row rhythm through unused pane space. */
-.cuesheet-blank-rows {
-  flex: 1 1 auto;
-  min-height: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background:
-    repeating-linear-gradient(
-      to bottom,
-      rgba(255, 255, 255, 0.025) 0,
-      rgba(255, 255, 255, 0.025) 22px,
-      rgba(255, 255, 255, 0.055) 22px,
-      rgba(255, 255, 255, 0.055) 44px
-    );
-}
+/* The ruled filler under the last row is the stock .table-blank-rows; its
+   pitch follows this sheet's row height. */
+#cuesheet .table-blank-rows { --stripe-height: 1.75rem; }
 
 /* ------------------------------------------------------------------ */
 /* 2 ROW BASE — shared by .cue and .cuegroup                          */
@@ -139,18 +120,14 @@
 #cuesheet tr.sheet-row td:hover {
   cursor: default;
 }
-/* Per-row colour accent: a left bar + a soft tint in the row's colour.
-   --cue-accent is set inline on the row only when it HAS a colour; it
-   must stay UNDEFINED (not "transparent") on plain rows, or the var()
-   fallbacks below would be dead. Beats Bootstrap's table-dark/tinted
-   accent box-shadow (which paints OVER our tint on odd rows). */
+/* Per-row colour accent: a left bar plus a soft tint in the row's colour.
+   Only rows that HAVE a colour are tinted; plain rows keep the theme's
+   stripe, hover and selection paint. */
 #cuesheet tr.sheet-row {
   border-left: 3px solid var(--cue-accent, transparent);
 }
-#cuesheet tr.sheet-row td {
-  --bs-table-accent-bg: transparent;
-  background-color: color-mix(in srgb, var(--cue-accent, transparent) 30%, transparent) !important;
-  box-shadow: inset 0 0 0 9999px transparent !important;
+#cuesheet tr.sheet-row[data-cue-color^="#"]:not(.is-selected) > td {
+  background-color: color-mix(in srgb, var(--cue-accent) 30%, transparent);
 }
 #cuesheet tr.sheet-row .cue-name {
   white-space: nowrap;
@@ -183,7 +160,7 @@
 /* .cuegroup — a folder header row. */
 .cue-group-header {
   cursor: default;
-  background: rgba(216, 92, 255, 0.07) !important;
+  font-weight: 600;
 }
 .cue-group-header td {
   vertical-align: middle;
@@ -256,48 +233,22 @@
 /* ------------------------------------------------------------------ */
 /* 5 STATES (on .sheet-row — both kinds pick them up)                       */
 /* ------------------------------------------------------------------ */
-/* Selected row (anchor or multi-selection member): tinted with the
-   PRIMARY theme accent, not the row's own colour accent — selection is
-   an operator state, the colour accent belongs to the row itself. The
-   ring is painted as per-cell inset box-shadows IN THE SAME declaration
-   as the 9999px stripe-kill shadow (an outline on the <tr> renders as
-   random partial segments in Chromium). */
-#cuesheet tr.sheet-row.table-warning > td {
-  --bs-table-accent-bg: transparent;
-  background-color: color-mix(in srgb, var(--ctp-accent, #2fd6ff) 55%, var(--ctp-surface, #3c3c50)) !important;
-  box-shadow:
-    inset 0 2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
-    inset 0 -2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
-    inset 0 0 0 9999px transparent !important;
-  color: var(--ctp-text, #fff) !important;
-}
-#cuesheet tr.sheet-row.table-warning > td:first-child {
-  box-shadow:
-    inset 2px 2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
-    inset 0 -2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
-    inset 0 0 0 9999px transparent !important;
-}
-#cuesheet tr.sheet-row.table-warning > td:last-child {
-  box-shadow:
-    inset 0 2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
-    inset -2px -2px 0 0 var(--sel-ring, var(--ctp-accent, #2fd6ff)),
-    inset 0 0 0 9999px transparent !important;
-}
-
+/* Selected rows (anchor or multi-selection member) carry the stock
+   .is-selected, the playing row .is-active: the theme paints both. */
 /* Firing-row glow (§5.2): the playing cue pulses a soft cyan glow.
    Reduced-motion users get the static playing tint instead. */
 @keyframes cue-fire {
-  0%, 100% { box-shadow: inset 0 0 10px 0 color-mix(in srgb, var(--ctp-accent, #2fd6ff) 22%, transparent), inset 0 0 0 9999px transparent; }
-  50% { box-shadow: inset 0 0 22px 3px color-mix(in srgb, var(--ctp-accent, #2fd6ff) 45%, transparent), inset 0 0 0 9999px transparent; }
+  0%, 100% { box-shadow: inset 0 0 10px 0 color-mix(in srgb, var(--ctp-accent, #2fd6ff) 22%, transparent); }
+  50% { box-shadow: inset 0 0 22px 3px color-mix(in srgb, var(--ctp-accent, #2fd6ff) 45%, transparent); }
 }
-#cuesheet tr.cue.cue-playing:not(.table-warning) > td {
+#cuesheet tr.cue.cue-playing:not(.is-selected) > td:not(:first-child) {
   animation: cue-fire 1.8s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   #cuesheet tr.cue.cue-playing > td { animation: none; }
 }
 /* Another running cue (§6.1.2): a steady tint, the glow stays the focus's. */
-#cuesheet tr.cue.cue-running:not(.table-warning) > td {
+#cuesheet tr.cue.cue-running:not(.is-selected) > td {
   box-shadow: inset 0 0 10px 0 color-mix(in srgb, var(--ctp-accent, #2fd6ff) 30%, transparent);
 }
 
@@ -308,7 +259,7 @@
   outline-offset: -2px;
 }
 .cue-group-header.dnd-drop-target {
-  background: rgba(216, 92, 255, 0.22) !important;
+  background: color-mix(in srgb, var(--ctp-flare) 22%, transparent) !important;
   outline: 1px dashed var(--ctp-accent-2, #d85cff);
 }
 /* Drop-on-folder affordance: hovering the LOWER half of a header
@@ -316,7 +267,7 @@
 .cue-group-header.dnd-join {
   outline: 2px solid var(--ctp-flare, #d85cff);
   outline-offset: -2px;
-  background: rgba(216, 92, 255, 0.22) !important;
+  background: color-mix(in srgb, var(--ctp-flare) 22%, transparent) !important;
 }
 
 .row-disabled {
@@ -376,23 +327,15 @@
   font-size: 0.85em;
   margin-left: 0.2rem;
 }
-.cue-result-error {
-  color: var(--ctp-danger, #ff5f87);
+.cue-result-error,
+.cue-result-missing {
+  color: var(--danger-text, var(--ctp-danger, #ff5f87));
   font-size: 0.85em;
   margin-left: 0.2rem;
 }
 
-/* Wait countdown pill (§12.2). */
-.cue-wait-pill {
-  display: inline-block;
-  margin-left: 0.5rem;
-  padding: 0 0.4rem;
-  font-size: 0.7rem;
-  border-radius: 999px;
-  color: var(--ctp-bg, #020b16);
-  background: color-mix(in srgb, var(--ctp-accent, #2fd6ff) 85%, transparent);
-}
-
+/* Wait countdown pill (§12.2): a stock .badge after the name. */
+.cue-wait-pill { margin-left: 0.5rem; }
 /* Progress overlay lives INSIDE the playing cue's Duration cell: a film
    over the top of the time text, seekable (ui.js wiring is unchanged). */
 #cuesheet td.cue-dur,
@@ -413,24 +356,30 @@
   top: 0;
   bottom: 0;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--ctp-text) 12%, transparent);
   pointer-events: none;
 }
-.cue-progress-bar {
+.cue-progress-bar,
+.cue-progress-track {
   position: absolute;
   left: 0.2rem;
   right: 0.2rem;
   top: 0;
   bottom: 0;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--ctp-text) 12%, transparent);
   cursor: pointer;
   touch-action: none;
+}
+/* Another running cue's bar: progress only, the seek acts on the focus. */
+.cue-progress-track {
+  cursor: default;
+  pointer-events: none;
 }
 .cue-progress-fill {
   height: 100%;
   border-radius: 3px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--ctp-flare, #d85cff) 55%, transparent), color-mix(in srgb, #e879f9 55%, transparent));
+  background: color-mix(in srgb, var(--progress-fill, var(--ctp-accent)) 45%, transparent);
   transition: width 0.1s linear; /* paced by the 100 ms playback clock tick */
 }
 
@@ -442,7 +391,7 @@
   width: 100%;
   vertical-align: middle;
 }
-#updateValue input.form-control {
+#updateValue input.input {
   display: block;
   width: 100%;
   height: auto;
@@ -456,68 +405,34 @@
   outline: 1px solid var(--bs-primary, #0d6efd);
 }
 
-/* Right-click context menu. Single fixed-position element, shown at the
-   cursor; shared by cue rows, group headers, blank sheet space and media
-   tiles. */
+/* Right-click context menu: the stock .context-menu, shown at the cursor
+   by ui.js. Fixed so it follows the viewport, above Bootstrap's modals. */
 .cue-context-menu {
   position: fixed;
   z-index: 2000;
-  min-width: 210px;
-  padding: 0.35rem 0;
-  background: var(--ctp-surface-2, #26163e);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  font-size: 0.9rem;
 }
-.cue-context-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.9rem;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.cue-context-item:hover {
-  background: rgba(216, 92, 255, 0.15);
-}
-.cue-context-item.cue-context-danger {
-  color: var(--bs-danger, #f87171);
-}
-.cue-context-divider {
-  height: 1px;
-  margin: 0.25rem 0;
-  background: rgba(255, 255, 255, 0.1);
-}
-.cue-context-fade input[type="text"] {
-  width: 4.5em;
-  margin-left: auto;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  color: inherit;
-  padding: 0.1rem 0.3rem;
-}
-.cue-context-fade select {
-  margin-left: auto;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  color: inherit;
-}
-.cue-context-color input[type="color"] {
-  margin-left: auto;
-  padding: 0;
-  border: none;
-  background: transparent;
-  width: 1.6em;
-  height: 1.6em;
-  border-radius: 4px;
-}
+.cue-context-menu .select,
+.cue-context-menu .input { width: auto; }
+.cue-context-fade .input { width: 4.5em; }
 
 /* A blank number or name still needs a target to double-click. */
 .cue-inline-edit:empty {
   display: inline-block;
   min-width: 2em;
   min-height: 1em;
+}
+
+/* A narrow cuesheet pane (laptop widths, a theme's side rail, a wide media
+   pool, phones) left the Name column a few pixels or none beside the three
+   fixed time columns: keep Duration, drop PreWait (4th) and PostWait (6th). */
+/* Inline-size containment gives the pane no intrinsic width, so it must grow
+   into the free space rather than size to its table. */
+#cuesheet-pane { container-type: inline-size; flex: 1 1 0; min-width: 0; }
+@container (max-width: 760px) {
+  #cuesheet tr > .cue-time:nth-child(4), #cuesheet tr > .cue-time:nth-child(6) { display: none; }
+}
+/* Phones: the number column gives up its header-label width to the name
+   (themes with roomy table cells left Name under 100px at 390). */
+@container (max-width: 480px) {
+  #cuesheet th.col-cue-num, #cuesheet td.cue-num { width: 2.5rem; min-width: 2.5rem; }
 }

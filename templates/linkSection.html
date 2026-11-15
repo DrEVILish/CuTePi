@@ -1,0 +1,66 @@
+{{ define "linkSection.html" }}
+<div id="linkSection" class="link-section" data-mode="{{ .Mode }}">
+  <div class="field">
+    <label class="label" for="linkMode">Mode</label>
+    <select class="select" id="linkMode" name="mode" form="linkNoForm" hx-post="/api/link/mode" hx-trigger="change" hx-target="#linkSection" hx-swap="outerHTML">
+      <option value="" {{ if eq .Mode "" }}selected{{ end }}>Off</option>
+      <option value="synced" {{ if eq .Mode "synced" }}selected{{ end }}>Synced playback (own shows)</option>
+      <option value="backup" {{ if eq .Mode "backup" }}selected{{ end }}>Active/active backup (one shared show)</option>
+    </select>
+    <div class="field-hint">
+      {{ if eq .Mode "synced" }}GO on any linked unit fires each unit's own selected cue at one shared instant{{ if .LeadMs }} {{ .LeadMs }} ms ahead (set from the units' round trip and load times){{ else }} a moment ahead{{ end }}; Stop, ESC and Panic are mirrored.
+      {{ else if eq .Mode "backup" }}One show on every unit: edits go through the primary, GO fires the same cue everywhere at one instant{{ if .LeadMs }} {{ .LeadMs }} ms ahead{{ end }}. This unit: <strong>{{ .Role }}</strong>.
+      {{ else }}Not linked: this unit plays on its own.{{ end }}
+    </div>
+  </div>
+  {{ if .Note }}<div class="status status-idle mt-xs" role="status">{{ .Note }}</div>{{ end }}
+
+  {{ range .Incoming }}
+  <div class="link-request mt-xs" role="alert">
+    <strong>{{ .Name }}</strong> at {{ .URL }} asks to link ({{ if eq .Mode "backup" }}Active/active backup: this unit's show will be replaced by its show{{ else }}Synced playback{{ end }}).
+    <button type="button" class="btn btn-primary btn-sm" hx-post="/api/link/accept" hx-vals='{"id":"{{ .ID }}"}' hx-target="#linkSection" hx-swap="outerHTML">Accept</button>
+    <button type="button" class="btn btn-secondary btn-sm" hx-post="/api/link/decline" hx-vals='{"id":"{{ .ID }}"}' hx-target="#linkSection" hx-swap="outerHTML">Decline</button>
+  </div>
+  {{ end }}
+
+  {{ if .Peers }}
+  <table class="table settings-remote-table mt-xs">
+    <thead><tr><th scope="col">Unit</th><th scope="col">State</th><th scope="col">Clock offset</th><th scope="col"></th></tr></thead>
+    <tbody>
+      {{ range .Peers }}
+      <tr>
+        <td>{{ .Name }}{{ if .Primary }} <span class="status status-ok">primary</span>{{ end }}<div class="field-hint">{{ .URL }}</div></td>
+        <td><span class="status {{ if .Up }}status-ok{{ else }}status-error{{ end }}">{{ .Status }}</span>
+          {{ if .Media.Bad }}<div class="field-hint status-error">
+            {{ if .Media.Missing }}Missing on {{ .Name }}: {{ range $i, $f := .Media.Missing }}{{ if $i }}, {{ end }}{{ $f }}{{ end }}.{{ end }}
+            {{ if .Media.Lacking }}Missing here: {{ range $i, $f := .Media.Lacking }}{{ if $i }}, {{ end }}{{ $f }}{{ end }}.{{ end }}
+            {{ if .Media.Differs }}Different content: {{ range $i, $f := .Media.Differs }}{{ if $i }}, {{ end }}{{ $f }}{{ end }}.{{ end }}
+          </div>{{ end }}</td>
+        <td>{{ if .Clock }}<span class="{{ if .ClockBad }}status-error{{ end }}">{{ .Clock }}</span>{{ else }}–{{ end }}</td>
+        <td><button type="button" class="btn btn-secondary btn-sm" hx-post="/api/link/unpair" hx-vals='{"id":"{{ .ID }}"}' hx-target="#linkSection" hx-swap="outerHTML">Unlink</button></td>
+      </tr>
+      {{ end }}
+    </tbody>
+  </table>
+  {{ if .ClockBad }}<div class="field-hint status-error">A clock is more than 5 ms off: linked starts land that far apart. Sync the units' clocks (chrony or PTP against one local server, DESIGN §6.8c).</div>{{ end }}
+  {{ if eq .Mode "backup" }}
+  <div class="row is-items-center is-gap-xs mt-xs">
+    <button type="button" class="btn btn-secondary btn-sm" hx-post="/api/link/syncmedia" hx-target="#linkSection" hx-swap="outerHTML">Sync media</button>
+    <span class="field-hint" role="status">{{ .SyncNote }}</span>
+  </div>
+  {{ end }}
+  {{ end }}
+
+  {{ if .Found }}
+  <div class="field mt-xs">
+    <div class="label">Found on the network</div>
+    {{ range .Found }}
+    <div class="row is-items-center is-gap-xs">
+      <span>{{ .Name }} <span class="field-hint">{{ .URL }}</span></span>
+      <button type="button" class="btn btn-secondary btn-sm" hx-post="/api/link/pair" hx-include="#linkPassword" hx-vals='{"addr":"{{ .URL }}"}' hx-target="#linkSection" hx-swap="outerHTML">Link</button>
+    </div>
+    {{ end }}
+  </div>
+  {{ end }}
+</div>
+{{ end }}

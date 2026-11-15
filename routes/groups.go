@@ -413,7 +413,12 @@ func Groups(rg *gin.RouterGroup) {
 		if !ok {
 			return
 		}
-		playGroup(g)
+		at, err := parseStartAt(c.Query("at"))
+		if err != nil {
+			respondError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		playGroup(g, at)
 		c.Status(http.StatusOK)
 	})
 
@@ -451,18 +456,18 @@ func Groups(rg *gin.RouterGroup) {
 // first member (cues are a list — a plain group has no implicit queue).
 // Shared by the group route and the GO path. Reports whether the selection
 // is already handled (awards owns it: the caller must NOT advance).
-func playGroup(g ctp.Group) bool {
+func playGroup(g ctp.Group, at time.Time) bool {
 	if g.AwardsMode {
-		if err := awardsGO(g); err != nil {
+		if err := awardsGOAt(g, at); err != nil {
 			logs.Printf(logs.RTECuePlay, "awards GO failed group=%d error=%v", g.GroupID, err)
 		}
 		return true
 	}
 	if g.Slideshow {
-		go goSafe(func() { slideshowRunner(g) })
+		goSafe(func() { slideshowRunner(g, at) })
 		return false
 	}
-	playFirstGroupMember(g.GroupID)
+	playFirstGroupMember(g.GroupID, at)
 	return false
 }
 
@@ -637,12 +642,12 @@ func openSelGroup(c *gin.Context, open bool) {
 	renderCuesheet(c)
 }
 
-func slideshowRunner(g ctp.Group) {
+func slideshowRunner(g ctp.Group, at time.Time) {
 	// Starting any other playlist abandons an awards session elsewhere.
 	awardsSelectionLeft(0)
 	// Only image groups are slideshows, but the runner itself is kind-agnostic.
 	if !g.Slideshow {
-		playFirstGroupMember(g.GroupID)
+		playFirstGroupMember(g.GroupID, at)
 		return
 	}
 
@@ -748,6 +753,12 @@ func slideshowRunner(g ctp.Group) {
 				opts.Crossfade = fade
 			}
 			slideStart := time.Now()
+			if pass == 0 && i == 0 && !at.IsZero() {
+				gsp.StartAt(at)
+				if at.After(slideStart) {
+					slideStart = at
+				}
+			}
 			if err := loadCueSource(cue, opts); err != nil {
 				log.Printf("slideshow: loading %q failed: %v", cue.Title, err)
 				ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
@@ -806,7 +817,7 @@ func groupScope(groupID int, sheet *ctp.Cuesheet) map[int]bool {
 	return inScope
 }
 
-func playFirstGroupMember(groupID int) {
+func playFirstGroupMember(groupID int, at time.Time) {
 	awardsSelectionLeft(0)
 	sheet, err := ctp.GetCuesheet()
 	if err != nil {
@@ -817,6 +828,9 @@ func playFirstGroupMember(groupID int) {
 	inScope := groupScope(groupID, &sheet)
 	for _, cue := range sheet.Cues {
 		if inScope[cue.Parent] {
+			if !at.IsZero() {
+				gsp.StartAt(at)
+			}
 			_ = loadAndPlayCue(cue)
 			_ = ctp.SetCue(strconv.Itoa(cue.CuePos))
 			return

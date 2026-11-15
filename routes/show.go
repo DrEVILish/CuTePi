@@ -45,6 +45,7 @@ type showManifest struct {
 // JSON manifest plus every referenced media file that exists on disk;
 // import rebuilds the show from the zip.
 func Show(rg *gin.RouterGroup) {
+	registerPrepareRoutes(rg)
 	rg.GET("/show/export", func(c *gin.Context) {
 		cues, selected, err := ctp.ExportCues()
 		if err != nil {

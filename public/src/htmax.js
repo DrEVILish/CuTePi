@@ -1,3 +1,10 @@
+/* Vendored htmx 4.0.1 with local changes. Keep this list current so the next
+ * upstream sync does not drop them (diff against upstream to find any others):
+ *  - RequestQueue.continue(abortRequest): returns early unless the finished
+ *    request is still the current one (a replaced request must not advance the queue).
+ *  - #parseHTML: falls back to DOMParser when Document.parseHTMLUnsafe(html, {})
+ *    throws (Chromium 141 rejects the options argument).
+ */
 var htmx = (() => {
 
     /**
@@ -1058,7 +1065,13 @@ var htmx = (() => {
         #parseHTML(resp) {
             let trusted = this.#ttPolicy.createHTML(resp);
             // {} works around Chrome 150-156 dropping comments :/
-            return Document.parseHTMLUnsafe?.(trusted, {}) || new DOMParser().parseFromString(trusted, 'text/html');
+            // Older Chromium (e.g. 141) rejects the options argument with "Overload
+            // resolution failed", which failed every swap there: fall back to DOMParser.
+            try {
+                let doc = Document.parseHTMLUnsafe?.(trusted, {});
+                if (doc) return doc;
+            } catch {}
+            return new DOMParser().parseFromString(trusted, 'text/html');
         }
 
         #makeFragment(text) {

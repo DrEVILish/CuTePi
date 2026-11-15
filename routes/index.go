@@ -22,6 +22,7 @@ import (
 	"CuTePi/gsp"
 	"CuTePi/logs"
 	"CuTePi/media"
+	"CuTePi/ws"
 
 	"github.com/gin-gonic/gin"
 )
@@ -55,6 +56,35 @@ type MediapoolItem struct {
 	Thumbnail string
 	DateAdded string
 	Missing   bool
+	// Animated: an animated GIF/APNG/WebP/AVIF/JPEG XL (DESIGN §6.1.3), with
+	// its probed frame rate when known.
+	Animated bool
+	AnimFPS  string
+	// Warning: expected to play below full rate here (DESIGN §5.7).
+	Warning string
+	// Prepared: a show-compiler copy plays instead (DESIGN §12.17).
+	Prepared bool
+}
+
+// mediaBadges derives the pool/inspector badges from the stored probe and the
+// file header: animation (and its frame rate), and the playback warning.
+func mediaBadges(filename, mimetype, metaJSON string) (animated bool, animFPS, warning string) {
+	var info media.MediaInfo
+	_ = json.Unmarshal([]byte(metaJSON), &info) // "" or old meta: no badges from it
+	if strings.HasPrefix(mimetype, "image/") {
+		if media.ImageAnimation(filepath.Join(config.MediaLocation(), filename)).Animated {
+			animated = true
+			if info.Video != nil && info.Video.FPS > 0 && info.Video.FPS < 240 {
+				animFPS = strconv.FormatFloat(info.Video.FPS, 'f', -1, 64)
+			}
+		}
+		return animated, animFPS, ""
+	}
+	if strings.HasPrefix(mimetype, "video/") && media.Prepared(config.MediaLocation(), filename) == "" {
+		_, _, hz := gsp.DisplayMode()
+		warning = media.PlaybackWarning(info.Video, hz)
+	}
+	return false, "", warning
 }
 
 func formatSize(bytes int) string {
@@ -96,17 +126,16 @@ func mediapoolView() ([]MediapoolItem, error) {
 	}
 	mediapool := make([]MediapoolItem, 0, len(pool.Medias))
 	for _, m := range pool.Medias {
-		thumbnail := "/thumbnails/" + url.PathEscape(m.Filename) + ".jpg"
-		if m.ThumbnailPending {
-			thumbnail = ""
-		}
 		// Cache-bust by the thumbnail's mtime: a refreshed thumbnail keeps
-		// its name, and images are cached for an hour (CachePolicy).
-		if thumbnail != "" {
+		// its name, and images are cached for an hour (CachePolicy). No file
+		// (pending, or generation failed): the tile shows its placeholder.
+		thumbnail := ""
+		if !m.ThumbnailPending {
 			if st, err := os.Stat(filepath.Join(config.ThumbnailLocation(), m.Filename+".jpg")); err == nil {
-				thumbnail += "?v=" + strconv.FormatInt(st.ModTime().UnixNano(), 36)
+				thumbnail = "/thumbnails/" + url.PathEscape(m.Filename) + ".jpg?v=" + strconv.FormatInt(st.ModTime().UnixNano(), 36)
 			}
 		}
+		animated, animFPS, warning := mediaBadges(m.Filename, m.Mimetype, m.MediaInfo)
 		mediapool = append(mediapool, MediapoolItem{
 			Filename:  m.Filename,
 			Size:      formatSize(m.Size),
@@ -114,6 +143,10 @@ func mediapoolView() ([]MediapoolItem, error) {
 			Thumbnail: thumbnail,
 			DateAdded: m.DateAdded.Local().Format("2006-01-02 15:04"),
 			Missing:   m.Missing,
+			Animated:  animated,
+			AnimFPS:   animFPS,
+			Warning:   warning,
+			Prepared:  strings.HasPrefix(m.Mimetype, "video/") && media.Prepared(config.MediaLocation(), m.Filename) != "",
 		})
 	}
 	return mediapool, nil
@@ -218,6 +251,14 @@ func mediaInfoRows(cue ctp.Cue) []MediaRow {
 		add("Overall bitrate", fmt.Sprintf("%d kbps", info.OverallBitrate/1000))
 	}
 	if v := info.Video; v != nil {
+		if strings.HasPrefix(cue.Mimetype, "video/") {
+			if media.Prepared(config.MediaLocation(), cue.Filename) != "" {
+				add("Prepared copy", "HEVC for this Pi (plays instead of the original)")
+			} else {
+				_, _, hz := gsp.DisplayMode()
+				add("Playback warning", media.PlaybackWarning(v, hz))
+			}
+		}
 		add("Video codec", strings.TrimSpace(v.Codec+" "+v.Profile))
 		if v.Width > 0 && v.Height > 0 {
 			add("Resolution", fmt.Sprintf("%d x %d", v.Width, v.Height))
@@ -270,6 +311,13 @@ func imageInfoRows(cue ctp.Cue, info media.MediaInfo) []MediaRow {
 		pixFmt = v.PixFmt
 	}
 	add("Type", friendlyImageKind(codec))
+	if animated, fps, _ := mediaBadges(cue.Filename, cue.Mimetype, cue.MediaInfo); animated {
+		if fps != "" {
+			add("Animation", "Animated, "+fps+" fps")
+		} else {
+			add("Animation", "Animated")
+		}
+	}
 	add("Resolution", res)
 	add("Pixel format", pixFmt)
 	if cue.Size > 0 {
@@ -317,6 +365,7 @@ func inspectorData() gin.H {
 	}
 	return gin.H{
 		"Cue":           cue,
+		"ScreenKey":     cue.SourceKind == "endpoint" && ctp.HasScreenKey(cue.EndpointURL),
 		"Selected":      true,
 		"MediaDuration": cue.Duration,
 		"Palette":       cuePalette,
@@ -508,12 +557,25 @@ func nowplayingData() gin.H {
 // (PlayPos/PlayDur in ms). Only one cue plays at a time.
 // The cuesheet marks running cues, but its version counts sheet edits only:
 // noteRunningCues bumps it when the set of running cues changed since the
-// last look (called on each client's status check, which every playback
-// broadcast triggers).
+// last look (run ahead of every sync broadcast, syncVersions, so the
+// versions a sync carries already cover it; also on each status check).
 var (
 	runningMu   sync.Mutex
 	runningSeen string
 )
+
+// syncVersions is what every WebSocket sync carries: the version each pane
+// renders at, in the forms its status endpoint returns (cuesheet/status,
+// nowplaying/status), so a client fetches only the panes behind them. boot
+// changes with each process: the counters restart at zero, and a client
+// must not mistake the old count on its screen for newer state.
+func syncVersions() any {
+	noteRunningCues()
+	sheet := ctp.CuesheetVersion()
+	return gin.H{"boot": bootID, "sheet": sheet, "state": fmt.Sprintf("%d.%d", gsp.StateVersion(), sheet)}
+}
+
+var bootID = strconv.FormatInt(time.Now().UnixNano(), 36)
 
 func noteRunningCues() {
 	pos := gsp.RunningCues()
@@ -544,14 +606,22 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 			}
 		}
 	}
-	// Other running cues (§6.1.2): marked, without the focus's scrub bar
-	// (a seek acts on the focus).
-	running := map[int]bool{}
-	for _, pos := range gsp.RunningCues() {
-		running[pos] = true
+	// Other running cues (§6.1.2): marked, with a display-only progress bar
+	// (a seek acts on the focus, which has the scrub bar).
+	running := map[int]gsp.Voice{}
+	for _, v := range gsp.Voices() {
+		if v.CuePos > 0 {
+			running[v.CuePos] = v
+		}
 	}
 	for i := range cuesheet.Cues {
-		cuesheet.Cues[i].Running = running[cuesheet.Cues[i].CuePos]
+		v, ok := running[cuesheet.Cues[i].CuePos]
+		cuesheet.Cues[i].Running = ok
+		if ok && !v.Focus && !v.Live && v.Duration > 0 {
+			cuesheet.Cues[i].PlayPos = int(v.Position * 1000)
+			cuesheet.Cues[i].PlayDur = int(v.Duration * 1000)
+			cuesheet.Cues[i].PlayPaused = v.Paused || v.Held
+		}
 	}
 	// Match by cue position, not filename: two cues can reference the same
 	// media file, and filename matching highlights the wrong row.
@@ -572,9 +642,8 @@ func enrichCuesheetWithPlayback(cuesheet *ctp.Cuesheet) {
 }
 
 // armNextCue prerolls the next cue into gsp's warm slot (deck-style double
-// buffer). Video/image cues preroll on fakesink — silent and unpainted, so
-// they no longer need an audio-only gate. Audio prerolls on the real audio
-// sink, silent until it plays. Arming waits ~1.2s so the just-fired cue's
+// buffer), hidden and silent until it plays (gsp.Warm). The live-standby
+// keeper (livestandby.go) also arms the selected cue. Arming waits ~1.2s so the just-fired cue's
 // own decode settles and never competes for CPU mid-fade; a stale arm
 // (generation moved) is dropped by gsp.Warm itself.
 func armNextCue(gen uint64, pos int) {
@@ -594,12 +663,7 @@ func armNextCue(gen uint64, pos int) {
 			return
 		}
 		armStarted := time.Now()
-		// Stills never warm: a single frame prerolls to instant EOS and the
-		// activation flush-seek never re-prerolls it (5 s stall, then
-		// teardown). Cold stills load in ~300 ms anyway — warm buys nothing.
-		if strings.HasPrefix(next.Mimetype, "image/") {
-			return
-		}
+		// Stills warm only on the KMS wall (gsp.Warm decides).
 		if err := gsp.Warm(next.Filename, cueOpts(next, false)); err != nil {
 			logs.Printf(logs.GSPWarm, "prewarm %q: %v", next.Filename, err)
 		} else {
@@ -656,6 +720,7 @@ func cueOpts(cue ctp.Cue, keepBackground bool) gsp.LoadOpts {
 		CropR:     cue.CropR,
 		CropT:     cue.CropT,
 		CropB:     cue.CropB,
+		Align:     cue.Align,
 		// Stop others off (§6.1.2): the running cues carry on and this one
 		// joins the stack at its layer.
 		KeepOthers:  !cue.StopOthers,
@@ -693,6 +758,7 @@ func liveLabel(cue ctp.Cue) string {
 }
 
 func loadAndPlayCueKeep(cue ctp.Cue, keepBackground bool) error {
+	defer notePrep(time.Now()) // the load time a linked fire's lead allows for
 	if err := loadCueSource(cue, cueOpts(cue, keepBackground)); err != nil {
 		ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
 		return err
@@ -995,12 +1061,14 @@ func renderCuesheet(c *gin.Context) {
 		"Rows":      sheetRowsWithSelection(&cuesheet),
 		"GoBar":     computeGoBar(&cuesheet),
 		"GoAdvance": ctp.GetGoAdvance(),
+		"ShowMode":  ctp.GetShowMode(), // other windows follow the mode switch from here
 		"Version":   version,
 	})
 }
 
 func Index(rg *gin.RouterGroup) {
 	gsp.SetEndpointFailureHook(recoverLiveCue)
+	ws.OnSync(syncVersions)
 	// Auto-continue: when a cue with the autoContinue flag reaches its end,
 	// wait its postWait, then play the next cue in sheet order (waiting the
 	// next cue's preWait too if it is itself auto-continuing). Loop always

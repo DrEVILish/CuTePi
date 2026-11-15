@@ -314,7 +314,7 @@ func TestCuesheetRendersAddedCue(t *testing.T) {
 	if !strings.Contains(body, "routes-test.mp4") {
 		t.Fatalf("expected the rendered cuesheet to contain the cue's title, got:\n%s", body)
 	}
-	if !strings.Contains(body, `class="sheet-row cue table-warning"`) {
+	if !strings.Contains(body, `class="sheet-row cue is-selected"`) {
 		t.Fatalf("expected the selected cue to be highlighted, got:\n%s", body)
 	}
 	if !strings.Contains(body, "00:00:10.000") {
@@ -703,7 +703,7 @@ func TestMediapoolClickDoesNotTriggerRefresh(t *testing.T) {
 	// The menu button is a custom context menu toggle (not a Bootstrap
 	// dropdown), so it carries data-media-menu and the media-menu-toggle
 	// class.
-	if !strings.Contains(body, `class="media-menu-toggle"`) {
+	if !strings.Contains(body, `media-menu-toggle"`) {
 		t.Fatalf("expected the media-menu-toggle button, got:\n%s", body)
 	}
 }
@@ -778,7 +778,7 @@ func TestCuesheetRendersColumnResizeMarkers(t *testing.T) {
 	if strings.Contains(body, `data-column-resize="position"`) || strings.Contains(body, ">Position<") {
 		t.Fatalf("position row-order column should not be displayed, got:\n%s", body)
 	}
-	if !strings.Contains(body, `class="cuesheet-blank-rows"`) {
+	if !strings.Contains(body, `class="table-blank-rows"`) {
 		t.Fatalf("expected unused cuesheet space to keep the row rhythm, got:\n%s", body)
 	}
 	// The handle must not collide with the dblclick-to-edit cue cells, and no
@@ -836,6 +836,60 @@ func TestCueEditFormPrefillsActualColumnValue(t *testing.T) {
 	}
 	if strings.Contains(body, "db:") || strings.Contains(body, "Media_id") {
 		t.Fatalf("edit form leaked a stringified struct instead of the column value:\n%s", body)
+	}
+}
+
+// The single-column edit route takes the geometry, crop and align columns
+// with the inspector's validation, answers 400 (not 500) for a bad value or a
+// column that is not editable, and the inspector's "None" segments clear the
+// alignment.
+func TestCueEditColumnGeometryAlign(t *testing.T) {
+	r := setupTestServer(t)
+	if err := ctp.RegisterMedia("geom-edit.mp4", 100, media.Metadata{
+		Mimetype: "video/mp4", Duration: 10, Resolution: "1920x1080", Codec: "h264",
+	}, "geom-edit.mp4"); err != nil {
+		t.Fatalf("RegisterMedia: %v", err)
+	}
+	if err := ctp.AddCue("geom-edit.mp4", ""); err != nil {
+		t.Fatalf("AddCue: %v", err)
+	}
+	for _, tc := range []struct{ col, val string }{
+		{"geom_x", "10%"}, {"geom_w", "960"}, {"crop_l", "5%"}, {"align", "Right Bottom"},
+	} {
+		if w := putForm(t, r, "/api/cue/1/edit/"+tc.col, "val", tc.val); w.Code != 200 {
+			t.Fatalf("PUT edit/%s %q = %d: %s", tc.col, tc.val, w.Code, w.Body.String())
+		}
+	}
+	cue, _ := ctp.GetCue("1")
+	if cue.GeomX != "10%" || cue.GeomW != "960" || cue.CropL != "5%" || cue.Align != "right bottom" {
+		t.Fatalf("columns not stored: x=%q w=%q crop_l=%q align=%q", cue.GeomX, cue.GeomW, cue.CropL, cue.Align)
+	}
+	if w := post(t, r, "/api/cue/1/edit/align"); w.Code != 200 || !strings.Contains(w.Body.String(), `value="right bottom"`) {
+		t.Fatalf("POST edit/align = %d, want the current value: %s", w.Code, w.Body.String())
+	}
+	for _, tc := range []struct{ col, val string }{
+		{"geom_x", "wide"}, {"align", "left right"}, {"crop_t", "1em"}, {"nonexistent", "1"},
+	} {
+		if w := putForm(t, r, "/api/cue/1/edit/"+tc.col, "val", tc.val); w.Code != 400 {
+			t.Fatalf("PUT edit/%s %q = %d, want 400: %s", tc.col, tc.val, w.Code, w.Body.String())
+		}
+	}
+	// Inspector: the "None" segment submits "" for its axis.
+	if w := putForm(t, r, "/api/cue/inspector/1", "align_h", "", "align_v", "top"); w.Code != 200 {
+		t.Fatalf("inspector save = %d: %s", w.Code, w.Body.String())
+	}
+	if cue, _ = ctp.GetCue("1"); cue.Align != "top" {
+		t.Fatalf("align after clearing horizontal = %q, want \"top\"", cue.Align)
+	}
+	w := putForm(t, r, "/api/cue/inspector/1", "align_h", "", "align_v", "")
+	if w.Code != 200 {
+		t.Fatalf("inspector save = %d: %s", w.Code, w.Body.String())
+	}
+	if cue, _ = ctp.GetCue("1"); cue.Align != "" {
+		t.Fatalf("align after clearing both = %q, want empty", cue.Align)
+	}
+	if !strings.Contains(w.Body.String(), `name="align_h" value="" checked`) || !strings.Contains(w.Body.String(), `name="align_v" value="" checked`) {
+		t.Fatalf("inspector does not show None checked for a cleared alignment")
 	}
 }
 
@@ -903,7 +957,7 @@ func TestMediapoolPartialRouteExists(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("GET /mediapool = %d, want 200", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "Mediapool") {
+	if !strings.Contains(w.Body.String(), "Media pool") {
 		t.Fatalf("expected GET /mediapool to render the mediapool partial, got:\n%s", w.Body.String())
 	}
 }
@@ -974,6 +1028,14 @@ func TestMediapoolRendersFilterControlsAndType(t *testing.T) {
 	if err := ctp.MarkThumbnailDone(imageMediaID); err != nil {
 		t.Fatalf("MarkThumbnailDone: %v", err)
 	}
+	// The tile links a thumbnail only when its file exists (a failed
+	// generation falls back to the placeholder instead of a 404).
+	if err := os.MkdirAll(config.ThumbnailLocation(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config.ThumbnailLocation(), "filter-img.png.jpg"), []byte{0xff, 0xd8}, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	body := get(t, r, "/mediapool").Body.String()
 	if !strings.Contains(body, "mediaFilterText") || !strings.Contains(body, "mediaFilterType") {
@@ -991,7 +1053,7 @@ func TestMediapoolRendersFilterControlsAndType(t *testing.T) {
 	if strings.Contains(body, "placeholder-image.svg") {
 		t.Fatalf("expected the completed image tile not to render a placeholder, got:\n%s", body)
 	}
-	if !strings.Contains(body, "url('/thumbnails/filter-img.png.jpg')") {
+	if !strings.Contains(body, "url('/thumbnails/filter-img.png.jpg?v=") {
 		t.Fatalf("expected the completed image tile to keep its thumbnail URL, got:\n%s", body)
 	}
 	// Filter-video.mp4 was registered just before this page rendered, so its
@@ -1011,7 +1073,7 @@ func TestUploadPageRenders(t *testing.T) {
 		t.Fatalf("GET /upload/ = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"dropform", "Choose a file", "enctype=\"multipart/form-data\"", "Control centre", `href="/"`} {
+	for _, want := range []string{"dropform", "Choose files", "enctype=\"multipart/form-data\"", "Control centre", `href="/"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected the upload page to contain %q, got:\n%s", want, body)
 		}
@@ -1107,7 +1169,7 @@ func TestMediapoolEmptyState(t *testing.T) {
 		"No media yet",
 		`data-bs-target="#uploadModal"`,
 		"Upload",
-		"or drop files here",
+		"Drop files here",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected the empty media pool to contain %q, got:\n%s", want, body)
@@ -1384,7 +1446,7 @@ func TestSelectCuePersistsAndRenders(t *testing.T) {
 	if got, _ := ctp.SelectedCuePos(); got != pos {
 		t.Fatalf("SelectedCuePos = %d, want %d (selection not persisted)", got, pos)
 	}
-	if !strings.Contains(w.Body.String(), "table-warning") {
+	if !strings.Contains(w.Body.String(), "is-selected") {
 		t.Fatalf("expected the selected cue to render as selected in the cuesheet")
 	}
 }
@@ -1612,7 +1674,7 @@ func TestInspectorRendersForSelectedCue(t *testing.T) {
 		`id="insp-audio-fadein"`,
 		`id="insp-audio-fadeout"`,
 		`data-fade-out`,
-		`class="small mute-toggle"`,
+		`class="toggle-btn is-danger"`,
 		`data-default="0"`,
 		`data-default="1"`,
 	} {
@@ -2523,7 +2585,7 @@ func TestIndexRendersFooter(t *testing.T) {
 
 // Multi-selection (§12.4): toggle adds a highlighted member row, extend
 // selects the anchor-to-click range. Members share the anchor's
-// table-warning highlight — one selection look for every selected row.
+// is-selected highlight — one selection look for every selected row.
 func TestMultiSelectToggleAndExtend(t *testing.T) {
 	r := setupTestServer(t)
 	for _, f := range []string{"ms-1.mp4", "ms-2.mp4", "ms-3.mp4"} {

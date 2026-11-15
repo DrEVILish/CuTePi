@@ -1,9 +1,19 @@
 {{ template "header.html" }}
 
-ERROR
-
-{{ with .error }}
-<pre class="m-3">{{ . }}</pre>
-{{ end }}
-
+<body class="app-body upload-body">
+  <div class="app">
+  <header class="app-bar">
+    <a class="nav-brand" href="/" aria-label="CuTePi control centre">
+      <img class="cutepi-logo" src="/img/cutepi-logo.svg" alt="CuTePi">
+    </a>
+  </header>
+  <main class="app-main">
+    <div class="empty-state" role="alert">
+      <svg class="icon empty-state-icon" aria-hidden="true"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
+      <h1 class="empty-state-title">{{ with .title }}{{ . }}{{ else }}Something went wrong{{ end }}</h1>
+      {{ with .error }}<span class="empty-state-hint">{{ . }}</span>{{ end }}
+      <a class="btn btn-primary" href="/">Back to the control centre</a>
+    </div>
+  </main>
+  </div>
 {{ template "footer.html" }}

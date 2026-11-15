@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-gst/go-glib v1.4.0
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/go-gst/go-gst v1.4.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/jmoiron/sqlx v1.4.0

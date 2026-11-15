@@ -11,7 +11,7 @@
       </div>
       <form id="settingsForm" class="settings-form" hx-post="/api/settings" hx-swap="none">
         <div class="modal-body settings-body">
-          <div class="tabs nav settings-tabs" role="tablist" aria-orientation="vertical" style="--tab-radius: var(--radius);">
+          <div class="tabs settings-tabs" role="tablist" aria-orientation="vertical" aria-label="Settings sections">
             <button class="tab is-active active" data-bs-toggle="tab" data-bs-target="#settingsPaneAppearance" type="button" role="tab" aria-selected="true">Appearance</button>
             <button class="tab" data-bs-toggle="tab" data-bs-target="#settingsTabPlayback" type="button" role="tab">Playback</button>
             <button class="tab" data-bs-toggle="tab" data-bs-target="#settingsTabSheet" type="button" role="tab">Cue sheet</button>
@@ -26,7 +26,7 @@
             <div class="tab-pane fade show active" id="settingsPaneAppearance" role="tabpanel">
               <div class="settings-about">
                 <img src="/img/cutepi-logo.svg" alt="CuTePi" class="cutepi-logo">
-                <span class="settings-version text-muted" id="settingsVersion">v{{ appVersion }}</span>
+                <span class="settings-version field-hint" id="settingsVersion">v{{ appVersion }}</span>
               </div>
               <h2 class="settings-heading">Appearance</h2>
               <div class="field">
@@ -35,7 +35,7 @@
                   {{ range themeFiles }}<option value="{{ .ID }}">{{ .Label }}</option>
                   {{ end }}
                 </select>
-                <div id="settingsThemeHelp" class="field-hint text-muted">Saved in this browser only. Each theme comes from ftl-themes and sets the layout as well as the colours.</div>
+                <div id="settingsThemeHelp" class="field-hint">Saved in this browser only. Each theme comes from ftl-themes and sets the layout as well as the colours.</div>
               </div>
               <!-- Sub-theme and tint (ftl-themes contract: palette variants;
                 theme tint). Filled and shown by ui.js for themes that have them. -->
@@ -47,7 +47,7 @@
                 <label class="label" for="settingsThemeTint" id="settingsThemeTintLabel">Colour</label>
                 <div class="settings-tint-row">
                   <input type="color" class="input settings-short" id="settingsThemeTint">
-                  <button type="button" class="btn btn-sm" id="settingsThemeTintReset">Default</button>
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsThemeTintReset">Default</button>
                 </div>
               </div>
             </div>
@@ -57,40 +57,46 @@
               <div class="field">
                 <label class="label" for="settingsEscFadeMs">ESC fade-out time</label>
                 <input class="input settings-short" id="settingsEscFadeMs" name="escFade" type="text" inputmode="decimal" data-validate="time" autocomplete="off" placeholder="1s" />
-                <div class="field-hint text-muted">One ESC fades picture and sound out over this time, then stops. A second ESC within a second cuts at once (panic).</div>
+                <div class="field-hint">One ESC fades picture and sound out over this time, then stops. A second ESC within a second cuts at once (panic).</div>
               </div>
               <div class="field">
                 <label class="label">Panic holding image</label>
                 <div class="row is-items-center is-gap-xs">
                   <span id="settingsPanicHold" class="settings-value">off (cut to black)</span>
-                  <button type="button" class="btn btn-sm btn-secondary btn" id="settingsPanicHoldClear">Clear</button>
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsPanicHoldClear">Clear</button>
                 </div>
-                <div class="field-hint text-muted">Set it from a media item's menu (&ldquo;Set as holding image&rdquo;). PANIC then shows it instead of black.</div>
+                <div class="field-hint">Set it from a media item's menu (&ldquo;Set as holding image&rdquo;). PANIC then shows it instead of black.</div>
               </div>
-              <div class="form-check field settings-check">
-                <input class="checkbox" type="checkbox" id="settingsGoAdvance" name="advance" value="1"
-                  hx-post="/api/setting/goadvance" hx-trigger="change" hx-swap="none">
-                <label class="form-check-label" for="settingsGoAdvance">Advance selection after GO</label>
-                <div class="field-hint text-muted">Repeated GOs walk down the show. Off: the selection stays on the fired cue.</div>
+              <div class="field">
+                <div class="field-row">
+                  <label class="label" for="settingsGoAdvance">Advance selection after GO</label>
+                  <label class="switch"><input type="checkbox" id="settingsGoAdvance" name="advance" value="1"
+                  hx-post="/api/setting/goadvance" hx-trigger="change" hx-swap="none"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                </div>
+                <div class="field-hint">Repeated GOs walk down the show. Off: the selection stays on the fired cue.</div>
               </div>
-              <div class="form-check field settings-check">
-                <input class="checkbox" type="checkbox" id="settingsLoop" name="loop" value="true" aria-describedby="settingsLoopHelp">
-                <label class="form-check-label" for="settingsLoop">Loop directly played clips</label>
-                <div id="settingsLoopHelp" class="field-hint text-muted">Clips played straight from the media pool restart at the end instead of stopping. Cues use their own Loop setting.</div>
+              <div class="field">
+                <div class="field-row">
+                  <label class="label" for="settingsLoop">Loop directly played clips</label>
+                  <label class="switch"><input type="checkbox" id="settingsLoop" name="loop" value="true" aria-describedby="settingsLoopHelp"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                </div>
+                <div id="settingsLoopHelp" class="field-hint">Clips played straight from the media pool restart at the end instead of stopping. Cues use their own Loop setting.</div>
               </div>
             </div>
 
             <div class="tab-pane fade" id="settingsTabSheet" role="tabpanel">
               <h2 class="settings-heading">Cue sheet</h2>
-              <div class="form-check field settings-check">
-                <input class="checkbox" type="checkbox" id="settingsAutoNumber" name="autoNumber" value="true">
-                <label class="form-check-label" for="settingsAutoNumber">Auto-number new cues</label>
-                <div class="field-hint text-muted">A cue inserted between two numbered cues takes the number halfway between them (e.g. 12.5).</div>
+              <div class="field">
+                <div class="field-row">
+                  <label class="label" for="settingsAutoNumber">Auto-number new cues</label>
+                  <label class="switch"><input type="checkbox" id="settingsAutoNumber" name="autoNumber" value="true"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                </div>
+                <div class="field-hint">A cue inserted between two numbered cues takes the number halfway between them (e.g. 12.5).</div>
               </div>
               <div class="field">
                 <label class="label" for="settingsCueNumStep">Cue number step</label>
                 <input class="input settings-short" id="settingsCueNumStep" name="cueNumStep" type="text" inputmode="decimal" data-validate="number" data-min="0.001" autocomplete="off" placeholder="1" />
-                <div class="field-hint text-muted">New cues count up by this much (1 gives 1, 2, 3…). Right-click the sheet &rarr; Renumber cues uses it too.</div>
+                <div class="field-hint">New cues count up by this much (1 gives 1, 2, 3…). Right-click the sheet &rarr; Renumber cues uses it too.</div>
               </div>
             </div>
 
@@ -99,24 +105,26 @@
               <div class="field">
                 <label class="label">Current output</label>
                 <span id="settingsDisplayMode" class="settings-value">&mdash;</span>
-                <div class="field-hint text-muted">The mode the HDMI output is running now. Pictures are scaled to it and play at its refresh rate.</div>
+                <div class="field-hint">The mode the HDMI output is running now. Pictures are scaled to it and play at its refresh rate.</div>
               </div>
-              <div class="form-check field settings-check">
-                <input class="checkbox" type="checkbox" id="settingsDisplayEDID" name="displayUseEDID" value="true">
-                <label class="form-check-label" for="settingsDisplayEDID">Use the display's own mode (EDID)</label>
-                <div class="field-hint text-muted">Off: use the resolution and refresh rate below.</div>
+              <div class="field">
+                <div class="field-row">
+                  <label class="label" for="settingsDisplayEDID">Use the display's own mode (EDID)</label>
+                  <label class="switch"><input type="checkbox" id="settingsDisplayEDID" name="displayUseEDID" value="true"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                </div>
+                <div class="field-hint">Off: use the resolution and refresh rate below.</div>
               </div>
               <div class="settings-grid">
                 <div class="field">
                   <label class="label" for="settingsDisplayResolution">Resolution</label>
-                  <div class="row is-gap-xs">
+                  <div class="input-group">
                     <select class="select" id="settingsDisplayResolution" name="displayResolution"></select>
                     <button type="button" class="btn btn-secondary" id="settingsDisplayRescan" title="Re-read the display's mode list" aria-label="Rescan resolutions">
                       <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-refresh"/></svg>
                     </button>
                   </div>
-                  <div class="field-hint text-muted">Modes reported by the connected display. &ldquo;(file&rsquo;s own)&rdquo; forces nothing.</div>
-                  <div class="field-hint text-muted">CuTePi restarts automatically if changing the display mode requires it.</div>
+                  <div class="field-hint">Modes reported by the connected display. &ldquo;(file&rsquo;s own)&rdquo; forces nothing.</div>
+                  <div class="field-hint">CuTePi restarts automatically if changing the display mode requires it.</div>
                 </div>
                 <div class="field">
                   <label class="label" for="settingsDisplayRefresh">Refresh rate (Hz)</label>
@@ -131,7 +139,7 @@
                 <label class="label" for="settingsAudioDeviceSel">Output device</label>
                 <select class="select" id="settingsAudioDeviceSel" aria-label="Output device"></select>
                 <input class="input mt-xs" id="settingsAudioDevice" name="audioDevice" type="text" placeholder="Custom ALSA device (e.g. plughw:CARD=b1,DEV=0)" hidden />
-                <div class="field-hint text-muted">Automatic uses the system default (HDMI). Choose Custom to type an ALSA device.</div>
+                <div class="field-hint">Automatic uses the system default (HDMI). Choose Custom to type an ALSA device.</div>
               </div>
               <div class="settings-grid">
                 <div class="field">
@@ -146,53 +154,64 @@
                 <div class="field">
                   <label class="label" for="settingsAudioRate">Sample rate</label>
                   <input class="input settings-short" id="settingsAudioRate" name="audioRate" type="text" inputmode="numeric" data-validate="int" data-min="0" placeholder="48000" />
-                  <div class="field-hint text-muted">48000 for HDMI. 0 keeps each file's own rate.</div>
+                  <div class="field-hint">48000 for HDMI. 0 keeps each file's own rate.</div>
                 </div>
               </div>
             </div>
 
             <div class="tab-pane fade" id="settingsTabNetwork" role="tabpanel">
               <h2 class="settings-heading">Network</h2>
+              <h3 class="field-group-title settings-subheading">Linked units</h3>
+              <div id="linkSection"></div>
+              <div class="field mt-xs">
+                <label class="label" for="linkAddr">Link a unit by address</label>
+                <div class="input-group">
+                  <input class="input" id="linkAddr" name="addr" form="linkNoForm" type="text" spellcheck="false" autocomplete="off" placeholder="192.168.1.20, cutepi-2.local or 10.77.0.55" />
+                  <input class="input settings-short" id="linkPassword" name="password" form="linkNoForm" type="password" autocomplete="off" placeholder="Its password" aria-label="The other unit's password (if it has one)" />
+                  <button type="button" class="btn btn-secondary" id="linkPairBtn" hx-post="/api/link/pair" hx-include="#linkAddr, #linkPassword" hx-target="#linkSection" hx-swap="outerHTML">Link</button>
+                </div>
+                <div class="field-hint">The other unit's operator accepts the link in its own Settings › Network. A wired LAN or the batman-adv mesh (bat0) both work. Sync the clocks (DESIGN §6.8c).</div>
+              </div>
               <div class="settings-grid">
                 <div class="field">
                   <label class="label" for="settingsInstanceName">Instance name</label>
-                  <div class="row is-items-center is-gap-xs">
+                  <div class="input-group">
                     <input class="input" id="settingsInstanceName" type="text" placeholder="cutepi" autocomplete="off" />
-                    <button type="button" class="btn btn-sm btn-secondary btn" id="settingsInstanceApply">Apply</button>
+                    <button type="button" class="btn btn-secondary" id="settingsInstanceApply">Apply</button>
                   </div>
-                  <div class="field-hint text-muted">Renames the machine (<span id="settingsInstanceMdns">cutepi.local</span>). Reconnect at the new name.</div>
+                  <div class="field-hint">Renames the machine (<span id="settingsInstanceMdns">cutepi.local</span>). Reconnect at the new name.</div>
                 </div>
                 <div class="field">
                   <label class="label" for="settingsPort">Web port</label>
                   <input class="input settings-short" id="settingsPort" name="port" type="text" inputmode="numeric" data-validate="int" data-min="1" data-max="65535" required />
-                  <div class="field-hint text-muted">CuTePi restarts automatically when the saved port changes.</div>
+                  <div class="field-hint">CuTePi restarts automatically when the saved port changes.</div>
                 </div>
               </div>
 
-              <h3 class="settings-subheading">Remote control</h3>
+              <h3 class="field-group-title settings-subheading">Remote control</h3>
               <input type="hidden" name="remoteBlock" value="true">
-              <table class="table table-sm table settings-remote-table">
+              <table class="table settings-remote-table">
                 <thead>
                   <tr><th scope="col">Protocol</th><th scope="col">On</th><th scope="col">Port</th><th scope="col">Status</th></tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td><label class="form-check-label" for="settingsRemoteHyperdeck">HyperDeck (TCP)</label></td>
-                    <td><input class="checkbox" type="checkbox" id="settingsRemoteHyperdeck" name="remoteHyperdeck" value="true"></td>
+                    <td><label for="settingsRemoteHyperdeck">HyperDeck (TCP)</label></td>
+                    <td><label class="switch"><input type="checkbox" id="settingsRemoteHyperdeck" name="remoteHyperdeck" value="true"><span class="switch-track"><span class="switch-thumb"></span></span></label></td>
                     <td><input class="input settings-short" id="settingsRemoteHyperdeckPort" name="remoteHyperdeckPort" type="text" inputmode="numeric" data-validate="int" data-min="1" data-max="65535" placeholder="9993" aria-label="HyperDeck port"></td>
-                    <td><span class="remote-state" data-remote-state="hyperdeck">off</span></td>
+                    <td><span class="status status-idle" data-remote-state="hyperdeck">off</span></td>
                   </tr>
                   <tr>
-                    <td><label class="form-check-label" for="settingsRemoteOscUdp">OSC (UDP)</label></td>
-                    <td><input class="checkbox" type="checkbox" id="settingsRemoteOscUdp" name="remoteOscUdp" value="true"></td>
+                    <td><label for="settingsRemoteOscUdp">OSC (UDP)</label></td>
+                    <td><label class="switch"><input type="checkbox" id="settingsRemoteOscUdp" name="remoteOscUdp" value="true"><span class="switch-track"><span class="switch-thumb"></span></span></label></td>
                     <td><input class="input settings-short" id="settingsRemoteOscUdpPort" name="remoteOscUdpPort" type="text" inputmode="numeric" data-validate="int" data-min="1" data-max="65535" placeholder="53000" aria-label="OSC UDP port"></td>
-                    <td><span class="remote-state" data-remote-state="osc_udp">off</span></td>
+                    <td><span class="status status-idle" data-remote-state="osc_udp">off</span></td>
                   </tr>
                   <tr>
-                    <td><label class="form-check-label" for="settingsRemoteOscTcp">OSC (TCP/SLIP)</label></td>
-                    <td><input class="checkbox" type="checkbox" id="settingsRemoteOscTcp" name="remoteOscTcp" value="true"></td>
+                    <td><label for="settingsRemoteOscTcp">OSC (TCP/SLIP)</label></td>
+                    <td><label class="switch"><input type="checkbox" id="settingsRemoteOscTcp" name="remoteOscTcp" value="true"><span class="switch-track"><span class="switch-thumb"></span></span></label></td>
                     <td><input class="input settings-short" id="settingsRemoteOscTcpPort" name="remoteOscTcpPort" type="text" inputmode="numeric" data-validate="int" data-min="1" data-max="65535" placeholder="53000" aria-label="OSC TCP port"></td>
-                    <td><span class="remote-state" data-remote-state="osc_tcp">off</span></td>
+                    <td><span class="status status-idle" data-remote-state="osc_tcp">off</span></td>
                   </tr>
                 </tbody>
               </table>
@@ -209,13 +228,15 @@
                   </select>
                 </div>
               </div>
-              <div class="field-hint text-muted settings-warning">Remote protocols have no password: anyone who can reach an enabled port can run the show. Keep them on the show network, or set the address above.</div>
+              <div class="field-hint settings-warning">Remote protocols have no password: anyone who can reach an enabled port can run the show. Keep them on the show network, or set the address above.</div>
 
-              <h3 class="settings-subheading">Wi-Fi hotspot</h3>
-              <div class="form-check field settings-check">
-                <input class="checkbox" type="checkbox" id="settingsAPEnabled" name="apEnabled" value="true">
-                <label class="form-check-label" for="settingsAPEnabled">Broadcast a Wi-Fi access point</label>
-                <div class="field-hint text-muted">Phones join it to reach the upload page. Needs a Wi-Fi adapter.</div>
+              <h3 class="field-group-title settings-subheading">Wi-Fi hotspot</h3>
+              <div class="field">
+                <div class="field-row">
+                  <label class="label" for="settingsAPEnabled">Broadcast a Wi-Fi access point</label>
+                  <label class="switch"><input type="checkbox" id="settingsAPEnabled" name="apEnabled" value="true"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                </div>
+                <div class="field-hint">Phones join it to reach the upload page. Needs a Wi-Fi adapter.</div>
               </div>
               <div class="settings-grid">
                 <div class="field">
@@ -225,12 +246,12 @@
                 <div class="field">
                   <label class="label" for="settingsAPPass">Wi-Fi password</label>
                   <input class="input" id="settingsAPPass" name="apPass" type="password" autocomplete="new-password" placeholder="unchanged" />
-                  <div class="field-hint text-muted">8&ndash;63 characters; blank keeps the saved one. Stored in plain text.</div>
+                  <div class="field-hint">8&ndash;63 characters; blank keeps the saved one. Stored in plain text.</div>
                 </div>
               </div>
               <div class="row is-items-center is-gap-s" id="settingsAPQrWrap">
-                <img id="settingsAPQr" src="/api/qr?type=wifi" alt="Wi-Fi join QR code" class="border rounded" width="112" height="112">
-                <div class="field-hint text-muted mb-0">Scan to join the hotspot (updates after Save).</div>
+                <img id="settingsAPQr" src="/api/qr?type=wifi" alt="Wi-Fi join QR code" class="img-thumbnail" width="112" height="112">
+                <div class="field-hint mb-0">Scan to join the hotspot (updates after Save).</div>
               </div>
             </div>
 
@@ -239,21 +260,23 @@
               <div class="field">
                 <label class="label" for="settingsPassword">Operator password</label>
                 <input class="input" id="settingsPassword" name="password" type="password" autocomplete="new-password" placeholder="unchanged" aria-describedby="settingsAuthHelp">
-                <div id="settingsAuthHelp" class="field-hint text-muted">
+                <div id="settingsAuthHelp" class="field-hint">
                   <span id="settingsAuthState">Checking&hellip;</span>
                   Blank keeps the current password. When set, every device must enter it once (any username).
                   Stored in plain text &mdash; don't reuse a valuable password.
                 </div>
               </div>
-              <div class="form-check field settings-check">
-                <input class="checkbox" type="checkbox" id="settingsClearPassword" name="clearPassword" value="true">
-                <label class="form-check-label" for="settingsClearPassword">Remove the password (open access)</label>
+              <div class="field">
+                <div class="field-row">
+                  <label class="label" for="settingsClearPassword">Remove the password (open access)</label>
+                  <label class="switch"><input type="checkbox" id="settingsClearPassword" name="clearPassword" value="true"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+                </div>
               </div>
             </div>
 
             <div class="tab-pane fade" id="settingsTabKeys" role="tabpanel">
               <h2 class="settings-heading">Keyboard</h2>
-              <table class="table table-sm table settings-keys">
+              <table class="table settings-keys">
                 <tbody>
                   <tr><td><kbd>Space</kbd></td><td>GO — fire the selected cue</td></tr>
                   <tr><td><kbd>Esc</kbd></td><td>Fade out and stop (picture to black, sound to silence)</td></tr>
@@ -266,15 +289,15 @@
                   <tr><td><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>⌫</kbd></td><td>Delete the highlighted cues</td></tr>
                 </tbody>
               </table>
-              <div class="field-hint text-muted">Space and Esc work anywhere on the page except while typing in a text field.</div>
+              <div class="field-hint">Space and Esc work anywhere on the page except while typing in a text field.</div>
             </div>
 
           </div>
         </div>
         <div class="modal-footer settings-footer">
           <div id="settingsStatus" class="settings-status" role="status" aria-live="polite"></div>
-          <button type="button" class="btn btn-secondary btn" data-bs-dismiss="modal">Cancel</button>
-          <button type="submit" class="btn btn-primary btn">Save</button>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
     </div>
@@ -282,6 +305,14 @@
 </div>
 
 <script>
+  // Phones have no room for the vertical rail: there the stock horizontal
+  // tab strip (one scrolling row) sits above the pane.
+  (function () {
+    var rail = document.querySelector("#settingsModal .settings-tabs"), mq = window.matchMedia("(max-width: 600px)");
+    function orient() { rail.setAttribute("aria-orientation", mq.matches ? "horizontal" : "vertical"); }
+    orient();
+    mq.addEventListener("change", orient);
+  })();
   // Bootstrap's tab JS never touches .tab's is-active class; sync it so
   // the vertical rail's inline-edge marker keeps track of the pressed tab.
   document.getElementById("settingsModal").addEventListener("show.bs.tab", function (e) {
@@ -329,7 +360,7 @@
       if (!el) return;
       el.textContent = r.running ? "on " + r.addr : (r.error ? "error" : "off");
       el.title = r.error || "";
-      el.className = "remote-state " + (r.running ? "text-success" : (r.error ? "text-danger" : "text-muted"));
+      el.className = "status " + (r.running ? "status-ok" : (r.error ? "status-error" : "status-idle"));
     });
   }
   window.renderRemoteStatus = renderRemoteStatus;
@@ -382,7 +413,7 @@
               document.getElementById("settingsInstanceMdns").textContent = host + ".local";
             } catch (e) {}
             st.textContent = r.ok ? "Renamed — reconnect at the new .local address." : r.text;
-            st.className = r.ok ? "text-success" : "text-danger";
+            st.className = "settings-status status " + (r.ok ? "status-ok" : "status-error");
           }).catch(function () {});
         };
         document.getElementById("settingsAutoNumber").checked = !!s.autoNumber;
@@ -436,3 +467,4 @@
 </script>
 
 {{ end }}
+

@@ -18,7 +18,8 @@
  * the compositing depends on the frames before), so WORKERS threads decode frames
  * ahead into a ring of patches and the task composites them in order (dispose,
  * blend): a 1080p30 WebP decoded at 12 fps serially (libwebp's WebPAnimDecoder,
- * plus a pass to find the duration). AVIF and JPEG XL frames depend on earlier
+ * plus a pass to find the duration). A WebP or APNG frame that replaces its
+ * region (no blend) is decoded straight into its place in an output buffer. AVIF and JPEG XL frames depend on earlier
  * ones; their libraries decode them in order with their own threads.
  * TIME seeks (cue loops seek to 0 with FLUSH) restart the decode and skip to the
  * frame showing at the target time. One frame is one buffer from a pool. */
@@ -250,6 +251,7 @@ typedef struct {
   int state;    /* 0 free, 1 decoding, 2 ready, -1 failed */
   guint gen;    /* decode generation it belongs to */
   guint8 *px;   /* RGBA, frame w x h, stride w*4 */
+  GstBuffer *buf; /* or an output buffer the frame was decoded straight into (a frame that replaces its region) */
 } slot;
 
 typedef struct _CutepiAnimDec CutepiAnimDec;
@@ -288,6 +290,7 @@ struct _CutepiAnimDec {
   /* No canvas of its own: each frame is built in its output buffer, from the
    * last one pushed (kept mapped) when it does not replace the whole picture.
    * That saves a full-frame copy a frame (two for whole-picture frames). */
+  GstBuffer *direct;      /* table_next: the frame is in this buffer, not in dst */
   GstBuffer *last;        /* the last frame pushed, mapped read-only */
   GstMapInfo last_map;
   const guint8 *last_px;  /* its pixels and stride */
@@ -358,9 +361,9 @@ append_chunk (GByteArray * a, const char *type, const guint8 * body, guint32 len
   g_byte_array_append (a, crc, 4);
 }
 
-/* APNG frame i as a single PNG, decoded by this worker's pngdec into px (w*4 stride). */
+/* APNG frame i as a single PNG, decoded by this worker's pngdec into px. */
 static gboolean
-apng_decode (worker * wk, const frame_info * f, guint8 * px)
+apng_decode (worker * wk, const frame_info * f, guint8 * px, int stride)
 {
   CutepiAnimDec *s = wk->s;
   if (!L.png && !wk->png_pipe) { /* fallback: libpng16 could not be loaded */
@@ -401,7 +404,7 @@ apng_decode (worker * wk, const frame_info * f, guint8 * px)
     gboolean ok = L.png_begin (&im, png->data, png->len) && im.width == f->w && im.height == f->h;
     if (ok) {
       im.format = CUTEPI_PNG_FORMAT_RGBA;
-      ok = L.png_finish (&im, NULL, px, (gint32) f->w * 4, NULL);
+      ok = L.png_finish (&im, NULL, px, stride, NULL);
     }
     if (!ok) GST_WARNING_OBJECT (s, "APNG frame: %s", im.message);
     L.png_free (&im);
@@ -426,7 +429,7 @@ apng_decode (worker * wk, const frame_info * f, guint8 * px)
     int st = GST_VIDEO_FRAME_PLANE_STRIDE (&fr, 0);
     gboolean rgb = GST_VIDEO_INFO_FORMAT (&vi) == GST_VIDEO_FORMAT_RGB;
     for (guint32 y = 0; y < f->h; y++) {
-      guint8 *d = px + (gsize) y * f->w * 4;
+      guint8 *d = px + (gsize) y * stride;
       const guint8 *r = p + (gsize) y * st;
       if (!rgb) { memcpy (d, r, (gsize) f->w * 4); continue; }
       guint32 x = 0;
@@ -466,54 +469,64 @@ gif_decode (CutepiAnimDec * s, const frame_info * f, guint8 * px)
   gsize npx = (gsize) f->sw * f->sh;
   guint8 *idx = f->interlace ? g_malloc (npx) : px; /* stored row order, then de-interlaced */
   memset (idx, f->trans >= 0 ? f->trans : 0, npx);
-  /* LZW: codes LSB-first; dictionary as prefix/suffix chains. */
-  static __thread guint16 prefix[4096];
-  static __thread guint8 suffix[4096], stack[4097];
+  /* The data sub-blocks (255 bytes at most each) joined, so codes are read 8 bytes at a time. */
+  gsize n = 0;
+  for (const guint8 * q = p; q < end && *q; q += 1 + *q) n += MIN ((gsize) *q, (gsize) (end - q - 1));
+  guint8 *lzw = g_malloc (n + 16), *w = lzw;
+  for (const guint8 * q = p; q < end && *q; q += 1 + *q) {
+    gsize k = MIN ((gsize) *q, (gsize) (end - q - 1));
+    memcpy (w, q + 1, k);
+    w += k;
+  }
+  memset (w, 0, 16);
+  /* LZW: codes LSB-first; dictionary as prefix/suffix chains, with each string's length and first byte so it is
+   * written straight to its place, back to front. */
+  static __thread guint16 prefix[4096], len[4096];
+  static __thread guint8 suffix[4096], head[4096], tail[4097];
   int clear = 1 << min, eoi = clear + 1, next = clear + 2, size = min + 1, old = -1;
-  guint8 first = 0;
-  guint32 acc = 0; int bits = 0;
+  guint64 acc = 0, left = (guint64) n * 8; /* left: bits of real data not yet taken */
+  int bits = 0;
+  const guint8 *q = lzw;
   gsize out = 0;
-  int blk = 0; /* bytes left in this sub-block */
-  for (int i = 0; i < clear; i++) { prefix[i] = 0xffff; suffix[i] = i; }
+  for (int i = 0; i < clear; i++) { prefix[i] = 0xffff; suffix[i] = head[i] = i; len[i] = 1; }
   for (;;) {
-    while (bits < size) {
-      if (!blk) {
-        if (p >= end || !(blk = *p++)) goto done;
-      }
-      if (p >= end) goto done;
-      acc |= (guint32) *p++ << bits;
-      bits += 8; blk--;
+    if (bits < size) {
+      guint64 v;
+      memcpy (&v, q, 8);
+      acc |= GUINT64_FROM_LE (v) << bits;
+      q += (63 - bits) >> 3;
+      bits |= 56;
     }
+    if (left < (guint64) size) break; /* the data ran out */
+    left -= size;
     int code = acc & ((1 << size) - 1);
     acc >>= size; bits -= size;
     if (code == clear) { next = clear + 2; size = min + 1; old = -1; continue; }
     if (code == eoi) break;
-    int sp = 0, c = code;
     if (old < 0) {
       if (code >= clear) break; /* the first code must be a colour */
-      first = code;
-      if (out < npx) idx[out++] = first;
+      if (out < npx) idx[out++] = code;
       old = code;
       continue;
     }
     if (code > next || (code == next && next >= 4096)) break; /* damaged */
-    if (code == next) { stack[sp++] = first; c = old; }
-    while (c >= clear) {
-      if (c >= 4096 || sp >= 4096) goto done;
-      stack[sp++] = suffix[c];
-      c = prefix[c];
-    }
-    first = c;
-    stack[sp++] = first;
-    while (sp && out < npx) idx[out++] = stack[--sp];
+    int c = code == next ? old : code; /* code == next: old's string plus its own first byte */
+    gsize l = len[c] + (code == next);
+    guint8 first = head[c];
+    guint8 *e = out + l <= npx ? idx + out + l : tail + l; /* the last string may not fit: built aside, cut */
+    if (code == next) *--e = first;
+    for (; c >= clear; c = prefix[c]) *--e = suffix[c];
+    *--e = c;
+    if (out + l > npx) { memcpy (idx + out, tail, npx - out); break; }
+    out += l;
     if (next < 4096) {
-      prefix[next] = old; suffix[next] = first; next++;
+      prefix[next] = old; suffix[next] = first; head[next] = head[old]; len[next] = len[old] + 1; next++;
       if (next == (1 << size) && size < 12) size++;
     }
     old = code;
     if (out >= npx) break;
   }
-done:;
+  g_free (lzw);
   if (!f->interlace) return TRUE;
   /* De-interlace: stored rows 0, 8, 16, …, 4, 12, …, 2, 6, …, 1, 3, … */
   static const guint32 start[4] = { 0, 4, 2, 1 }, step[4] = { 8, 8, 4, 2 };
@@ -526,9 +539,11 @@ done:;
 }
 
 /* Draw a GIF frame's indices (w x h of a sw-wide patch) at x0, y0: the
- * transparent index leaves what is there. */
+ * transparent index shows the picture under it (base; dst itself when the
+ * base was copied there first). */
 static void
-gif_composite (CutepiAnimDec * s, const frame_info * f, guint8 * dst, int dstride, const guint8 * idx)
+gif_composite (CutepiAnimDec * s, const frame_info * f, guint8 * dst, int dstride, const guint8 * base, int bstride,
+    const guint8 * idx)
 {
   const guint8 *pal = s->data->data + f->pal_off;
   guint32 lut[256];
@@ -539,12 +554,15 @@ gif_composite (CutepiAnimDec * s, const frame_info * f, guint8 * dst, int dstrid
   }
   for (guint32 y = 0; y < f->h; y++) {
     guint32 *d = (guint32 *) (dst + (gsize) (f->y + y) * dstride + (gsize) f->x * 4);
+    const guint32 *b = (const guint32 *) (base + (gsize) (f->y + y) * bstride + (gsize) f->x * 4);
     const guint8 *p = idx + (gsize) y * f->sw;
     if (f->trans < 0) {
       for (guint32 x = 0; x < f->w; x++) d[x] = lut[p[x]];
-    } else {
+    } else if (b == d) {
       for (guint32 x = 0; x < f->w; x++)
         if (p[x] != f->trans) d[x] = lut[p[x]];
+    } else {
+      for (guint32 x = 0; x < f->w; x++) d[x] = p[x] != f->trans ? lut[p[x]] : b[x];
     }
   }
 }
@@ -645,17 +663,37 @@ worker_main (gpointer d)
     sl->idx = i; sl->state = 1; sl->gen = s->gen;
     guint gen = s->gen;
     const frame_info *f = &g_array_index (s->frames, frame_info, i);
+    GstBufferPool *pool = s->pool;
     g_mutex_unlock (&s->lock);
+    /* A frame that replaces its region is decoded straight into its place in an output buffer (the compositor
+     * adds what lies outside it): copying it there from the slot cost the compositor 8-14 ms a 1080p frame beside
+     * the workers (the memory bus). */
+    GstBuffer *buf = NULL;
+    GstMapInfo bm;
+    guint8 *px = sl->px;
+    int stride = f->w * 4;
+    gboolean whole = f->x == 0 && f->y == 0 && (int) f->w == s->w && (int) f->h == s->h;
+    if (pool && s->fmt != FMT_GIF && !f->blend && f->dispose != 2 &&
+        (whole || (i > 0 && !g_array_index (s->frames, frame_info, i - 1).dispose)) &&
+        gst_buffer_pool_acquire_buffer (pool, &buf, NULL) == GST_FLOW_OK) {
+      GstVideoMeta *vm = gst_buffer_get_video_meta (buf);
+      if (gst_buffer_map (buf, &bm, GST_MAP_WRITE)) {
+        stride = vm ? vm->stride[0] : s->w * 4;
+        px = bm.data + (vm ? vm->offset[0] : 0) + (gsize) f->y * stride + (gsize) f->x * 4;
+      } else gst_clear_buffer (&buf);
+    }
     gboolean ok;
     if (s->fmt == FMT_WEBP)
-      ok = L.webp_decode_rgba_into (s->data->data + f->off, f->len, sl->px, (gsize) f->w * f->h * 4, f->w * 4) != NULL;
+      ok = L.webp_decode_rgba_into (s->data->data + f->off, f->len, px, (gsize) stride * (f->h - 1) + (gsize) f->w * 4, stride) != NULL;
     else if (s->fmt == FMT_GIF)
-      ok = gif_decode (s, f, sl->px);
+      ok = gif_decode (s, f, px);
     else
-      ok = apng_decode (wk, f, sl->px);
+      ok = apng_decode (wk, f, px, stride);
+    if (buf) gst_buffer_unmap (buf, &bm);
+    if (buf && !ok) gst_clear_buffer (&buf);
     g_mutex_lock (&s->lock);
-    if (sl->gen == gen && s->gen == gen) sl->state = ok ? 2 : -1;
-    else sl->state = 0; /* reset meanwhile: the slot is free again */
+    if (sl->gen == gen && s->gen == gen) { sl->state = ok ? 2 : -1; sl->buf = buf; }
+    else { sl->state = 0; gst_clear_buffer (&buf); } /* reset meanwhile: the slot is free again */
     g_cond_broadcast (&s->cond);
   }
   g_mutex_unlock (&s->lock);
@@ -721,7 +759,8 @@ workers_stop (CutepiAnimDec * s)
   g_mutex_unlock (&s->lock);
   for (int i = 0; i < WORKERS; i++)
     if (s->workers[i].thread) { g_thread_join (s->workers[i].thread); s->workers[i].thread = NULL; }
-  for (int i = 0; i < RING; i++) g_clear_pointer (&s->ring[i].px, g_free);
+  for (int i = 0; i < RING; i++) { g_clear_pointer (&s->ring[i].px, g_free); gst_clear_buffer (&s->ring[i].buf); }
+  gst_clear_buffer (&s->direct);
   last_drop (s);
   g_clear_pointer (&s->saved, g_free);
 }
@@ -732,8 +771,10 @@ workers_reset (CutepiAnimDec * s)
 {
   g_mutex_lock (&s->lock);
   s->gen++;
+  s->next_decode = s->frames->len; /* no frame is started while the old generation's decodes come back (the
+                                     * workers filled the ring with frames past the old position: the seek hung) */
   for (int i = 0; i < RING; i++)
-    if (s->ring[i].state != 1) s->ring[i].state = 0;
+    if (s->ring[i].state != 1) { s->ring[i].state = 0; gst_clear_buffer (&s->ring[i].buf); }
   /* Wait for in-flight decodes of the old generation to come back. */
   for (;;) {
     gboolean busy = FALSE;
@@ -748,22 +789,27 @@ workers_reset (CutepiAnimDec * s)
   g_mutex_unlock (&s->lock);
 }
 
-/* Straight-alpha OVER, or a copy, of a w x h patch onto the canvas at x, y. */
+/* Straight-alpha OVER, or a copy, of a w x h patch onto the canvas at x, y. The picture under it is read from
+ * base (dst itself when the base was copied there first). */
 static void
-composite (guint8 * dst, int dstride, const guint8 * src, int stride, int x0, int y0, int w, int h, gboolean over)
+composite (guint8 * dst, int dstride, const guint8 * base, int bstride, const guint8 * src, int stride, int x0, int y0,
+    int w, int h, gboolean over)
 {
   for (int y = 0; y < h; y++) {
     guint8 *d = dst + (gsize) (y0 + y) * dstride + (gsize) x0 * 4;
+    const guint8 *b = base + (gsize) (y0 + y) * bstride + (gsize) x0 * 4;
     const guint8 *p = src + (gsize) y * stride;
     if (!over) { memcpy (d, p, (gsize) w * 4); continue; }
-    for (int x = 0; x < w; x++, d += 4, p += 4) {
+    for (int x = 0; x < w; x++, d += 4, b += 4, p += 4) {
       guint sa = p[3];
       if (sa == 255) { memcpy (d, p, 4); continue; }
-      if (sa == 0) continue;
-      guint da = d[3];
+      guint32 under;
+      memcpy (&under, b, 4);
+      if (sa == 0) { memcpy (d, &under, 4); continue; }
+      guint da = b[3];
       guint oa = sa * 255 + da * (255 - sa); /* output alpha * 255 */
       for (int c = 0; c < 3; c++)
-        d[c] = (guint8) ((p[c] * sa * 255 + d[c] * da * (255 - sa) + oa / 2) / oa);
+        d[c] = (guint8) ((p[c] * sa * 255 + b[c] * da * (255 - sa) + oa / 2) / oa);
       d[3] = (guint8) ((oa + 127) / 255);
     }
   }
@@ -775,6 +821,21 @@ copy_picture (guint8 * dst, int dstride, const guint8 * src, int sstride, int w,
 {
   if (dst == src) return; /* a skipped frame built in this buffer */
   for (int y = 0; y < h; y++) memcpy (dst + (gsize) y * dstride, src + (gsize) y * sstride, (gsize) w * 4);
+}
+
+/* Copy a w x h picture except the frame's rectangle (the compositor fills that). */
+static void
+copy_outside (guint8 * dst, int dstride, const guint8 * src, int sstride, int w, int h, const frame_info * f)
+{
+  if (dst == src) return;
+  gsize left = (gsize) f->x * 4, right = (gsize) (f->x + f->w) * 4, row = (gsize) w * 4;
+  for (int y = 0; y < h; y++) {
+    guint8 *d = dst + (gsize) y * dstride;
+    const guint8 *b = src + (gsize) y * sstride;
+    if ((guint32) y < f->y || (guint32) y >= f->y + f->h) { memcpy (d, b, row); continue; }
+    memcpy (d, b, left);
+    memcpy (d + right, b + right, row - right);
+  }
 }
 
 /* Build the next frame in dst: the picture the frames so far left (the last
@@ -791,20 +852,50 @@ table_next (CutepiAnimDec * s, guint8 * dst, int stride, GstClockTime * dur)
   g_mutex_unlock (&s->lock);
   gboolean ok = sl->state == 2;
   const frame_info *f = &g_array_index (s->frames, frame_info, i);
-  if (ok) {
-    const frame_info *p = s->prev >= 0 ? &g_array_index (s->frames, frame_info, s->prev) : NULL;
-    gboolean whole = f->x == 0 && f->y == 0 && (int) f->w == s->w && (int) f->h == s->h && f->blend == 0;
+  const frame_info *p = s->prev >= 0 ? &g_array_index (s->frames, frame_info, s->prev) : NULL;
+  gboolean whole = f->x == 0 && f->y == 0 && (int) f->w == s->w && (int) f->h == s->h && f->blend == 0;
+  if (ok && sl->buf) {
+    /* Decoded into its place in its own output buffer: only what lies outside it is added, from the last frame. */
+    GstVideoMeta *vm = gst_buffer_get_video_meta (sl->buf);
+    GstMapInfo m;
+    gboolean plain = whole || (s->last_px && !(p && p->dispose)); /* else (a frame before it failed): the long way */
+    if (gst_buffer_map (sl->buf, &m, plain ? GST_MAP_WRITE : GST_MAP_READ)) {
+      guint8 *px = m.data + (vm ? vm->offset[0] : 0);
+      int st = vm ? vm->stride[0] : s->w * 4;
+      if (whole) ;
+      else if (plain) copy_outside (px, st, s->last_px, s->last_stride, s->w, s->h, f);
+      else for (guint32 y = 0; y < f->h; y++)
+        memcpy (sl->px + (gsize) y * f->sw * 4, px + (gsize) (f->y + y) * st + (gsize) f->x * 4, (gsize) f->w * 4);
+      gst_buffer_unmap (sl->buf, &m);
+    } else ok = FALSE;
+    if (plain && ok) { s->direct = sl->buf; sl->buf = NULL; }
+    else gst_clear_buffer (&sl->buf);
+  }
+  if (ok && s->direct) {
+    s->prev = i;
+    *dur = f->dur;
+  } else if (ok) {
     /* The base picture, unless this frame replaces all of it (or must be saved first). */
+    const guint8 *base = dst;
+    int bstride = stride;
     if (!whole || f->dispose == 2) {
-      if (p && p->dispose == 2) copy_picture (dst, stride, s->saved, s->w * 4, s->w, s->h);
-      else if (s->last_px) copy_picture (dst, stride, s->last_px, s->last_stride, s->w, s->h);
-      else for (int y = 0; y < s->h; y++) memset (dst + (gsize) y * stride, 0, (gsize) s->w * 4);
-      if (p && p->dispose == 1)
-        for (guint32 y = 0; y < p->h; y++) memset (dst + (gsize) (p->y + y) * stride + (gsize) p->x * 4, 0, (gsize) p->w * 4);
-      if (f->dispose == 2) copy_picture (s->saved, s->w * 4, dst, stride, s->w, s->h);
+      if (s->last_px && !(p && p->dispose) && f->dispose != 2) {
+        /* The last frame pushed, as it is: only what lies outside this frame is copied, and the compositor
+         * reads the rest from there as it draws. A whole pass over the picture less (the memory bus is the limit:
+         * 5-8 ms a 1080p frame beside the decode workers). */
+        base = s->last_px; bstride = s->last_stride;
+        copy_outside (dst, stride, base, bstride, s->w, s->h, f);
+      } else {
+        if (p && p->dispose == 2) copy_picture (dst, stride, s->saved, s->w * 4, s->w, s->h);
+        else if (s->last_px) copy_picture (dst, stride, s->last_px, s->last_stride, s->w, s->h);
+        else for (int y = 0; y < s->h; y++) memset (dst + (gsize) y * stride, 0, (gsize) s->w * 4);
+        if (p && p->dispose == 1)
+          for (guint32 y = 0; y < p->h; y++) memset (dst + (gsize) (p->y + y) * stride + (gsize) p->x * 4, 0, (gsize) p->w * 4);
+        if (f->dispose == 2) copy_picture (s->saved, s->w * 4, dst, stride, s->w, s->h);
+      }
     }
-    if (s->fmt == FMT_GIF) gif_composite (s, f, dst, stride, sl->px);
-    else composite (dst, stride, sl->px, f->sw * 4, f->x, f->y, f->w, f->h, f->blend == 1);
+    if (s->fmt == FMT_GIF) gif_composite (s, f, dst, stride, base, bstride, sl->px);
+    else composite (dst, stride, base, bstride, sl->px, f->sw * 4, f->x, f->y, f->w, f->h, f->blend == 1);
     s->prev = i;
     *dur = f->dur;
   } else {
@@ -849,7 +940,7 @@ webp_open (CutepiAnimDec * s)
     /* As libwebp's animation decoder: a 0 ms frame is shown, briefly. */
     f.dur = (GstClockTime) MAX (it.duration, 10) * GST_MSECOND;
     f.dispose = it.dispose_method == WEBP_MUX_DISPOSE_BACKGROUND ? 1 : 0;
-    f.blend = it.blend_method == WEBP_MUX_BLEND ? 1 : 0;
+    f.blend = it.blend_method == WEBP_MUX_BLEND && it.has_alpha; /* an opaque frame replaces its region */
     f.off = it.fragment.bytes - s->data->data;
     f.len = it.fragment.size;
     L.webp_release_iter (&it);
@@ -875,6 +966,7 @@ apng_open (CutepiAnimDec * s)
   guint32 len; const guint8 *type, *body;
   GstClockTime total = 0;
   gboolean before_idat = TRUE;
+  gboolean alpha = (d[25] & 4) != 0; /* colour type with alpha, or a tRNS chunk */
   frame_info *cur = NULL;
   for (gsize p = 8; png_chunk (s->data, p, &len, &type, &body); p += 12 + len) {
     if (!memcmp (type, "IEND", 4)) break;
@@ -904,6 +996,7 @@ apng_open (CutepiAnimDec * s)
       g_array_append_val (cur->data, l);
     } else if (before_idat && memcmp (type, "IHDR", 4) && memcmp (type, "acTL", 4)) {
       char t[5] = { type[0], type[1], type[2], type[3], 0 };
+      if (!memcmp (type, "tRNS", 4)) alpha = TRUE;
       append_chunk (s->apng_head, t, body, len); /* PLTE, tRNS, gAMA, sRGB, iCCP, ... */
     }
   }
@@ -913,6 +1006,8 @@ apng_open (CutepiAnimDec * s)
     g_array_set_size (s->frames, s->frames->len - 1);
   }
   if (!s->frames->len) return FALSE;
+  if (!alpha) /* opaque frames replace their region: no blend, and a whole frame needs no base */
+    for (guint i = 0; i < s->frames->len; i++) g_array_index (s->frames, frame_info, i).blend = 0;
   s->nframes = s->frames->len;
   if (s->nframes > 1) s->duration = total;
   return TRUE;
@@ -1396,12 +1491,15 @@ push_caps (CutepiAnimDec * s)
   if (!s->pool) {
     GstVideoInfo vi;
     gst_video_info_from_caps (&vi, caps);
-    s->pool = gst_video_buffer_pool_new ();
-    GstStructure *cfg = gst_buffer_pool_get_config (s->pool);
+    GstBufferPool *pool = gst_video_buffer_pool_new ();
+    GstStructure *cfg = gst_buffer_pool_get_config (pool);
     gst_buffer_pool_config_set_params (cfg, caps, vi.size, 4, 0);
     gst_buffer_pool_config_add_option (cfg, GST_BUFFER_POOL_OPTION_VIDEO_META);
-    gst_buffer_pool_set_config (s->pool, cfg);
-    gst_buffer_pool_set_active (s->pool, TRUE);
+    gst_buffer_pool_set_config (pool, cfg);
+    gst_buffer_pool_set_active (pool, TRUE);
+    g_mutex_lock (&s->lock); /* the decode workers take buffers from it */
+    s->pool = pool;
+    g_mutex_unlock (&s->lock);
   }
   gst_caps_unref (caps);
 }
@@ -1429,6 +1527,16 @@ loop (CutepiAnimDec * s)
   for (;;) {
     ok = dec_next (s, px, stride, &dur);
     if (!ok) break;
+    if (s->direct) { /* the frame came in its own buffer: that one goes out */
+      gst_buffer_unmap (b, &m);
+      gst_buffer_unref (b);
+      b = s->direct;
+      s->direct = NULL;
+      vm = gst_buffer_get_video_meta (b);
+      if (!gst_buffer_map (b, &m, GST_MAP_WRITE)) { gst_buffer_unref (b); goto pause; }
+      stride = vm ? vm->stride[0] : s->w * 4;
+      px = m.data + (vm ? vm->offset[0] : 0);
+    }
     /* Skip frames that end before a seek target; the next one builds on
      * this one, in the same buffer. */
     if (GST_CLOCK_TIME_IS_VALID (s->seek_to) && GST_CLOCK_TIME_IS_VALID (dur) && s->pts + dur <= s->seek_to) {

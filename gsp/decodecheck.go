@@ -52,11 +52,7 @@ func DecodeCheck(path string) (time.Duration, error) {
 		p.Set(prop, sink)
 	}
 	p.Set("uri", (&url.URL{Scheme: "file", Path: abs}).String())
-	p.Connect("deep-element-added", func(_, _, e any) {
-		if el, ok := e.(*gst.Element); ok {
-			oneDecodeThread(el)
-		}
-	})
+	onDeepElementAdded(p, deepOneDecoderT)
 	defer p.SetState(gst.StateNull)
 	bus := p.GetBus()
 	p.SetState(gst.StatePaused)

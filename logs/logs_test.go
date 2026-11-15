@@ -18,6 +18,7 @@ func allCodes() []string {
 		RTERestart, RTEShutdown, RTEHostRefused,
 		YDLRequest, YDLResolve, YDLDownload, YDLProbe, YDLRegister, YDLRender, YDLFailed,
 		NETListErr,
+		LNKInfo, LNKWarn,
 		AUDAudit,
 	}
 }

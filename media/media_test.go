@@ -316,3 +316,24 @@ func TestProbeImageHasNoDuration(t *testing.T) {
 		t.Fatalf("Probe(wav) duration = %v, want ~1s", meta.Duration)
 	}
 }
+
+// A short clip keyed only at its first frame: the keyframe-only seek to the
+// middle finds nothing (ffmpeg still exits 0), so the exact seek must run.
+func TestGenerateThumbnailClipKeyedAtStart(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	clip := filepath.Join(dir, "clip.mp4")
+	if out, err := exec.Command("ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=6",
+		"-c:v", "libx264", "-g", "1000", "-pix_fmt", "yuv420p", clip).CombinedOutput(); err != nil {
+		t.Skipf("cannot make clip: %v: %s", err, out)
+	}
+	thumb := filepath.Join(dir, "clip.jpg")
+	if err := GenerateThumbnail(clip, KindVideo, 6, thumb); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(thumb); err != nil || st.Size() == 0 {
+		t.Fatalf("no thumbnail written: %v", err)
+	}
+}

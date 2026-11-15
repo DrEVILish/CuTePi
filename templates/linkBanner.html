@@ -1,0 +1,13 @@
+{{ define "linkBanner.html" }}
+<div id="linkBanner" class="link-banner" data-mode="{{ .Mode }}" role="status" aria-live="polite"{{ if not (or .Down .Electing .MediaBad .ClockBad .Incoming) }} hidden{{ end }}>
+  {{ if .Electing }}<div class="status status-error">Linked units are choosing a primary: edits wait until one takes over.</div>{{ end }}
+  {{ range .Peers }}{{ if and (not .Up) (not .Legacy) }}<div class="status status-error">Linked unit {{ .Name }} is not answering.</div>{{ end }}{{ end }}
+  {{ range .Peers }}{{ if .Media.Bad }}<div class="status status-error">Media differs from {{ .Name }}.
+    {{ if .Media.Missing }}Missing on {{ .Name }}: {{ range $i, $f := .Media.Missing }}{{ if $i }}, {{ end }}{{ $f }}{{ end }}.{{ end }}
+    {{ if .Media.Lacking }}Missing here: {{ range $i, $f := .Media.Lacking }}{{ if $i }}, {{ end }}{{ $f }}{{ end }}.{{ end }}
+    {{ if .Media.Differs }}Different content: {{ range $i, $f := .Media.Differs }}{{ if $i }}, {{ end }}{{ $f }}{{ end }}.{{ end }}
+    Settings › Network › Sync media copies the missing files.</div>{{ end }}{{ end }}
+  {{ if .ClockBad }}<div class="status status-error">A linked unit's clock is more than 5 ms off.</div>{{ end }}
+  {{ range .Incoming }}<div class="status status-error">{{ .Name }} at {{ .URL }} asks to link: accept it in Settings › Network.</div>{{ end }}
+</div>
+{{ end }}

@@ -1,26 +1,29 @@
 {{ define "cueinspector.html" }}
 <div id="cueinspector-body" class="cueinspector-body"{{ if or (hasPrefix .Cue.Mimetype "image/") (eq .Cue.SourceKind "endpoint") }} data-no-audio-tab{{ end }}>
   {{ if not .Selected }}
-  <p class="text-muted small mb-0">Select a cue to edit its time, video, audio and colour settings.</p>
+  <div class="empty-state">
+    <span class="empty-state-title">No cue selected</span>
+    <span class="empty-state-hint">Select a cue on the sheet to edit its time, video, audio and colour settings.</span>
+  </div>
   {{ else }}
   {{ $dur := .MediaDuration }}
   {{ if .Cue.Missing }}
-  <div class="alert alert-warning py-2 px-3 row is-items-center is-gap-xs is-wrap">
+  <div class="alert alert-warning row is-items-center is-gap-xs is-wrap">
     <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
-    <span class="me-2">Source file missing from disk. Re-link to another media item or delete this cue.</span>
+    <span>Source file missing from disk. Re-link to another media item or delete this cue.</span>
     <form class="d-inline-flex is-items-center is-gap-xs"
       hx-put="/api/cue/{{ .Cue.CuePos }}/replace" hx-target="#cueinspector-body" hx-swap="outerHTML">
-      <select name="filename" class="select w-auto" aria-label="Replacement media">
+      <select name="filename" class="select input-sm" aria-label="Replacement media">
         <option value="" selected>Replace with&hellip;</option>
         {{ range .Pool }}
         <option value="{{ .Filename }}">{{ .Filename }}</option>
         {{ end }}
       </select>
-      <button class="btn btn-sm btn-ghost" type="submit">Re-link</button>
+      <button class="btn btn-sm btn-secondary" type="submit">Re-link</button>
     </form>
     <form class="d-inline-flex"
       hx-delete="/api/cue/{{ .Cue.CuePos }}" hx-target="#cuesheet" hx-swap="outerHTML">
-      <button class="btn btn-sm btn-ghost" type="submit" title="Delete this cue">Delete cue</button>
+      <button class="btn btn-sm btn-danger" type="submit" title="Delete this cue">Delete cue</button>
     </form>
   </div>
   {{ end }}
@@ -35,30 +38,30 @@
         <div class="insp-time-row mt-xs">
           <div class="insp-time-fields">
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-live-fadein">Fade In</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-fadein" name="fadeIn" data-fade-in class="form-control form-control-sm" value="{{ formatTime .Cue.FadeIn }}" placeholder="1:05, 1m5s or 65" title="Fade the page in from black (seconds)">
+              <label class="label insp-field-label" for="insp-live-fadein">Fade In</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-fadein" name="fadeIn" data-fade-in class="input input-sm" value="{{ formatTime .Cue.FadeIn }}" placeholder="1:05, 1m5s or 65" title="Fade the page in from black (seconds)">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-live-prewait">PreWait</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the page shows">
+              <label class="label insp-field-label" for="insp-live-prewait">PreWait</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-prewait" name="preWait" class="input input-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the page shows">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-live-postwait">PostWait</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the page is taken down">
+              <label class="label insp-field-label" for="insp-live-postwait">PostWait</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-live-postwait" name="postWait" class="input input-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the page is taken down">
             </div>
             <div class="insp-time-field insp-schedule">
               <input type="hidden" name="schedule_block" value="1">
               <div class="row is-items-center is-gap-xs">
-                <input class="form-check-input" type="checkbox" id="insp-live-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
-                <label class="small" for="insp-live-schedule">Schedule</label>
+                <input class="checkbox" type="checkbox" id="insp-live-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
+                <label for="insp-live-schedule">Schedule</label>
                 <input id="insp-live-schedule-time" name="schedule_time" type="time" class="input" step="1"
                   value="{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}"
                   aria-label="Time of day, to the second" title="Time of day, to the second">
                 <details class="day-picker" id="insp-live-schedule-days">
-                  <summary aria-label="Pick the days of week">Days&hellip;</summary>
-                  <div class="day-picker-list">
+                  <summary class="btn btn-sm btn-secondary" aria-label="Pick the days of week">Days&hellip;</summary>
+                  <div class="dropdown day-picker-list">
                     {{ range $i, $d := listDays }}
-                    <label><input type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if or (hasBit $.Cue.ScheduleDays $i) (eq $.Cue.ScheduleDays 0) }}checked{{ end }}> {{ $d }}</label>
+                    <label><input class="checkbox" type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if or (hasBit $.Cue.ScheduleDays $i) (eq $.Cue.ScheduleDays 0) }}checked{{ end }}> {{ $d }}</label>
                     {{ end }}
                   </div>
                 </details>
@@ -67,18 +70,22 @@
           </div>
           <div class="insp-time-right">
             <div class="insp-time-field insp-live-url">
-              <label class="insp-field-label" for="insp-live-url">Page URL</label>
-              <input id="insp-live-url" name="endpointUrl" type="url" required class="form-control form-control-sm"
+              <label class="label insp-field-label" for="insp-live-url">Page URL</label>
+              <input id="insp-live-url" name="endpointUrl" type="url" required class="input input-sm"
                 value="{{ .Cue.EndpointURL }}" placeholder="https://timerpi.local/d/room"
                 autocomplete="off" spellcheck="false" title="The page shown on the wall (http or https). A change reloads it if this cue is live.">
+              {{ if .ScreenKey }}
+              <div class="field-hint insp-screenkey">Screen key stored (trusted TimerPi screen; kept out of the URL, exports and logs).
+                <button type="button" class="btn btn-secondary btn-sm" hx-post="/api/cue/{{ .Cue.CuePos }}/screenkey/forget" hx-swap="none"
+                  hx-on::after-request="htmx.trigger('#inspector-form', 'ctp-save')" title="Delete the stored key; pair again for a new one">Forget key</button>
+              </div>
+              {{ end }}
             </div>
             <div class="row is-items-center is-gap-xs">
               <input type="hidden" name="stop_others_shown" value="1">
-              <span class="form-check form-switch mb-0 flex-shrink-0" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
-                <input class="form-check-input" type="checkbox" role="switch" id="insp-stopothers-live" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}>
-                <label class="form-check-label small" for="insp-stopothers-live">Stop others</label>
-              </span>
-              <label class="insp-field-label" for="insp-live-fadeaction">Fade-stop others</label>
+              <label class="switch" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab)."><input type="checkbox" id="insp-stopothers-live" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}><span class="switch-track"><span class="switch-thumb"></span></span></label>
+              <label for="insp-stopothers-live">Stop others</label>
+              <label class="label insp-field-label" for="insp-live-fadeaction">Fade-stop others</label>
               <select id="insp-live-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                 <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                 <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
@@ -95,32 +102,32 @@
               </select>
               <svg class="fade-curve-preview" data-curve-for="insp-live-fadecurve" viewBox="0 0 40 16" width="40" height="16" aria-hidden="true"><path d="M1 15 L39 1"/></svg>
             </div>
-            <div class="text-muted small mt-1">A live page has no length: it stays on the wall until Stop, Panic or another cue replaces it. If the page stops answering, the panic holding image shows until it comes back.</div>
+            <div class="field-hint">A live page has no length: it stays on the wall until Stop, Panic or another cue replaces it. If the page stops answering, the panic holding image shows until it comes back.</div>
           </div>
         </div>
        {{ else if not (hasPrefix .Cue.Mimetype "image/") }}
         <div class="insp-time-row mt-xs">
           <div class="insp-time-fields">
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-in">Trim In</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-in" name="posStart" class="form-control form-control-sm" value="{{ formatTime .Cue.PosStart }}" placeholder="1:05, 1m5s or 65">
+              <label class="label insp-field-label" for="insp-in">Trim In</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-in" name="posStart" class="input input-sm" value="{{ formatTime .Cue.PosStart }}" placeholder="1:05, 1m5s or 65">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-out">Trim Out</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-out" name="posEnd" class="form-control form-control-sm" value="{{ formatTime .Cue.PosEnd }}" placeholder="1:05, 1m5s or 65">
+              <label class="label insp-field-label" for="insp-out">Trim Out</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-out" name="posEnd" class="input input-sm" value="{{ formatTime .Cue.PosEnd }}" placeholder="1:05, 1m5s or 65">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-prewait">PreWait</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the cue starts">
+              <label class="label insp-field-label" for="insp-prewait">PreWait</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-prewait" name="preWait" class="input input-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the cue starts">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-postwait">PostWait</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the cue ends">
+              <label class="label insp-field-label" for="insp-postwait">PostWait</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-postwait" name="postWait" class="input input-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the cue ends">
              </div>
              <div class="insp-time-field">
-               <div class="d-flex is-items-center">
-                 <input class="form-check-input me-1" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
-                 <label class="small" for="insp-loop">Loop</label>
+               <div class="row is-items-center is-gap-2xs">
+                 <input class="checkbox" type="checkbox" id="insp-loop" name="loop" value="true" {{ if .Cue.Loop }}checked{{ end }}>
+                 <label for="insp-loop">Loop</label>
                  <input id="insp-loopcount" name="loopCount" type="text" inputmode="numeric" data-validate="int" data-min="0"
                    class="input" style="width:5em"
                    value="{{ .Cue.LoopCount }}"
@@ -129,25 +136,25 @@
                </div>
              </div>
              <div class="insp-time-field">
-               <div class="d-flex is-items-center">
-                 <input class="form-check-input me-1" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
-                 <label class="small" for="insp-autocontinue">Auto-continue</label>
+               <div class="row is-items-center is-gap-2xs">
+                 <input class="checkbox" type="checkbox" id="insp-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
+                 <label for="insp-autocontinue">Auto-continue</label>
                </div>
              </div>
               <div class="insp-time-field insp-schedule">
                 <!-- checkbox - time - day picker (bottom left) -->
                <input type="hidden" name="schedule_block" value="1">
                <div class="row is-items-center is-gap-xs">
-                 <input class="form-check-input" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
-                 <label class="small" for="insp-schedule">Schedule</label>
+                 <input class="checkbox" type="checkbox" id="insp-schedule" name="schedule_enabled" value="true" {{ if .Cue.ScheduleEnabled }}checked{{ end }}>
+                 <label for="insp-schedule">Schedule</label>
                  <input id="insp-schedule-time" name="schedule_time" type="time" class="input" step="1"
                    value="{{ printf "%02d:%02d:%02d" (div .Cue.ScheduleTimeMs 3600000) (div (mod .Cue.ScheduleTimeMs 3600000) 60000) (div (mod .Cue.ScheduleTimeMs 60000) 1000) }}"
                    aria-label="Time of day, to the second" title="Time of day, to the second">
                  <details class="day-picker" id="insp-schedule-days">
-                   <summary aria-label="Pick the days of week">Days&hellip;</summary>
-                   <div class="day-picker-list">
+                   <summary class="btn btn-sm btn-secondary" aria-label="Pick the days of week">Days&hellip;</summary>
+                   <div class="dropdown day-picker-list">
                      {{ range $i, $d := listDays }}
-                     <label><input type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if or (hasBit $.Cue.ScheduleDays $i) (eq $.Cue.ScheduleDays 0) }}checked{{ end }}> {{ $d }}</label>
+                     <label><input class="checkbox" type="checkbox" name="schedule_day" value="{{ add $i 1 }}" {{ if or (hasBit $.Cue.ScheduleDays $i) (eq $.Cue.ScheduleDays 0) }}checked{{ end }}> {{ $d }}</label>
                      {{ end }}
                    </div>
                  </details>
@@ -155,7 +162,7 @@
              </div>
             </div>
             <div class="insp-time-right">
-             <span class="small text-muted">For Cue Fades see the Video or Audio tab.</span>
+             <span class="field-hint">For Cue Fades see the Video or Audio tab.</span>
              {{ if gt $dur 0.0 }}
              <!-- Trim timeline (§5.5, public/src/trimline.js): the ftl-themes
                waveform. The seek input is the playhead only (inert: clicks
@@ -186,7 +193,7 @@
               </div>
             </div>
             {{ else }}
-            <p class="small text-muted mb-0 insp-no-timeline">Duration unknown &mdash; the trim timeline needs a probed duration (re-run Analyse from the media pool). Trim In/Out can still be typed.</p>
+            <p class="field-hint insp-no-timeline">Duration unknown &mdash; the trim timeline needs a probed duration (re-run Analyse from the media pool). Trim In/Out can still be typed.</p>
             {{ end }}
             <div class="insp-time-buttons">
               {{ if gt $dur 0.0 }}
@@ -207,26 +214,24 @@
               </button>
               {{ end }}
               <div class="insp-rate">
-                <label class="insp-field-label" for="insp-rate">Rate <output id="insp-rate-value">{{ .Cue.Rate }}×</output></label>
+                <label class="label insp-field-label" for="insp-rate">Rate <output id="insp-rate-value">{{ .Cue.Rate }}×</output></label>
                 <div class="row is-items-center is-gap-2xs">
-                  <input id="insp-rate" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" data-default="1" title="Playback speed (pitch preserved). Double-click to reset to 1×">
+                  <input id="insp-rate" class="slider" name="rate" type="range" min="0.25" max="4" step="0.05" value="{{ .Cue.Rate }}" data-default="1" title="Playback speed (pitch preserved). Double-click to reset to 1×">
                   <button class="btn btn-sm btn-secondary" type="button" data-reset-slider="insp-rate" title="Reset the playback rate to 1×" aria-label="Reset rate to 1×">1×</button>
                 </div>
               </div>
              </div>
                <div class="insp-time-checks">
-                <div class="d-flex is-items-center">
-                  <input class="form-check-input me-1" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
-                  <label class="small" for="insp-hold">Hold last frame</label>
+                <div class="row is-items-center is-gap-2xs">
+                  <input class="checkbox" type="checkbox" id="insp-hold" name="hold" value="true" {{ if .Cue.Hold }}checked{{ end }}>
+                  <label for="insp-hold">Hold last frame</label>
                 </div>
                 <div class="row is-items-center is-gap-xs">
                   <input type="hidden" name="stop_others_shown" value="1">
-                  <span class="form-check form-switch mb-0 flex-shrink-0" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
-                    <input class="form-check-input" type="checkbox" role="switch" id="insp-stopothers" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}>
-                    <label class="form-check-label small" for="insp-stopothers">Stop others</label>
-                  </span>
-                  <input class="form-check-input flex-shrink-0" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
-                  <label class="small" for="insp-fadestop">Fade-stop others</label>
+                  <label class="switch" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab)."><input type="checkbox" id="insp-stopothers" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}><span class="switch-track"><span class="switch-thumb"></span></span></label>
+              <label for="insp-stopothers">Stop others</label>
+                  <input class="checkbox" type="checkbox" id="insp-fadestop" name="fadeEnabled" value="true" {{ if gt .Cue.FadeOut 0 }}checked{{ end }}>
+                  <label for="insp-fadestop">Fade-stop others</label>
                   <select id="insp-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                     <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                     <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
@@ -250,36 +255,34 @@
         <div class="insp-time-row mt-xs">
           <div class="insp-time-fields">
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-img-duration">Display duration</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-duration" name="cueDuration" class="form-control form-control-sm" value="{{ if .Cue.CueDuration }}{{ formatTime .Cue.CueDuration }}{{ end }}" placeholder="1:05, 1m5s or 65" title="How long the image stays on screen (blank = indefinitely)">
+              <label class="label insp-field-label" for="insp-img-duration">Display duration</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-duration" name="cueDuration" class="input input-sm" value="{{ if .Cue.CueDuration }}{{ formatTime .Cue.CueDuration }}{{ end }}" placeholder="1:05, 1m5s or 65" title="How long the image stays on screen (blank = indefinitely)">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-img-fadein">Fade In</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-fadein" name="fadeIn" data-fade-in class="form-control form-control-sm" value="{{ formatTime .Cue.FadeIn }}" placeholder="1:05, 1m5s or 65" title="Fade the image in from black (seconds)">
+              <label class="label insp-field-label" for="insp-img-fadein">Fade In</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-fadein" name="fadeIn" data-fade-in class="input input-sm" value="{{ formatTime .Cue.FadeIn }}" placeholder="1:05, 1m5s or 65" title="Fade the image in from black (seconds)">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-img-prewait">PreWait</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-prewait" name="preWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the image shows">
+              <label class="label insp-field-label" for="insp-img-prewait">PreWait</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-prewait" name="preWait" class="input input-sm" value="{{ formatTime .Cue.PreWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long before the image shows">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-img-postwait">PostWait</label>
-              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-postwait" name="postWait" class="form-control form-control-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the image ends">
+              <label class="label insp-field-label" for="insp-img-postwait">PostWait</label>
+              <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-img-postwait" name="postWait" class="input input-sm" value="{{ formatTime .Cue.PostWait }}" placeholder="1:05, 1m5s or 65" title="Wait this long after the image ends">
             </div>
           </div>
           <div class="insp-time-right">
             <div class="insp-time-checks">
-              <div class="d-flex is-items-center">
-                <input class="form-check-input me-1" type="checkbox" id="insp-img-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
-                <label class="small" for="insp-img-autocontinue">Auto-continue</label>
+              <div class="row is-items-center is-gap-2xs">
+                <input class="checkbox" type="checkbox" id="insp-img-autocontinue" name="autoContinue" value="true" {{ if .Cue.AutoContinue }}checked{{ end }}>
+                <label for="insp-img-autocontinue">Auto-continue</label>
               </div>
             </div>
             <div class="row is-items-center is-gap-xs">
               <input type="hidden" name="stop_others_shown" value="1">
-              <span class="form-check form-switch mb-0 flex-shrink-0" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab).">
-                <input class="form-check-input" type="checkbox" role="switch" id="insp-stopothers-img" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}>
-                <label class="form-check-label small" for="insp-stopothers-img">Stop others</label>
-              </span>
-              <label class="insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
+              <label class="switch" title="On: firing this cue stops every running cue (fading over the time set here). Off: they keep running and this cue joins the stack at its Layer (Video tab)."><input type="checkbox" id="insp-stopothers-img" name="stop_others" value="1" {{ if .Cue.StopOthers }}checked{{ end }}><span class="switch-track"><span class="switch-thumb"></span></span></label>
+              <label for="insp-stopothers-img">Stop others</label>
+              <label class="label insp-field-label" for="insp-img-fadeaction">Fade-stop others</label>
               <select id="insp-img-fadeaction" name="fadeAction" class="select" style="width:auto" title="Which other cues fade out when this one starts">
                 <option value="peers" {{ if eq .Cue.FadeAction "peers" }}selected{{ end }}>Peers</option>
                 <option value="list" {{ if eq .Cue.FadeAction "list" }}selected{{ end }}>List/Cart</option>
@@ -296,7 +299,7 @@
               </select>
               <svg class="fade-curve-preview" data-curve-for="insp-img-fadecurve" viewBox="0 0 40 16" width="40" height="16" aria-hidden="true"><path d="M1 15 L39 1"/></svg>
             </div>
-            <div class="text-muted small mt-1">Still images don't trim — duration ends the display{{ if .Cue.AutoContinue }} and continues{{ end }}.</div>
+            <div class="field-hint">Still images don't trim — duration ends the display{{ if .Cue.AutoContinue }} and continues{{ end }}.</div>
           </div>
         </div>
       {{ end }}
@@ -305,9 +308,9 @@
       <div class="inspector-tabpane" data-tabpane="audio">
         <div class="insp-audio-wrap">
           <div class="insp-volume">
-            <label class="label small mb-1" for="insp-volume">Volume</label>
+            <label class="label" for="insp-volume">Volume</label>
             <input id="insp-volume" name="volume" type="range" min="-60" max="12" step="1"
-              value="{{ .Cue.Volume }}" class="insp-volume-slider"
+              value="{{ .Cue.Volume }}" class="slider is-vertical"
               title="Per-cue master gain (dB); 0dB is the default. Double-click to reset to 0 dB"
               data-default="0" data-volume-inspector aria-label="Volume (dB)">
             <div class="row is-items-center is-gap-2xs">
@@ -317,34 +320,35 @@
           </div>
           <div class="insp-audio-settings">
             <div class="insp-time-field insp-audio-device">
-              <label class="insp-field-label" for="insp-audio-device">Output device</label>
+              <label class="label insp-field-label" for="insp-audio-device">Output device</label>
               <select id="insp-audio-device" class="select" style="width:auto" data-audio-device="{{ .AudioDevice }}"
                 title="System-wide output, the same setting as Settings › Audio; applies from the next firing">
                 <option value="{{ .AudioDevice }}" selected>{{ if .AudioDevice }}{{ .AudioDevice }}{{ else }}HDMI embedded (default){{ end }}</option>
               </select>
             </div>
             <div class="insp-time-field insp-fadein">
-              <label class="insp-field-label" for="insp-audio-fadein">Fade In</label>
+              <label class="label insp-field-label" for="insp-audio-fadein">Fade In</label>
               <input data-validate="time" inputmode="decimal" autocomplete="off" id="insp-audio-fadein" name="fadeIn" data-fade-in class="input"
                 value="{{ formatTime .Cue.FadeIn }}" placeholder="1:05, 1m5s or 65" title="Fade audio and video in (seconds)">
             </div>
             <div class="insp-time-field insp-fadeout">
-              <label class="insp-field-label" for="insp-audio-fadeout">Fade Out</label>
+              <label class="label insp-field-label" for="insp-audio-fadeout">Fade Out</label>
               <input id="insp-audio-fadeout" data-fade-out class="input"
                 value="{{ formatTime .Cue.FadeOut }}" placeholder="hh:mm:ss.ms" title="Fade audio and video out after playback (seconds)">
             </div>
-            <label class="insp-field-label" for="insp-balance">Balance / Pan <output id="insp-balance-value">{{ .Cue.Balance }}</output></label>
+            <label class="label insp-field-label" for="insp-balance">Balance / Pan <output id="insp-balance-value">{{ .Cue.Balance }}</output></label>
             <div class="row is-items-center is-gap-xs">
-              <span class="small">L</span>
+              <span>L</span>
               <input id="insp-balance" name="balance" type="range" min="-1" max="1" step="0.05" value="{{ .Cue.Balance }}"
-                class="ctp-slider ctp-slider-pan" data-default="0"
+                class="slider" data-default="0"
                 title="Left (−1) / Centre (0) / Right (+1); 0 is centred. Double-click to reset to centre">
-              <span class="small">R</span>
+              <span>R</span>
             </div>
-            <label class="small mute-toggle" for="insp-mute">
-              <input id="insp-mute" name="mute" type="checkbox" value="true" {{ if .Cue.Mute }}checked{{ end }}> Mute
+            <label class="toggle-btn is-danger" for="insp-mute">
+              <input id="insp-mute" name="mute" type="checkbox" value="true" {{ if .Cue.Mute }}checked{{ end }}>
+              <span class="toggle-btn-off">Mute</span><span class="toggle-btn-on">Muted</span>
             </label>
-            <span class="small text-muted">EBU R128 gain: {{ printf "%+.1f" .Cue.LoudnessGain }} dB</span>
+            <span class="field-hint">EBU R128 gain: {{ printf "%+.1f" .Cue.LoudnessGain }} dB</span>
           </div>
         </div>
       </div>
@@ -352,19 +356,19 @@
       <div class="inspector-tabpane" data-tabpane="video">
         {{ if and (not (hasPrefix .Cue.Mimetype "image/")) (ne .Cue.SourceKind "endpoint") }}
         <div class="insp-time-field insp-fadein mt-xs">
-          <label class="insp-field-label" for="insp-video-fadein">Fade In</label>
+          <label class="label insp-field-label" for="insp-video-fadein">Fade In</label>
           <input id="insp-video-fadein" data-fade-in data-validate="time" inputmode="decimal" autocomplete="off" class="input"
             value="{{ formatTime .Cue.FadeIn }}" placeholder="hh:mm:ss.ms" title="Fade audio and video in from silence and black (seconds)">
         </div>
         <div class="insp-time-field insp-fadeout mt-xs">
-          <label class="insp-field-label" for="insp-video-fadeout">Fade Out</label>
+          <label class="label insp-field-label" for="insp-video-fadeout">Fade Out</label>
           <input id="insp-video-fadeout" data-fade-out data-validate="time" inputmode="decimal" autocomplete="off" class="input"
             value="{{ formatTime .Cue.FadeOut }}" placeholder="hh:mm:ss.ms" title="Fade audio and video out after playback (seconds)">
         </div>
         {{ end }}
         <div class="d-flex is-items-end is-gap-xs is-wrap mt-xs">
           <div class="insp-time-field">
-            <label class="insp-field-label" for="insp-fit">Frame fit</label>
+            <label class="label insp-field-label" for="insp-fit">Frame fit</label>
             <select id="insp-fit" name="fit_mode" class="select" style="width:auto" title="How the picture fills its box (the whole display unless Position & size is set)">
               <option value="fit" {{ if or (eq .Cue.FitMode "fit") (eq .Cue.FitMode "") }}selected{{ end }} title="Whole picture visible, aspect kept (letterbox)">Fit</option>
               <option value="fill-width" {{ if eq .Cue.FitMode "fill-width" }}selected{{ end }} title="As wide as the box; top and bottom overflow is cropped">Fill width</option>
@@ -374,7 +378,7 @@
             </select>
           </div>
           <div class="insp-time-field">
-            <label class="insp-field-label" for="insp-rotation">Rotate</label>
+            <label class="label insp-field-label" for="insp-rotation">Rotate</label>
             <select id="insp-rotation" name="rotation" class="select" style="width:auto" title="Rotate the frame clockwise">
               <option value="0" {{ if eq .Cue.Rotation 0 }}selected{{ end }}>0&deg;</option>
               <option value="90" {{ if eq .Cue.Rotation 90 }}selected{{ end }}>90&deg;</option>
@@ -383,7 +387,7 @@
             </select>
           </div>
           <div class="insp-time-field">
-            <label class="insp-field-label" for="insp-flip">Flip / Mirror</label>
+            <label class="label insp-field-label" for="insp-flip">Flip / Mirror</label>
             <select id="insp-flip" name="flip" class="select" style="width:auto" title="Mirror the frame">
               <option value="none" {{ if ne .Cue.Flip "h" }}{{ if ne .Cue.Flip "v" }}selected{{ end }}{{ end }}>None</option>
               <option value="h" {{ if eq .Cue.Flip "h" }}selected{{ end }}>Mirror &#8596;</option>
@@ -391,14 +395,14 @@
             </select>
           </div>
           <div class="insp-time-field">
-            <label class="insp-field-label" for="insp-opacity">Opacity</label>
+            <label class="label insp-field-label" for="insp-opacity">Opacity</label>
             <input id="insp-opacity" name="opacity" class="input" style="width:5em" type="text" inputmode="decimal"
               data-validate="number" data-min="0" data-max="100" autocomplete="off"
               value="{{ .Cue.Opacity }}" title="How solid the picture is on the wall: 100 = opaque, 0 = invisible (%)">
           </div>
           <div class="insp-layer d-flex is-items-end is-gap-xs" title="Where this cue's picture goes among the running cues when Stop others (Time tab) is off">
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-layer">Layer</label>
+              <label class="label insp-field-label" for="insp-layer">Layer</label>
               <select id="insp-layer" name="layer" class="select" style="width:auto">
                 <option value="top" {{ if or (eq .Cue.Layer "top") (eq .Cue.Layer "") }}selected{{ end }} title="Above every running cue">Top</option>
                 <option value="bottom" {{ if eq .Cue.Layer "bottom" }}selected{{ end }} title="Beneath every running cue">Bottom</option>
@@ -406,50 +410,68 @@
               </select>
             </div>
             <div class="insp-time-field insp-layer-under">
-              <label class="insp-field-label" for="insp-layer-under">Under cue no.</label>
+              <label class="label insp-field-label" for="insp-layer-under">Under cue no.</label>
               <input id="insp-layer-under" name="layer_under" class="input" style="width:5em" autocomplete="off"
                 value="{{ .Cue.LayerUnderNum }}" placeholder="e.g. 3" title="The cue number whose layer this cue goes beneath">
             </div>
           </div>
         </div>
         <fieldset class="insp-geometry mt-xs" title="Where the picture sits on the wall. Blank = fill the display. Pixels (960) or a percentage of the display (50%).">
-          <legend class="insp-field-label">Position &amp; size <span class="text-muted small">(px or %; blank = full screen)</span></legend>
+          <legend class="label insp-field-label">Position &amp; size <span class="field-hint">(px or %; blank = full screen)</span></legend>
           <div class="d-flex is-items-end is-gap-xs is-wrap">
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-geom-x">X</label>
+              <label class="label insp-field-label" for="insp-geom-x">X</label>
               <input id="insp-geom-x" name="geom_x" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.GeomX }}" placeholder="0">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-geom-y">Y</label>
+              <label class="label insp-field-label" for="insp-geom-y">Y</label>
               <input id="insp-geom-y" name="geom_y" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.GeomY }}" placeholder="0">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-geom-w">Width</label>
+              <label class="label insp-field-label" for="insp-geom-w">Width</label>
               <input id="insp-geom-w" name="geom_w" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.GeomW }}" placeholder="100%">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-geom-h">Height</label>
+              <label class="label insp-field-label" for="insp-geom-h">Height</label>
               <input id="insp-geom-h" name="geom_h" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.GeomH }}" placeholder="100%">
             </div>
           </div>
         </fieldset>
+        {{ $ah := index (alignParts .Cue.Align) 0 }}{{ $av := index (alignParts .Cue.Align) 1 }}
+        <fieldset class="insp-geometry mt-xs" title="Put the picture against an edge of the screen: it moves within its box, and a box smaller than the screen (X/Y blank) moves too.">
+          <legend class="label insp-field-label">Align</legend>
+          <div class="d-flex is-items-end is-gap-xs is-wrap">
+            <div class="segmented" role="radiogroup" aria-label="Horizontal alignment">
+              <label class="segmented-item" title="No horizontal alignment: the box sits at X, the picture centred in it"><input type="radio" name="align_h" value=""{{ if eq $ah "" }} checked{{ end }}>None</label>
+              <label class="segmented-item"><input type="radio" name="align_h" value="left"{{ if eq $ah "left" }} checked{{ end }}>Left</label>
+              <label class="segmented-item"><input type="radio" name="align_h" value="center"{{ if eq $ah "center" }} checked{{ end }}>H-centre</label>
+              <label class="segmented-item"><input type="radio" name="align_h" value="right"{{ if eq $ah "right" }} checked{{ end }}>Right</label>
+            </div>
+            <div class="segmented" role="radiogroup" aria-label="Vertical alignment">
+              <label class="segmented-item" title="No vertical alignment: the box sits at Y, the picture centred in it"><input type="radio" name="align_v" value=""{{ if eq $av "" }} checked{{ end }}>None</label>
+              <label class="segmented-item"><input type="radio" name="align_v" value="top"{{ if eq $av "top" }} checked{{ end }}>Top</label>
+              <label class="segmented-item"><input type="radio" name="align_v" value="middle"{{ if eq $av "middle" }} checked{{ end }}>V-centre</label>
+              <label class="segmented-item"><input type="radio" name="align_v" value="bottom"{{ if eq $av "bottom" }} checked{{ end }}>Bottom</label>
+            </div>
+          </div>
+        </fieldset>
         <fieldset class="insp-geometry mt-xs" title="Trim the source picture's edges before it is fitted. Pixels of the source (120) or a percentage of its width/height (10%).">
-          <legend class="insp-field-label">Crop <span class="text-muted small">(source px or %)</span></legend>
+          <legend class="label insp-field-label">Crop <span class="field-hint">(source px or %)</span></legend>
           <div class="d-flex is-items-end is-gap-xs is-wrap">
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-crop-l">Left</label>
+              <label class="label insp-field-label" for="insp-crop-l">Left</label>
               <input id="insp-crop-l" name="crop_l" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.CropL }}" placeholder="0">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-crop-r">Right</label>
+              <label class="label insp-field-label" for="insp-crop-r">Right</label>
               <input id="insp-crop-r" name="crop_r" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.CropR }}" placeholder="0">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-crop-t">Top</label>
+              <label class="label insp-field-label" for="insp-crop-t">Top</label>
               <input id="insp-crop-t" name="crop_t" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.CropT }}" placeholder="0">
             </div>
             <div class="insp-time-field">
-              <label class="insp-field-label" for="insp-crop-b">Bottom</label>
+              <label class="label insp-field-label" for="insp-crop-b">Bottom</label>
               <input id="insp-crop-b" name="crop_b" class="input" style="width:5.5em" data-validate="geom" autocomplete="off" value="{{ .Cue.CropB }}" placeholder="0">
             </div>
           </div>
@@ -459,28 +481,22 @@
         {{ if .MediaRows }}
         <div class="media-info-grid mt-xs" aria-label="Media information">
           {{ range .MediaRows }}
-          <span class="media-info-label small text-muted">{{ .Label }}</span>
-          <span class="media-info-value small font-monospace">{{ .Value }}</span>
+          <span class="media-info-label field-hint">{{ .Label }}</span>
+          <span class="media-info-value mono{{ if eq .Label "Playback warning" }} media-info-warning{{ end }}">{{ .Value }}</span>
           {{ end }}
         </div>
         {{ else }}
-        <p class="text-muted small mb-0">No media information available - re-run analysis from the media pool.</p>
+        <p class="field-hint">No media information available - re-run analysis from the media pool.</p>
         {{ end }}
       </div>
       <div class="inspector-tabpane" data-tabpane="advanced">
-        <label class="label small mb-1 d-block" for="insp-swatches">Colour</label>
-        <div class="insp-swatches" id="insp-swatches" role="radiogroup" aria-label="Cue colour">
-          <label class="insp-swatch insp-swatch-none" title="None">
-            <input type="radio" name="color" value="" aria-label="No colour" {{ if not $.Cue.Color }}checked{{ end }}>
-            <span class="insp-swatch-fill"></span>
-          </label>
+        <fieldset class="swatches" id="insp-swatches">
+          <legend class="label">Colour</legend>
+          <label class="swatch swatch-none" style="--swatch: transparent" title="No colour"><input type="radio" name="color" value="" {{ if not $.Cue.Color }}checked{{ end }}><span class="visually-hidden">No colour</span></label>
           {{ range .Palette }}
-          <label class="insp-swatch" style="--swatch: {{ .Hex }}" title="{{ .Name }}">
-            <input type="radio" name="color" value="{{ .Hex }}" aria-label="{{ .Name }}" {{ if eq $.Cue.Color .Hex }}checked{{ end }}>
-            <span class="insp-swatch-fill"></span>
-          </label>
+          <label class="swatch" style="--swatch: {{ .Hex }}" title="{{ .Name }}"><input type="radio" name="color" value="{{ .Hex }}" {{ if eq $.Cue.Color .Hex }}checked{{ end }}><span class="visually-hidden">{{ .Name }}</span></label>
           {{ end }}
-        </div>
+        </fieldset>
       </div>
     </div>
   </form>

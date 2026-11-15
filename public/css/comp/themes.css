@@ -17,10 +17,10 @@
   --ctp-success: var(--success, #42ddb2);
   --ctp-radius: var(--radius, 0.2rem);
   --ctp-font: var(--font, "IBM Plex Mono", "SFMono-Regular", Consolas, monospace);
-  /* Console hairlines recede; neon accents pop. Themes that don't define
-     these fall back to --ctp-border / the flare default below. */
+  /* Console hairlines recede. The second highlight (drop lines, progress
+     fills, the transport focus ring) is the theme's second accent. */
   --ctp-hairline: var(--hairline, color-mix(in srgb, var(--ctp-border) 40%, transparent));
-  --ctp-flare: var(--flare, #d85cff);
+  --ctp-flare: var(--accent-2, var(--accent, #d85cff));
 }
 
 body.app-body,
@@ -28,14 +28,6 @@ body.upload-body {
   background: var(--ctp-bg);
   color: var(--ctp-text);
   font-family: var(--ctp-font);
-}
-
-/* No !important: these must stay overridable by a shared theme's
-   .app-bar when one is linked (Bootstrap's bg-* utility, which these
-   !importants used to outrank, is no longer on the topbar markup). */
-.navbar {
-  background: var(--app-bar-bg, var(--ctp-surface));
-  border-bottom: var(--app-bar-rule-width, 1px) solid var(--app-bar-rule, var(--ctp-border));
 }
 
 .cutepi-logo {
@@ -49,246 +41,21 @@ body.upload-body {
   background-color: var(--ctp-surface);
   border-color: var(--ctp-border) !important;
 }
-.card { background-color: var(--card-bg, var(--ctp-surface)); }
-.modal-content { background-color: var(--modal-bg, var(--ctp-surface)); }
 
-/* Scrollbars: slim console rails. Transparent track (the pane surface shows
-   through — no boxed gutter), translucent thumb that brightens toward the
-   accent on hover. Firefox gets the two-line thin form. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--ctp-border) 75%, transparent) transparent;
-}
-::-webkit-scrollbar {
-  width: 0.4rem;
-  height: 0.4rem;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--ctp-border) 75%, transparent);
-  border-radius: 999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--ctp-accent);
-}
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-/* Console readout headers: pane + column titles set as tracked uppercase
-   micro-labels in the muted tone — structure, not decoration. */
-#mediapool h5,
-#activecues h5,
-#cuesheet thead th,
-.inspector-header h6 {
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
+/* Pane titles (Media pool, Active cues, Cue inspector): tracked uppercase
+   micro-labels in the theme's label language. */
+.pane-title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: var(--label-transform, uppercase);
+  letter-spacing: var(--label-tracking, 0.09em);
   color: var(--ctp-muted);
 }
+.pane-head { margin-bottom: 0.5rem; gap: 0.5rem; }
 
-/* Focus rings pick up the accent instead of Bootstrap's default white. */
-:focus-visible {
-  outline-color: var(--ctp-accent, #2fd6ff);
-}
-
-/* Dropdowns ------------------------------------------------------------- */
-.dropdown-menu {
-  max-width: min(22rem, calc(100vw - 1rem));
-  max-height: min(70vh, 28rem);
-  overflow-y: auto;
-  background-color: var(--ctp-surface-2);
-  border-color: var(--ctp-border);
-  z-index: 1080;
-}
-
-.dropdown-item {
-  color: var(--ctp-text);
-}
-
-.dropdown-item:hover,
-.dropdown-item:focus {
-  color: var(--ctp-text);
-  background-color: var(--ctp-accent);
-}
-
-/* Progress indications (YouTube downloader) ----------------------------- */
-.progress {
-  background-color: var(--ctp-surface-2);
-  border: 1px solid var(--ctp-border);
-  border-radius: var(--ctp-radius);
-}
-.progress-bar {
-  background: var(--ctp-accent);
-  border-radius: var(--ctp-radius);
-}
-
-/* Form controls --------------------------------------------------------- */
-.form-control,
-.form-select {
-  color: var(--ctp-text);
-  background-color: var(--ctp-surface-2);
-  border-color: var(--ctp-border);
-}
-
-.form-control:focus,
-.form-select:focus {
-  color: var(--ctp-text);
-  background-color: var(--ctp-surface-2);
-  border-color: var(--ctp-accent-2);
-  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--ctp-accent-2) 25%, transparent);
-}
-
-.form-check-input {
-  background-color: var(--ctp-surface-2);
-  border-color: var(--ctp-border);
-}
-.form-check-input:checked {
-  background-color: var(--ctp-accent);
-  border-color: var(--ctp-accent);
-}
-.form-check-input:focus {
-  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--ctp-accent-2) 25%, transparent);
-  border-color: var(--ctp-accent-2);
-}
-
-html[data-theme-id^="app:"] .btn {
-  border-radius: var(--ctp-radius);
-}
-
-html[data-theme-id^="app:"] .btn-primary {
-  --bs-btn-bg: var(--ctp-accent);
-  --bs-btn-border-color: var(--ctp-accent);
-  --bs-btn-hover-bg: var(--ctp-accent-2);
-  --bs-btn-hover-border-color: var(--ctp-accent-2);
-}
-
-html[data-theme-id^="app:"] .btn-outline-primary {
-  --bs-btn-color: var(--ctp-accent-2);
-  --bs-btn-border-color: var(--ctp-accent-2);
-  --bs-btn-hover-bg: var(--ctp-accent-2);
-  --bs-btn-hover-border-color: var(--ctp-accent-2);
-}
-
-html[data-theme-id^="app:"] .btn-danger,
-html[data-theme-id^="app:"] .btn-outline-danger {
-  --bs-btn-bg: var(--ctp-danger);
-  --bs-btn-border-color: var(--ctp-danger);
-  --bs-btn-color: #fff;
-  --bs-btn-hover-bg: var(--ctp-accent);
-  --bs-btn-hover-border-color: var(--ctp-accent);
-}
-
-html[data-theme-id^="app:"] .btn-success {
-  --bs-btn-bg: var(--ctp-success);
-  --bs-btn-border-color: var(--ctp-success);
-  --bs-btn-color: #07131a;
-}
-
-html[data-theme-id^="app:"] .btn-warning {
-  --bs-btn-bg: var(--ctp-accent-2);
-  --bs-btn-border-color: var(--ctp-accent-2);
-  --bs-btn-color: #10101a;
-}
-
-/* Brand exception: the YouTube download button keeps YouTube red in every
-   theme. Doubled class outranks the per-theme .btn-danger overrides; shape
-   and type still follow the theme, only the brand colour is locked. */
-html[data-theme] .btn.btn-youtube {
-  background-color: #ff0000;
-  border-color: #ff0000;
-  color: #fff;
-}
-html[data-theme] .btn.btn-youtube:hover {
-  background-color: #cc0000;
-  border-color: #cc0000;
-  color: #fff;
-}
-
-/* Tables ---------------------------------------------------------------- */
-.table-dark {
-  --bs-table-bg: var(--ctp-surface);
-  --bs-table-color: var(--ctp-text);
-  --bs-table-striped-bg: var(--ctp-surface-2);
-  --bs-table-striped-color: var(--ctp-text);
-  --bs-table-hover-bg: color-mix(in srgb, var(--ctp-accent-2) 18%, var(--ctp-surface));
-  --bs-table-hover-color: var(--ctp-text);
-}
-
-.table-warning {
-  --bs-table-bg: color-mix(in srgb, var(--ctp-accent) 35%, var(--ctp-surface));
-  --bs-table-color: var(--ctp-text);
-}
-
-.media-thumbnail,
-.cuesheet-blank-rows {
+.media-thumbnail {
   border-color: var(--ctp-hairline, var(--ctp-border)) !important;
-}
-
-/* Transport / widget controls shared by all themes ---------------------- */
-.ctp-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 0.4rem;
-  border-radius: var(--ctp-radius);
-  background: var(--ctp-surface-2);
-  border: 1px solid var(--ctp-border);
-  cursor: pointer;
-}
-.ctp-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 1rem;
-  height: 1rem;
-  border-radius: 50%;
-  background: var(--ctp-accent);
-  border: 2px solid var(--ctp-bg);
-  box-shadow: 0 0 0.35rem color-mix(in srgb, var(--ctp-accent) 70%, transparent);
-}
-.ctp-slider::-moz-range-thumb {
-  width: 1rem;
-  height: 1rem;
-  border-radius: 50%;
-  background: var(--ctp-accent);
-  border: 2px solid var(--ctp-bg);
-  box-shadow: 0 0 0.35rem color-mix(in srgb, var(--ctp-accent) 70%, transparent);
-}
-
-/* Centre-origin pan: a hairline track with tick at 0 and the bare dot floating
-   on it — no directional fill, because 0 is the middle (−1 … +1), not an edge.
-   The tick paints on the input's own background; the track pseudos are the
-   hairline. Double-click resets to 0 (see ui.js, same pattern as the rate). */
-.ctp-slider-pan {
-  height: 1rem;
-  width: 8rem;
-  background: linear-gradient(var(--ctp-border), var(--ctp-border)) center/2px 0.6rem no-repeat;
-  border: none;
-}
-.ctp-slider-pan::-webkit-slider-runnable-track {
-  height: 2px;
-  background: color-mix(in srgb, var(--ctp-surface-2) 70%, var(--ctp-border));
-  border: none;
-}
-.ctp-slider-pan::-webkit-slider-thumb {
-  margin-top: calc((2px - 1rem) / 2);
-}
-.ctp-slider-pan::-moz-range-track {
-  height: 2px;
-  border: none;
-  background: color-mix(in srgb, var(--ctp-surface-2) 70%, var(--ctp-border));
-}
-.ctp-slider-pan::-moz-range-progress {
-  background: transparent;
-}
-
-.ctp-scrubber {
-  width: 14rem;
-  max-width: 30vw;
-}
-
-.ctp-volume {
-  width: 5.5rem;
 }
 
 /* Fixed width for the live rate/balance readouts: "1×" vs "0.25×" otherwise
@@ -306,52 +73,11 @@ html[data-theme] .btn.btn-youtube:hover {
   gap: 0.15rem;
   padding-bottom: 0.15rem;
 }
-/* Vertical dB volume slider: lower values at the bottom. thunb/track use the
-   accent colour. */
-.insp-volume-slider {
-  width: 1.5rem;
-  height: 4.5rem;
-  writing-mode: vertical-lr;
-  direction: rtl;
-  accent-color: var(--ctp-accent);
-  padding: 0;
-  margin: 0;
-}
 .insp-volume-db {
   width: 4.5em;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-/* Mute renders as a small toggle button: the checkbox stays in the form
-   (instant-change save keeps working untouched) but hides visually, and
-   the label carries the button chrome — neutral when live, danger-red
-   when muted so the state reads at a glance. */
-.mute-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35em;
-  padding: 0.2em 0.7em;
-  border: 1px solid var(--ctp-border);
-  border-radius: var(--ctp-radius, 0.2rem);
-  cursor: pointer;
-  user-select: none;
-}
-.mute-toggle input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-.mute-toggle:has(input:checked) {
-  background: var(--ctp-danger);
-  border-color: var(--ctp-danger);
-  color: #fff;
-  font-weight: 700;
-}
-.mute-toggle:has(input:focus-visible) {
-  outline: 2px solid var(--ctp-accent);
-  outline-offset: 1px;
-}
-
 /* Fade-curve glyph beside each curve picker (§12.7), drawn by the
    inspector script from the same envelope the engine ramps. */
 .fade-curve-preview {
@@ -364,63 +90,6 @@ html[data-theme] .btn.btn-youtube:hover {
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-/* Colour swatch chips: 12 named palette dots + "none". A radio group keeps
-   keyboard/arrow navigation and the form's instant-change save working. */
-.insp-swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-.insp-swatch {
-  position: relative;
-  display: inline-flex;
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 50%;
-  cursor: pointer;
-}
-.insp-swatch input {
-  position: absolute;
-  opacity: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  cursor: pointer;
-}
-.insp-swatch-fill {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--swatch, #6c757d) 60%, #fff),
-                    var(--swatch, #6c757d));
-  border: 2px solid var(--ctp-border);
-  pointer-events: none;
-}
-.insp-swatch:hover .insp-swatch-fill {
-  border-color: var(--ctp-accent);
-}
-.insp-swatch input:focus-visible ~ .insp-swatch-fill {
-  outline: 2px solid var(--ctp-accent);
-  outline-offset: 2px;
-}
-.insp-swatch input:checked + .insp-swatch-fill {
-  border-color: var(--ctp-text);
-  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--ctp-accent) 55%, transparent);
-}
-.insp-swatch-none .insp-swatch-fill {
-  background: transparent;
-  border-color: var(--ctp-muted);
-  position: relative;
-}
-.insp-swatch-none .insp-swatch-fill::after {
-  content: "";
-  position: absolute;
-  inset: 22%;
-  border-bottom: 2px solid var(--ctp-muted);
-  transform: rotate(-45deg);
 }
 
 /* Trim timeline (§5.5, public/src/trimline.js): the ftl-themes .waveform
@@ -486,11 +155,6 @@ html[data-theme] .btn.btn-youtube:hover {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ctp-accent) 45%, transparent);
   cursor: zoom-in;
 }
-/* Zoom state lives on the button's aria-pressed attribute. */
-#trim-zoom[aria-pressed="true"] {
-  color: var(--ctp-accent);
-  border-color: var(--ctp-accent);
-}
 
 /* Video tab (§5.5): compact fade fields — full-width inputs read as broken
    next to the other tabs' forms. */
@@ -504,31 +168,3 @@ html[data-theme] .btn.btn-youtube:hover {
   height: 1.4rem;
 }
 
-/* Button bridge (transitional): the markup carries both the bootstrap class
-   and the ftl variant while Bootstrap CSS is still in the cascade. Bootstrap's
-   unlayered `.btn` base (transparent bg, hairline border) outranks the
-   library's layered `.btn` rules, so the ftl token vocabulary never
-   reaches the paint. Own the same tokens unlayered here — under a ftl bundle
-   these resolve to the theme's palette; under an app: theme they hit the
-   achromatic fallbacks. Drop together with the Bootstrap cascade. */
-.btn[class*="btn"] {
-  background: var(--btn-bg, var(--surface-2));
-  color: var(--btn-fg, var(--text));
-  border: var(--btn-border-width, 1px) solid var(--btn-border, var(--border));
-  border-radius: var(--btn-radius, var(--radius));
-  padding: var(--btn-padding, calc(0.5em * var(--density, 1)) calc(1.1em * var(--density, 1)));
-  font-weight: var(--btn-weight, 400);
-  letter-spacing: var(--btn-tracking, normal);
-}
-.btn[class*="btn"]:hover {
-  background: var(--btn-bg-hover, color-mix(in srgb, var(--btn-bg, var(--surface-2)) 82%, var(--text)));
-}
-.btn[class*="btn-primary"] { --btn-bg: var(--accent); --btn-fg: var(--on-accent, var(--bg, #000)); --btn-border: var(--accent); --btn-weight: 600; }
-.btn[class*="btn-secondary"] { --btn-bg: transparent; --btn-fg: var(--accent); }
-.btn[class*="btn-danger"] { --btn-bg: var(--danger); --btn-fg: var(--on-danger, #fff); }
-.btn[class*="btn-success"] { --btn-bg: var(--success); --btn-fg: var(--on-success, #06231a); }
-.btn[class*="btn-ghost"] { --btn-bg: transparent; --btn-fg: var(--accent); --btn-border: transparent; }
-.btn[class*="btn-sm"] { padding: 0.3em 0.7em; font-size: 0.9em; }
-
-/* Same bridge for the alert/table/field hybrids the templates carry until
-   the component cutover finishes. */

@@ -25,13 +25,10 @@ var (
 	scheduleFiredDay = ""
 )
 
-// RunScheduler starts the background scheduler that fires enabled schedules
-// when their time-of-day arrives, regardless of what else is playing. The
-// tick is 200ms and the due window 1s: a cue fires within ~a tick of its
-// scheduled second (multi-node sync-fire needs this; a 30s tick can never
-// hit 14:31:00). Firing is idempotent per cue+day via scheduleFired.
-// ponytail: decision-accurate, not output-accurate — pipeline build takes
-// ~100s of ms, so frame-exact multi-node output needs timed pre-roll (v2).
+// RunScheduler arms enabled schedules before their time-of-day arrives.
+// Near a schedule it checks every 200ms; a one-second look-ahead allows
+// preroll and firing timedStartLead early for a shared presentation instant.
+// Firing is idempotent per cue+day via scheduleFired.
 //
 // Blocks forever: run it with `go RunScheduler()`. (It used to spawn its
 // loop and return, and the deferred ticker.Stop() then fired immediately —
@@ -104,12 +101,9 @@ func runScheduler(stop <-chan struct{}) {
 	}
 }
 
-// scheduleLead and scheduleTrail bound the stretch around a scheduled time
-// in which the scheduler queries due cues every tick. GetScheduledCues
-// compares whole seconds, so a cue only becomes due once the clock reaches
-// its second, and stays due for 1s; by then NextSchedule (refreshed every
-// second) may already point at the following schedule. The trail keeps the
-// ticks coming through that whole due window.
+// scheduleLead and scheduleTrail bound the interval around a scheduled
+// time in which due cues are queried every tick. The trail covers a missed
+// tick after NextSchedule has already moved on to the following schedule.
 const (
 	scheduleLead  = 2 * time.Second
 	scheduleTrail = 1500 * time.Millisecond
@@ -131,6 +125,17 @@ func schedulerStalled(prev, now time.Time) {
 		logs.PrintfWarn(logs.SCHStalled, "scheduler stalled for %v; checking for missed cues: %v", gap, err)
 		return
 	}
+	// The query now includes a look-ahead. Only expire cues at or before
+	// the lower edge of the current tick's recovery window.
+	queryDay := now.Add(-time.Second)
+	recoveryFrom := queryDay.Truncate(time.Second)
+	missed := rows[:0]
+	for _, cue := range rows {
+		if !scheduledAt(queryDay, cue.ScheduleMs).After(recoveryFrom) {
+			missed = append(missed, cue)
+		}
+	}
+	rows = missed
 	logs.PrintfWarn(logs.SCHStalled, "scheduler stalled for %v; %d scheduled cue(s) fell due in the gap", gap, len(rows))
 	day := now.Format("2006-01-02")
 	for _, cue := range rows {
@@ -165,7 +170,7 @@ func schedulerTick(now time.Time) {
 	schedulerTickSince(now.Add(-time.Second), now)
 }
 
-// schedulerTickSince arms every cue due after from, up to now.
+// schedulerTickSince arms every cue in the due query's look-ahead window.
 func schedulerTickSince(from, now time.Time) {
 	rows, err := ctp.GetScheduledCuesSince(from, now)
 	if err != nil {
@@ -222,8 +227,20 @@ func armScheduled(cue ctp.ScheduleInfo, key string, at time.Time) {
 			logs.PrintfWarn(logs.SCHPrewarm, "scheduled cue %d prewarm (it will load cold): %v", cue.CuePos, warmErr)
 		}
 	})
-	time.AfterFunc(d, safe(func() { fireScheduled(cue, key, at, opts, true) }))
+	// Timed start (DESIGN §6.8c): fire scheduleLead early with the start
+	// instant armed, so the prewarmed cue's first frame lands on the second
+	// itself instead of a build-and-swap later (and every node of a
+	// multi-Pi show on the same instant).
+	d = max(0, d-timedStartLead)
+	time.AfterFunc(d, safe(func() {
+		gsp.StartAt(at)
+		fireScheduled(cue, key, at, opts, true)
+	}))
 }
+
+// timedStartLead is how early a scheduled cue is fired with its start
+// instant armed: enough for a warm swap and the PLAYING transition.
+const timedStartLead = 400 * time.Millisecond
 
 // fireScheduled plays an armed schedule, re-validating it first: between
 // arming and firing the operator may have left Show Mode, disabled or moved

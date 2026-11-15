@@ -2,8 +2,11 @@ package ctp
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"CuTePi/config"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
@@ -205,5 +208,56 @@ func TestMoveWaveforms(t *testing.T) {
 	d.Get(&n, `SELECT COUNT(*) FROM media_waveform`)
 	if n != 0 {
 		t.Fatalf("waveform outlived its media row")
+	}
+}
+
+// A database from before the align column (git HEAD at 38f00eb: no align,
+// no endpoint_secret/link_peer tables) opens with InitDB: the column is
+// added empty and every existing cue field survives.
+func TestInitDBMigratesPreAlignDB(t *testing.T) {
+	oldDB, oldLocation := db, config.DbLocation()
+	defer func() { db.Close(); db = oldDB; config.SetDbLocation(oldLocation) }()
+	path := filepath.Join(t.TempDir(), "prealign.db")
+	config.SetDbLocation(path)
+	if err := InitDB(); err != nil {
+		t.Fatal(err)
+	}
+	mustRegisterMedia(t, "prealign.mp4")
+	if err := AddCue("prealign.mp4", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateCueFields("1", map[string]string{"title": "Kept", "fit_mode": "fill", "rotation": "90", "geom_w": "50%", "crop_l": "10", "volume": "-6"}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	// Back to the pre-align shape.
+	old := sqlx.MustConnect("sqlite3", path)
+	mustExec(t, old, `ALTER TABLE cuesheet DROP COLUMN align`)
+	mustExec(t, old, `DROP TABLE endpoint_secret`)
+	mustExec(t, old, `DROP TABLE link_peer`)
+	old.Close()
+
+	if err := InitDB(); err != nil {
+		t.Fatalf("InitDB on a pre-align DB: %v", err)
+	}
+	var dflt string
+	if err := db.Get(&dflt, `SELECT dflt_value FROM pragma_table_info('cuesheet') WHERE name='align'`); err != nil {
+		t.Fatalf("align column missing after migration: %v", err)
+	}
+	cue, err := GetCue("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cue.Title != "Kept" || cue.FitMode != "fill" || cue.Rotation != 90 || cue.GeomW != "50%" || cue.CropL != "10" || cue.Volume != -6 || cue.Align != "" {
+		t.Fatalf("cue after migration: %+v", cue)
+	}
+	if err := UpdateCue("1", "align", "left top"); err != nil {
+		t.Fatalf("writing align after migration: %v", err)
+	}
+	for _, tbl := range []string{"endpoint_secret", "link_peer"} {
+		var n int
+		if err := db.Get(&n, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, tbl); err != nil || n != 1 {
+			t.Fatalf("%s not created: %d %v", tbl, n, err)
+		}
 	}
 }

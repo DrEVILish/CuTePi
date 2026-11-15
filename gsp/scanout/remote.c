@@ -23,7 +23,10 @@
 
 #define SLOTS 8
 
-enum { MSG_SLOT = 1, MSG_FRAME, MSG_PROGRESS, MSG_RELEASE, MSG_ERROR };
+/* MSG_PACE (service -> child): idx frames a second to take from WebKit, 0 = all. A standby page is paced: the
+ * child leaves WebKit's frames unpulled, so WebKit (which paints a frame only once the last one is taken) stops
+ * painting between them; resuming drops the frames queued meanwhile, so the next one sent is freshly painted. */
+enum { MSG_SLOT = 1, MSG_FRAME, MSG_PROGRESS, MSG_RELEASE, MSG_ERROR, MSG_PACE };
 
 typedef struct {
   uint32_t type, idx, width, height, stride, size;
@@ -105,10 +108,14 @@ livepage_child_run (const char *url, int w, int h, int fps, int transparent, int
   int fds[SLOTS];
   GstSample *held[SLOTS] = { 0 };
   int nslots = 0;
+  gint64 pace = 0, next_pull = 0;       /* us between frames taken (0: every frame); when the next is due */
   for (;;) {
-    /* Slots handed back, or the service gone. */
+    /* Slots handed back, pace changes, or the service gone. Paced, wait here until the next frame is due. */
     struct pollfd pf = { .fd = sock, .events = POLLIN };
-    while (poll (&pf, 1, 0) > 0) {
+    gint64 now = g_get_monotonic_time ();
+    int wait_ms = pace && next_pull > now ? (int) MIN ((next_pull - now) / 1000 + 1, 50) : 0;
+    while (poll (&pf, 1, wait_ms) > 0) {
+      wait_ms = 0;
       Msg m;
       int r = recv_msg (sock, &m, NULL);
       if (r <= 0)
@@ -116,6 +123,14 @@ livepage_child_run (const char *url, int w, int h, int fps, int transparent, int
       if (m.type == MSG_RELEASE && m.idx < SLOTS && held[m.idx]) {
         gst_sample_unref (held[m.idx]);
         held[m.idx] = NULL;
+      } else if (m.type == MSG_PACE) {
+        pace = m.idx ? G_USEC_PER_SEC / m.idx : 0;
+        next_pull = 0;
+        if (!pace) {            /* resumed: what WebKit painted while paced is stale */
+          GstSample *old;
+          while ((old = gst_app_sink_try_pull_sample (GST_APP_SINK (sink), 0)))
+            gst_sample_unref (old);
+        }
       }
     }
     GstMessage *bm;
@@ -138,9 +153,13 @@ livepage_child_run (const char *url, int w, int h, int fps, int transparent, int
       }
       gst_message_unref (bm);
     }
+    if (pace && g_get_monotonic_time () < next_pull)
+      continue;
     GstSample *s = gst_app_sink_try_pull_sample (GST_APP_SINK (sink), 20 * GST_MSECOND);
     if (!s)
       continue;
+    if (pace)
+      next_pull = g_get_monotonic_time () + pace;
     GstBuffer *b = gst_sample_get_buffer (s);
     GstMemory *mem = gst_buffer_peek_memory (b, 0);
     int fd = gst_is_dmabuf_memory (mem) ? gst_dmabuf_memory_get_fd (mem) : -1;
@@ -186,7 +205,26 @@ typedef struct {
   GThread *thread;
   gboolean stop;
   gboolean started;             /* the appsrc has been past READY */
+  gboolean standby;             /* built ahead of its GO: no start-up timeout, ended by livepage_remote_stop */
 } Remote;
+
+/* appsrc -> its Remote (qdata, holding one ref), so the service can end a renderer whose pipeline never started. */
+static GMutex remote_lock;
+static GQuark remote_quark;
+
+static void remote_unref (Remote * r);
+
+/* Takes r off its appsrc; returns TRUE if it was there (the caller then owns that ref). */
+static gboolean
+remote_detach (Remote * r)
+{
+  g_mutex_lock (&remote_lock);
+  gboolean was = g_object_get_qdata (G_OBJECT (r->appsrc), remote_quark) == r;
+  if (was)
+    g_object_set_qdata (G_OBJECT (r->appsrc), remote_quark, NULL);
+  g_mutex_unlock (&remote_lock);
+  return was;
+}
 
 typedef struct {
   Remote *r;
@@ -228,7 +266,7 @@ remote_main (gpointer data)
   for (;;) {
     if (g_atomic_int_get (&r->stop))
       break;
-    if (!r->started && g_get_monotonic_time () - born > 60 * G_TIME_SPAN_SECOND)
+    if (!r->started && !r->standby && g_get_monotonic_time () - born > 60 * G_TIME_SPAN_SECOND)
       break;    /* built but never started: do not keep the renderer */
     /* The cue's pipeline went back to NULL (stopped, any path): end the child. */
     GstState cur = GST_STATE (r->appsrc);
@@ -295,6 +333,8 @@ remote_main (gpointer data)
   }
 out:
   shutdown (r->sock, SHUT_RDWR);        /* the child sees EOF and exits */
+  if (remote_detach (r))
+    remote_unref (r);
   remote_unref (r);
   return NULL;
 }
@@ -302,15 +342,54 @@ out:
 /* Serves the frames arriving on sock into appsrc until the pipeline goes back to NULL or the child exits. Takes
  * ownership of sock. */
 void
-livepage_remote_start (GstElement * appsrc, int sock)
+livepage_remote_start (GstElement * appsrc, int sock, int standby)
 {
   if (!release_quark)
     release_quark = g_quark_from_static_string ("cutepi-livepage-slot");
+  if (!remote_quark)
+    remote_quark = g_quark_from_static_string ("cutepi-livepage-remote");
   Remote *r = g_new0 (Remote, 1);
-  r->refs = 1;
+  r->refs = 2;                  /* the thread's and the appsrc's qdata */
   r->sock = sock;
+  r->standby = standby;
   r->appsrc = gst_object_ref (appsrc);
   r->alloc = gst_dmabuf_allocator_new ();
+  g_mutex_lock (&remote_lock);
+  g_object_set_qdata (G_OBJECT (appsrc), remote_quark, r);
+  g_mutex_unlock (&remote_lock);
   r->thread = g_thread_new ("livepage-remote", remote_main, r);
   g_thread_unref (r->thread);
+}
+
+/* Ends appsrc's renderer whatever its pipeline's state (a standby page retired before its GO). No-op if it has none
+ * or it has ended. */
+/* Sets the frame rate appsrc's renderer takes from WebKit (MSG_PACE); no-op without a renderer. */
+void
+livepage_remote_pace (GstElement * appsrc, int fps)
+{
+  if (!remote_quark)
+    return;
+  g_mutex_lock (&remote_lock);
+  Remote *r = g_object_get_qdata (G_OBJECT (appsrc), remote_quark);
+  if (r) {
+    Msg m = { .type = MSG_PACE, .idx = (uint32_t) fps };
+    send_msg (r->sock, &m, -1);
+  }
+  g_mutex_unlock (&remote_lock);
+}
+
+void
+livepage_remote_stop (GstElement * appsrc)
+{
+  if (!remote_quark)
+    return;
+  g_mutex_lock (&remote_lock);
+  Remote *r = g_object_get_qdata (G_OBJECT (appsrc), remote_quark);
+  if (r) {
+    g_object_set_qdata (G_OBJECT (appsrc), remote_quark, NULL);
+    g_atomic_int_set (&r->stop, TRUE);
+  }
+  g_mutex_unlock (&remote_lock);
+  if (r)
+    remote_unref (r);
 }

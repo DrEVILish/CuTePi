@@ -59,8 +59,8 @@ type ThemeTint struct {
 }
 
 // DefaultThemeID is what an unset or unrecognised preference resolves to:
-// xbmc — near-black home-theatre shell, glowing blue underline selection.
-const DefaultThemeID = "ftl:xbmc"
+// blue-future — deep-space navy HUD with cyan neon glow.
+const DefaultThemeID = "ftl:blue-future"
 
 // themeDistDir locates the pinned ftl-themes bundles whether the process runs
 // from the repo root (server) or from routes/ (go test).
@@ -165,6 +165,19 @@ func TemplateFuncs() map[string]any {
 		"typeIcon":    TypeIcon,
 		"displayTime": DisplayTime,
 		"progressPct": ProgressPct,
+		// alignParts splits a cue's Align into [horizontal, vertical] (each may be "").
+		"alignParts": func(a string) [2]string {
+			var out [2]string
+			for _, w := range strings.Fields(a) {
+				switch w {
+				case "left", "center", "right":
+					out[0] = w
+				case "top", "middle", "bottom":
+					out[1] = w
+				}
+			}
+			return out
+		},
 		"formatSchedule": func(ms int) string {
 			// Cue schedule reminder: HH:MM from milliseconds since midnight.
 			if ms <= 0 {

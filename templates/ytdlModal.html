@@ -4,10 +4,7 @@
   <div class="modal-dialog">
     <div class="modal-content modal">
       <div class="modal-header">
-        <span class="modal-title" id="ytdlModalLabel">YouTube Downloader</span>
-        <a class="btn btn-lg" href="/upload">
-          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-logout"/></svg>
-        </a>
+        <span class="modal-title" id="ytdlModalLabel">Download from URL</span>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <form
@@ -16,9 +13,10 @@
         method="post"
       >
         <div class="modal-body">
-          <label class="form-label" for="url">YouTube URL&nbsp;</label>
+          <div class="field">
+          <label class="label" for="url">Video URL</label>
           <input
-            class="form-control"
+            class="input"
             id="url"
             type="url"
             name="url"
@@ -26,13 +24,14 @@
             autocomplete="url"
             placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
           />
+          </div>
 
           <div id="ytdl-status" class="d-none mt-m">
-            <div class="small text-muted mb-1" id="ytdl-stage" role="status" aria-live="polite">Preparing&hellip;</div>
-            <div class="progress ytdl-progress" style="height: 0.6rem;">
-              <div class="progress-bar" id="ytdl-progress" role="progressbar" style="width: 0%"></div>
+            <div class="field-hint" id="ytdl-stage" role="status" aria-live="polite">Preparing&hellip;</div>
+            <div class="progress">
+              <div class="progress-bar" id="ytdl-progress" role="progressbar" aria-label="Download progress" style="width: 0%"></div>
             </div>
-            <div class="small text-muted mt-1 d-flex is-justify-between ytdl-stats">
+            <div class="field-hint row is-justify-between">
               <span id="ytdl-percent">0%</span>
               <span id="ytdl-speed"></span>
               <span id="ytdl-eta"></span>
@@ -40,18 +39,18 @@
           </div>
 
           <div id="ytdl-rename" class="d-none mt-m">
-            <label class="form-label" for="ytdl-rename-input">Seen and imported &mdash; rename the file if you like</label>
-            <div class="d-flex is-gap-xs">
-              <input class="form-control" id="ytdl-rename-input" name="name" type="text"
-                autocomplete="off" spellcheck="false" aria-label="New file name">
-              <button class="btn btn-secondary flex-shrink-0" type="button" id="ytdl-rename-btn">Rename</button>
+            <label class="label" for="ytdl-rename-input">Seen and imported &mdash; rename the file if you like</label>
+            <div class="input-group">
+              <input class="input" id="ytdl-rename-input" name="name" type="text"
+                autocomplete="off" spellcheck="false">
+              <button class="btn btn-secondary" type="button" id="ytdl-rename-btn">Rename</button>
             </div>
           </div>
 
-          <div id="ytdl-error" class="small text-danger mt-xs d-none" role="alert"></div>
+          <div id="ytdl-error" class="field-error d-none" role="alert"></div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-danger" id="download" type="submit">Download</button>
+          <button class="btn btn-primary" id="download" type="submit">Download</button>
         </div>
       </form>
     </div>

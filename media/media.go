@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -447,8 +448,14 @@ func GenerateThumbnail(srcPath string, kind Kind, duration float64, outPath stri
 func runThumbnail(srcPath string, args []string) error {
 	cmd, cancel := toolCmd(ThumbnailTimeout, "ffmpeg", args...)
 	defer cancel()
+	_ = os.Remove(args[len(args)-1]) // a stale thumbnail must not pass the check below
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("media: ffmpeg thumbnail generation failed for %q: %w: %s", srcPath, err, out)
+	}
+	// ffmpeg exits 0 having encoded nothing when the keyframe-only seek finds
+	// no keyframe after the seek point (a short clip keyed only at its start).
+	if st, err := os.Stat(args[len(args)-1]); err != nil || st.Size() == 0 {
+		return fmt.Errorf("media: ffmpeg wrote no thumbnail for %q", srcPath)
 	}
 	return nil
 }

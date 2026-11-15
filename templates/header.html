@@ -1,6 +1,6 @@
 {{ define "header.html" }}
 <!DOCTYPE html>
-<html data-bs-theme="dark" data-asset-stamp="{{ assetStamp }}">
+<html lang="en" data-bs-theme="dark" data-asset-stamp="{{ assetStamp }}">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,12 +9,12 @@
     <!-- Bootstrap loads FIRST as a utility fallback: every app layer below
       wins its conflicts, so themes never depend on Bootstrap specifics and
       it can keep shrinking toward removal. Icons stay last (font only). -->
-    <!-- Cascade order (ftl-themes v4): Bootstrap < theme (@layer ui) < this
-      app's unlayered CSS. Bootstrap shares 35 class names with the library
+    <!-- Cascade order: Bootstrap < bridge (layout.css: Bootstrap grid parts
+      switched off) < theme (@layer ui) < this app's unlayered CSS. Bootstrap shares 35 class names with the library
       (.btn, .modal, .row, .table…); in the lower layer it only supplies what
       the theme leaves unset. -->
     <style>
-      @layer bootstrap, ui;
+      @layer bootstrap, bridge, ui;
       @import url("/css/bootstrap@5.3.3.css?v={{ assetStamp }}") layer(bootstrap);
     </style>
     <link rel="stylesheet" href="/css/index.css?v={{ assetStamp }}">
@@ -39,7 +39,7 @@
         // so the picker's stored preference keeps controlling normal loads.
         try {
           var qs = new URLSearchParams(location.search).get("theme");
-          if (qs && THEMES[qs]) id = qs;
+          if (qs && THEMES["ftl:" + qs.split(":").pop()]) id = qs; // "aqua" or "ftl:aqua"
         } catch (_) {}
         // Older saved values ("lcars", "app:blue-future") map to the
         // ftl-themes theme of the same name, or the default.

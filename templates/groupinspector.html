@@ -4,13 +4,13 @@
      here must still present that id or every later cue re-render dies. -->
 <div id="cueinspector-body" class="groupinspector-body" data-group-id="{{ .Group.GroupID }}">
   {{ if .Group.Slideshow }}
-  <div class="alert alert-info py-2 px-3 small">
+  <div class="alert alert-info row is-items-center is-gap-xs">
     <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
     Slideshow: its cues cycle automatically with the settings below. Press <em>Play</em> on the sheet to start it.
   </div>
   {{ end }}
   {{ if .Group.AwardsMode }}
-  <div class="alert alert-info py-2 px-3 small">
+  <div class="alert alert-info row is-items-center is-gap-xs">
     <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-play"/></svg>
     Awards mode: GO plays one member, GO again fades it out — the selection stays on this group.
   </div>
@@ -18,65 +18,59 @@
 
   <form hx-put="/api/group/{{ .Group.GroupID }}" hx-target="#cuesheet" hx-swap="outerHTML"
     hx-trigger="change delay:200ms, submit"
-    class="gi-form vstack is-gap-xs" style="max-width: 42rem;">
-    <div class="small text-muted" aria-label="Group runtime">
+    class="gi-form stack stack-sm" style="max-width: 42rem;">
+    <div class="field-hint row is-items-center is-gap-xs" aria-label="Group runtime">
       <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-hourglass"/></svg>
       Runtime {{ .DurationTotal }}{{ if ne .Remaining "00:00" }} · remaining {{ .Remaining }}{{ end }}
     </div>
     <div class="d-flex is-gap-xs">
       <div class="flex-grow-1">
-        <label class="label small mb-0" for="group-name">Name</label>
-        <input id="group-name" name="name" class="form-control form-control-sm" value="{{ .Group.Name }}">
+        <label class="label" for="group-name">Name</label>
+        <input id="group-name" name="name" class="input" value="{{ .Group.Name }}">
       </div>
       <div>
-        <label class="label small mb-0" for="group-cuenum">Number</label>
+        <label class="label" for="group-cuenum">Number</label>
         <input id="group-cuenum" name="cueNum" class="input" style="width:6em" maxlength="24"
           value="{{ .Group.CueNum }}">
       </div>
     </div>
     <div class="row is-gap-s is-wrap">
       <div class="group-col">
-        <label class="label small mb-1" for="group-swatches">Colour</label>
-        <div class="insp-swatches" id="group-swatches" role="radiogroup" aria-label="Group colour">
-          <label class="insp-swatch insp-swatch-none" title="None">
-            <input type="radio" name="color" value="" aria-label="No colour" {{ if not $.Group.Color }}checked{{ end }}>
-            <span class="insp-swatch-fill"></span>
-          </label>
+        <fieldset class="swatches" id="group-swatches">
+          <legend class="label">Colour</legend>
+          <label class="swatch swatch-none" style="--swatch: transparent" title="No colour"><input type="radio" name="color" value="" {{ if not $.Group.Color }}checked{{ end }}><span class="visually-hidden">No colour</span></label>
           {{ range .Palette }}
-          <label class="insp-swatch" style="--swatch: {{ .Hex }}" title="{{ .Name }}">
-            <input type="radio" name="color" value="{{ .Hex }}" aria-label="{{ .Name }}" {{ if eq $.Group.Color .Hex }}checked{{ end }}>
-            <span class="insp-swatch-fill"></span>
-          </label>
+          <label class="swatch" style="--swatch: {{ .Hex }}" title="{{ .Name }}"><input type="radio" name="color" value="{{ .Hex }}" {{ if eq $.Group.Color .Hex }}checked{{ end }}><span class="visually-hidden">{{ .Name }}</span></label>
           {{ end }}
-        </div>
+        </fieldset>
       </div>
     </div>
     <div class="d-flex is-wrap is-gap-xs">
-      <div class="form-check form-check-inline">
-        <input class="form-check-input" type="checkbox" id="group-slideshow" name="slideshow" value="true" {{ if .Group.Slideshow }}checked{{ end }}>
-        <label class="small" for="group-slideshow">Slideshow</label>
+      <div class="row is-items-center is-gap-2xs">
+        <input class="checkbox" type="checkbox" id="group-slideshow" name="slideshow" value="true" {{ if .Group.Slideshow }}checked{{ end }}>
+        <label for="group-slideshow">Slideshow</label>
       </div>
-      <div class="form-check form-check-inline">
-        <input class="form-check-input" type="checkbox" id="group-awards" name="awards" value="true" {{ if .Group.AwardsMode }}checked{{ end }}>
-        <label class="small" for="group-awards">Awards mode</label>
+      <div class="row is-items-center is-gap-2xs">
+        <input class="checkbox" type="checkbox" id="group-awards" name="awards" value="true" {{ if .Group.AwardsMode }}checked{{ end }}>
+        <label for="group-awards">Awards mode</label>
       </div>
-      <div class="form-check form-check-inline" id="group-shuffle-wrap">
-        <input class="form-check-input" type="checkbox" id="group-shuffle" name="shuffle" value="true" {{ if .Group.Shuffle }}checked{{ end }} {{ if and (not .Group.Slideshow) (not .Group.AwardsMode) }}disabled{{ end }}>
-        <label class="small" for="group-shuffle" id="group-shuffle-label">{{ if .Group.AwardsMode }}Shuffle (random order, no repeats){{ else }}Shuffle{{ end }}</label>
+      <div class="row is-items-center is-gap-2xs" id="group-shuffle-wrap">
+        <input class="checkbox" type="checkbox" id="group-shuffle" name="shuffle" value="true" {{ if .Group.Shuffle }}checked{{ end }} {{ if and (not .Group.Slideshow) (not .Group.AwardsMode) }}disabled{{ end }}>
+        <label for="group-shuffle" id="group-shuffle-label">{{ if .Group.AwardsMode }}Shuffle (random order, no repeats){{ else }}Shuffle{{ end }}</label>
       </div>
-      <div class="form-check form-check-inline">
-        <input class="form-check-input" type="checkbox" id="group-loop" name="loop" value="true" {{ if .Group.Loop }}checked{{ end }} {{ if and (not .Group.Slideshow) (not .Group.AwardsMode) }}disabled{{ end }}>
-        <label class="small" for="group-loop">Loop</label>
+      <div class="row is-items-center is-gap-2xs">
+        <input class="checkbox" type="checkbox" id="group-loop" name="loop" value="true" {{ if .Group.Loop }}checked{{ end }} {{ if and (not .Group.Slideshow) (not .Group.AwardsMode) }}disabled{{ end }}>
+        <label for="group-loop">Loop</label>
       </div>
     </div>
     <div class="row is-gap-xs {{ if not .Group.Slideshow }}row-disabled{{ end }}" id="group-slideshow-timings">
       <div id="group-duration-wrap">
-        <label class="label small mb-0" for="group-duration">Hold each image</label>
+        <label class="label" for="group-duration">Hold each image</label>
         <input id="group-duration" name="durationSecs" type="text" inputmode="decimal" data-validate="time" autocomplete="off" class="input" style="width:8em"
           value="{{ if .Group.DurationMS }}{{ formatTime .Group.DurationMS }}{{ end }}" placeholder="5s">
       </div>
       <div>
-        <label class="label small mb-0" for="group-fade" id="group-fade-label">{{ if .Group.AwardsMode }}Fade out on stop{{ else }}Fade between{{ end }}</label>
+        <label class="label" for="group-fade" id="group-fade-label">{{ if .Group.AwardsMode }}Fade out on stop{{ else }}Fade between{{ end }}</label>
         <input id="group-fade" name="fadeSecs" type="text" inputmode="decimal" data-validate="time" autocomplete="off" class="input" style="width:8em"
           value="{{ if .Group.FadeMS }}{{ formatTime .Group.FadeMS }}{{ end }}" placeholder="0s">
       </div>

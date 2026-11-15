@@ -2,6 +2,8 @@ package routes
 
 import (
 	"net/http"
+	"runtime"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -21,8 +23,20 @@ func registerGLWallRoutes(rg *gin.RouterGroup) {
 	// Plane wall presenter (CUTEPI_WALL_SINK=planesink): commits, the
 	// intervals between them, and frames on screen per visible layer.
 	rg.GET("/debug/planewall", func(c *gin.Context) {
+		if c.Query("gc") != "" { // TEMP leak debug
+			runtime.GC()
+			time.Sleep(200 * time.Millisecond)
+			runtime.GC()
+			time.Sleep(200 * time.Millisecond)
+		}
+		if c.Query("retired") != "" {
+			buf := make([]byte, 4<<20)
+			c.String(http.StatusOK, gsp.RetiredReport()+"\n"+string(buf[:runtime.Stack(buf, true)]))
+			return
+		}
 		st, layers, on := gsp.PlaneWallStats()
 		c.JSON(http.StatusOK, gin.H{"on": on, "commits": st.Commits, "fails": st.Fails,
-			"intervalMs": gin.H{"p50": st.P50Ms, "p99": st.P99Ms, "max": st.MaxMs}, "layers": layers})
+			"intervalMs": gin.H{"p50": st.P50Ms, "p99": st.P99Ms, "max": st.MaxMs}, "layers": layers,
+			"pipelinesAlive": gsp.PipelinesAlive()})
 	})
 }

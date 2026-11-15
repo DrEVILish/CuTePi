@@ -1,6 +1,6 @@
 {{ define "cuesheet.html" }}
 
-<div id="cuesheet" data-version="{{ .Version }}">
+<div id="cuesheet" data-version="{{ .Version }}" data-show-mode="{{ .ShowMode }}">
   <!-- Keyboard trigger plumbing: the global keydown handler fires these
        custom events; each div maps one key to its endpoint. -->
   <div id="ArrowDown" hx-trigger="ArrowDown" hx-post="/api/cue/next" hx-target="#cuesheet" hx-swap="outerHTML"></div>
@@ -8,10 +8,10 @@
   <div id="ArrowRight" hx-trigger="arrowRight" hx-post="/api/group/selected/open" hx-target="#cuesheet" hx-swap="outerHTML"></div>
   <div id="ArrowLeft" hx-trigger="arrowLeft" hx-post="/api/group/selected/close" hx-target="#cuesheet" hx-swap="outerHTML"></div>
   <div id="spaceBar" hx-trigger="spaceBar" hx-post="/api/cue/selected/play" hx-swap="none"></div>
-    <table class="table table-dark table-striped table-sm align-middle">
+    <table class="table is-striped is-sticky" aria-label="Cue sheet">
     <thead>
       <tr class="sheet-row">
-        <th scope="col" class="col-type" title="Media type"></th>
+        <th scope="col" class="col-type" title="Media type"><span class="visually-hidden">Type</span></th>
         <th scope="col" class="col-cue-num" title="Cue number">Number</th>
         <th scope="col">Name</th>
         <th scope="col" class="cue-time">PreWait</th>
@@ -22,7 +22,7 @@
     <tbody>
       {{ range .Rows }}
         {{ if .Group }}
-        <tr class="sheet-row cuegroup cue-group-header{{ if .Selected }} table-warning{{ end }}{{ if .Group.Collapse }} cue-gcollapsed{{ end }}" data-group-id="{{ .Group.GroupID }}" data-group-collapsed="{{ .Group.Collapse }}"
+        <tr class="sheet-row cuegroup cue-group-header{{ if .Selected }} is-selected{{ end }}{{ if .Group.Collapse }} cue-gcollapsed{{ end }}" data-group-id="{{ .Group.GroupID }}" data-group-collapsed="{{ .Group.Collapse }}"
           data-cue-color="{{ .Group.Color }}" data-cue-name="{{ .Group.Name }}"
           style="--depth: {{ .Depth }};{{ if .Group.Color }} --cue-accent: {{ .Group.Color }};{{ end }}{{ if ge .SpanDepth 0 }} --span-base: {{ safeCSS .SpanBase }};{{ if ne .SpanShadows "" }} --span-shadows: {{ safeCSS .SpanShadows }};{{ end }}{{ end }}"
           draggable="true"
@@ -47,27 +47,27 @@
                 hx-swap="outerHTML" aria-label="Edit group name {{ .Group.Name }}">{{ .Group.Name }}</span>
             </span>
               <span class="cue-group-sep" aria-hidden="true"> · </span>
-              <span class="text-muted small ms-2" id="cue-group-members-{{ .Group.GroupID }}">{{ .MemberCount }} cue{{ if ne .MemberCount 1 }}s{{ end }}</span>
+              <span class="badge" id="cue-group-members-{{ .Group.GroupID }}">{{ .MemberCount }} cue{{ if ne .MemberCount 1 }}s{{ end }}</span>
           </td>
           <td class="cue-time"></td>
           <td class="cue-time"></td>
           <td class="cue-time"></td>
         </tr>
         {{ else }}
-        <tr class="sheet-row cue{{ if .Cue.Selected }} table-warning{{ end }}{{ if .Cue.InSelection }} table-warning{{ end }}{{ if .Cue.Playing }} cue-playing{{ else if .Cue.Running }} cue-running{{ end }}{{ if ne .Cue.Parent 0 }} cue-in-group{{ end }}{{ if .LastInGroup }} cue-glast{{ end }}" style="--depth: {{ .Depth }};{{ if .Cue.Color }} --cue-accent: {{ .Cue.Color }};{{ end }}{{ if .GroupColor }} --group-accent: {{ .GroupColor }};{{ end }}{{ if ge .SpanDepth 0 }} --span-base: {{ safeCSS .SpanBase }};{{ if ne .SpanShadows "" }} --span-shadows: {{ safeCSS .SpanShadows }};{{ end }}{{ end }}" data-cue-pos="{{ .Cue.CuePos }}" data-cue-auto-continue="{{ .Cue.AutoContinue }}" data-cue-color="{{ .Cue.Color }}" data-cue-fade-action="{{ .Cue.FadeAction }}" data-cue-fade-out="{{ .Cue.FadeOut }}" data-cue-missing="{{ .Cue.Missing }}" data-cue-result="{{ .Cue.LastResult }}" data-cue-sel="{{ if .Cue.InSelection }}1{{ else }}0{{ end }}" data-cue-anchor="{{ if .Cue.Selected }}1{{ else }}0{{ end }}" data-cue-group="{{ .Cue.Parent }}" draggable="true"
+        <tr class="sheet-row cue{{ if or .Cue.Selected .Cue.InSelection }} is-selected{{ end }}{{ if .Cue.Playing }} cue-playing is-active{{ else if .Cue.Running }} cue-running{{ end }}{{ if ne .Cue.Parent 0 }} cue-in-group{{ end }}{{ if .LastInGroup }} cue-glast{{ end }}" style="--depth: {{ .Depth }};{{ if .Cue.Color }} --cue-accent: {{ .Cue.Color }};{{ end }}{{ if .GroupColor }} --group-accent: {{ .GroupColor }};{{ end }}{{ if ge .SpanDepth 0 }} --span-base: {{ safeCSS .SpanBase }};{{ if ne .SpanShadows "" }} --span-shadows: {{ safeCSS .SpanShadows }};{{ end }}{{ end }}" data-cue-pos="{{ .Cue.CuePos }}" data-cue-auto-continue="{{ .Cue.AutoContinue }}" data-cue-color="{{ .Cue.Color }}" data-cue-fade-action="{{ .Cue.FadeAction }}" data-cue-fade-out="{{ .Cue.FadeOut }}" data-cue-missing="{{ .Cue.Missing }}" data-cue-result="{{ .Cue.LastResult }}" data-cue-sel="{{ if .Cue.InSelection }}1{{ else }}0{{ end }}" data-cue-anchor="{{ if .Cue.Selected }}1{{ else }}0{{ end }}" data-cue-group="{{ .Cue.Parent }}" draggable="true"
           hx-target="#cuesheet" hx-target:inherited="#cuesheet" hx-swap="outerHTML" {{ if not .Cue.Selected }}hx-trigger="click[!justEdited()]" hx-post="/api/cue/{{ .Cue.CuePos }}"{{ end }}>
           <td class="cue-type" title="{{ .Cue.Mimetype }}">
             <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ typeIcon .Cue.MediaType }}"/></svg>
             {{ if .Cue.ScheduleEnabled }}<svg class="icon cue-sched-icon" aria-label="Scheduled {{ formatSchedule .Cue.ScheduleTimeMs }}"><title>Scheduled trigger {{ formatSchedule .Cue.ScheduleTimeMs }}</title><use href="/ftl/assets/icons/icons.svg#icon-clock"/></svg>{{ end }}
-            {{ if .Cue.Missing }}<svg class="icon text-warning" title="Source file missing from disk"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>{{ end }}
-            {{ if eq .Cue.LastResult 2 }}<svg class="icon cue-result-error" title="Last play failed"><use href="/ftl/assets/icons/icons.svg#icon-close"/></svg>{{ end }}
+            {{ if .Cue.Missing }}<svg class="icon cue-result-missing" role="img" aria-label="Source file missing from disk"><title>Source file missing from disk</title><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>{{ end }}
+            {{ if eq .Cue.LastResult 2 }}<svg class="icon cue-result-error" role="img" aria-label="Last play failed"><title>Last play failed</title><use href="/ftl/assets/icons/icons.svg#icon-close"/></svg>{{ end }}
           </td>
           <td class="cue-num">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/cueNum" hx-swap="outerHTML">{{ .Cue.CueNum }}</span>
           </td>
           <td class="cue-name">
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/title" hx-swap="outerHTML">{{ .Cue.Title }}</span>
-            {{ if .Cue.WaitKind }}<span class="cue-wait-pill" title="{{ if eq .Cue.WaitKind "post" }}PostWait{{ else }}PreWait{{ end }} in progress">{{ .Cue.WaitLeftS }}s</span>{{ end }}
+            {{ if .Cue.WaitKind }}<span class="badge badge-accent cue-wait-pill" title="{{ if eq .Cue.WaitKind "post" }}PostWait{{ else }}PreWait{{ end }} in progress">{{ .Cue.WaitLeftS }}s</span>{{ end }}
           </td>
           <td class="cue-time cue-wait-cell">
             {{ if eq .Cue.WaitKind "pre" }}<div class="cue-wait-progress" aria-hidden="true"><div class="cue-progress-fill" style="width: {{ .Cue.WaitPct }}%"></div></div>{{ end }}
@@ -77,12 +77,20 @@
             {{ if ne .Cue.SourceKind "endpoint" }}
             <span class="cue-inline-edit" hx-target="this" hx-trigger="dblclick" hx-post="/api/cue/{{ .Cue.CuePos }}/edit/cueDuration" hx-swap="outerHTML">{{ .Cue.CueDurationFmt }}</span>
             {{ if .Cue.Playing }}
-            <div class="cue-progress-bar" data-pos="{{ .Cue.PlayPos }}" data-dur="{{ .Cue.PlayDur }}" role="progressbar" tabindex="0"
+            <div class="cue-progress-bar" data-pos="{{ .Cue.PlayPos }}" data-dur="{{ .Cue.PlayDur }}" role="slider" tabindex="0"
+                 aria-label="Seek in cue {{ .Cue.CueNum }}" aria-valuemin="0" aria-valuemax="{{ .Cue.PlayDur }}" aria-valuenow="{{ .Cue.PlayPos }}"
+                 title="{{ displayTime .Cue.PlayPos }} of {{ displayTime .Cue.PlayDur }}">
+              <div class="cue-progress-fill" style="width: {{ progressPct .Cue.PlayPos .Cue.PlayDur }}%"></div>
+            </div>
+            {{ else if and .Cue.Running (gt .Cue.PlayDur 0) }}
+            <div class="cue-progress-track" data-pos="{{ .Cue.PlayPos }}" data-dur="{{ .Cue.PlayDur }}" data-rate="{{ .Cue.Rate }}"
+                 data-loop="{{ .Cue.Loop }}"{{ if .Cue.PlayPaused }} data-paused="1"{{ end }} role="progressbar"
+                 aria-label="Cue {{ .Cue.CueNum }} progress" aria-valuemin="0" aria-valuemax="{{ .Cue.PlayDur }}" aria-valuenow="{{ .Cue.PlayPos }}"
                  title="{{ displayTime .Cue.PlayPos }} of {{ displayTime .Cue.PlayDur }}">
               <div class="cue-progress-fill" style="width: {{ progressPct .Cue.PlayPos .Cue.PlayDur }}%"></div>
             </div>
             {{ end }}
-            {{ else }}<span class="small text-muted" title="Live pages continue until the operator changes the output">Live</span>{{ end }}
+            {{ else }}<span class="badge" title="Live pages continue until the operator changes the output">Live</span>{{ end }}
           </td>
           <td class="cue-time cue-wait-cell">
             {{ if eq .Cue.WaitKind "post" }}<div class="cue-wait-progress" aria-hidden="true"><div class="cue-progress-fill" style="width: {{ .Cue.WaitPct }}%"></div></div>{{ end }}
@@ -94,13 +102,17 @@
       {{ if not .Cuesheet.Cues }}
       <tr class="cuesheet-empty">
         <td colspan="6">
-          <p class="mb-0">Drag a cue from the Mediapool here.<br><span class="small">Or use a media item's menu to add it.</span></p>
+          <div class="empty-state">
+            <svg class="icon empty-state-icon" aria-hidden="true"><use href="/ftl/assets/icons/icons.svg#icon-layers"/></svg>
+            <span class="empty-state-title">No cues yet</span>
+            <span class="empty-state-hint">Drag media here from the pool, or double-click a tile to add it.</span>
+          </div>
         </td>
       </tr>
       {{ end }}
     </tbody>
   </table>
-  <div class="cuesheet-blank-rows" aria-hidden="true"></div>
+  <div class="table-blank-rows" aria-hidden="true"></div>
 </div>
 
 {{ end }}

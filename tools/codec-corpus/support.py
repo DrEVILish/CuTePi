@@ -668,7 +668,11 @@ def run(path, mdl, keep=False):
             t_fo = None
             formats = blends = pic = None
             t_pic = None
-            while time.monotonic() < t_due + FADE_S + 0.3:
+            # Until a fade length after the fade out was really sent: an alpha
+            # file's format/blend readback (debugfs, libdrm) can take 1.5 s
+            # and delay it, and a loop timed from t_due then ended inside the
+            # fade (fade out "-").
+            while t_fo is None or time.monotonic() < t_fo + FADE_S + 0.3:
                 if formats is None and time.monotonic() >= t_due - 0.3:
                     # The picture, and for alpha files the plane's format and
                     # blend mode, while it is on screen (end of steady play,

@@ -1,48 +1,44 @@
 {{ define "mediapool.html" }}
 
 <div id="mediapool" class="d-flex flex-column h-100 position-relative">
-  <div class="row is-items-center is-justify-between mb-m">
-    <h5 class="mb-0">Mediapool</h5>
-    <div class="d-flex is-gap-xs">
-      <div class="row is-gap-xs btn-group-sm" role="group" aria-label="Add media">
-        <button type="button" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#uploadModal" title="Upload" aria-label="Upload">
+  <div class="row is-items-center is-justify-between is-wrap pane-head">
+    <h2 class="pane-title">Media pool</h2>
+    <div class="btn-toolbar">
+      <div class="btn-group" role="group" aria-label="Add media">
+        <button type="button" class="btn btn-sm btn-secondary btn-icon" data-bs-toggle="modal" data-bs-target="#uploadModal" title="Upload files" aria-label="Upload files">
           <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
         </button>
-        <a class="btn btn-secondary" href="/upload" title="Open the upload page" aria-label="Open the upload page">
-          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-external-link"/></svg>
-        </a>
-        <button type="button" class="btn btn-danger btn-youtube" data-bs-toggle="modal" data-bs-target="#ytdlModal" title="Download from URL" aria-label="Download from URL">
+        <button type="button" class="btn btn-sm btn-secondary btn-icon" data-bs-toggle="modal" data-bs-target="#ytdlModal" title="Download from a URL" aria-label="Download from a URL">
           <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-download"/></svg>
         </button>
-        <button type="button" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#qrModal" title="Show QR for mobile upload" aria-label="Show QR for mobile upload">
+        <button type="button" class="btn btn-sm btn-secondary btn-icon" data-bs-toggle="modal" data-bs-target="#qrModal" title="Upload from a phone (QR code)" aria-label="Upload from a phone (QR code)">
           <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-qr-code"/></svg>
         </button>
-        <button type="button" class="btn btn-secondary btn-live-cue" data-bs-toggle="modal" data-bs-target="#liveModal" title="Add a live page cue (TimerPi display or any web page)" aria-label="Add a live page cue">
+        <button type="button" class="btn btn-sm btn-secondary btn-icon btn-live-cue" data-bs-toggle="modal" data-bs-target="#liveModal" title="Add a live page cue (TimerPi display or any web page)" aria-label="Add a live page cue">
           <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-clock"/></svg>
         </button>
       </div>
-      <div class="row is-gap-xs btn-group-sm" role="group" aria-label="Thumbnail columns"
-        title="Number of thumbnail columns">
-        <button type="button" class="btn btn-secondary" id="media-cols-less"
-          title="Fewer columns" aria-label="Fewer columns">&minus;</button>
-        <button type="button" class="btn btn-secondary" id="media-cols-more"
-          title="More columns" aria-label="More columns">+</button>
+      <div class="btn-group" role="group" aria-label="Thumbnail columns">
+        <button type="button" class="btn btn-sm btn-secondary btn-icon" id="media-cols-less"
+          title="Fewer thumbnail columns" aria-label="Fewer thumbnail columns"><svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-minus"/></svg></button>
+        <button type="button" class="btn btn-sm btn-secondary btn-icon" id="media-cols-more"
+          title="More thumbnail columns" aria-label="More thumbnail columns"><svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-plus"/></svg></button>
       </div>
     </div>
   </div>
 
   {{ if .Mediapool }}
-  <div class="d-flex is-gap-xs mb-m flex-shrink-0">
+  <div class="row is-gap-xs mb-m pool-filter">
     <input
       type="text"
       class="input"
       id="mediaFilterText"
-      placeholder="Filter by filename..."
+      placeholder="Filter by filename…"
       aria-label="Filter by filename"
       oninput="filterMedia()"
     />
     <select
-      class="select w-auto"
+      class="select"
       id="mediaFilterType"
       aria-label="Filter by type"
       onchange="filterMedia()"
@@ -67,16 +63,24 @@
         <div class="media-thumbnail" style="background-image:url('{{ $thumb }}')"
           draggable="true" data-media-filename="{{ .Filename }}" role="img" aria-label="Thumbnail for {{ .Filename }}">
           {{ if .Missing }}
-          <svg class="icon media-missing"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg>
+          <span class="badge badge-danger media-missing" title="Source file missing from disk"><svg class="icon" aria-hidden="true"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg> MISSING</span>
+          {{ end }}
+          {{ if or .Animated .Warning .Prepared }}
+          <div class="media-badges">
+            {{ if .Animated }}<span class="badge badge-accent" title="Animated image{{ if .AnimFPS }}, {{ .AnimFPS }} fps{{ end }}">ANIM{{ if .AnimFPS }} {{ .AnimFPS }}fps{{ end }}</span>{{ end }}
+            {{ if .Prepared }}<span class="badge badge-success" title="A prepared HEVC copy plays instead of the original">PREP</span>{{ end }}
+            {{ if .Warning }}<span class="badge badge-warning" title="{{ .Warning }}" aria-label="Playback warning: {{ .Warning }}"><svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-warning"/></svg> SLOW</span>{{ end }}
+          </div>
           {{ end }}
           <!-- Detailed info panel: hover reveals type, size, date added. -->
           <div class="media-info">
             <span class="media-info-name" title="{{ .Filename }}">{{ .Filename }}</span>
-            <span class="media-info-row"><svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ $icon }}"/></svg> {{ .Mimetype }}</span>
+            <span class="media-info-row row is-items-center is-gap-2xs"><svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-{{ $icon }}"/></svg> {{ .Mimetype }}</span>
             <span class="media-info-row">Size: {{ .Size }}</span>
             <span class="media-info-row">Added: {{ .DateAdded }}</span>
+            {{ if .Warning }}<span class="media-info-row media-info-warning">{{ .Warning }}</span>{{ end }}
           </div>
-          <button class="media-menu-toggle" type="button" draggable="false"
+          <button class="btn btn-sm btn-secondary btn-icon media-menu-toggle" type="button" draggable="false" aria-haspopup="menu"
             aria-label="Menu for {{ .Filename }}" data-media-menu="{{ .Filename }}">
             <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-more-horizontal"/></svg>
           </button>
@@ -85,22 +89,18 @@
 
     {{ end }}
     </div>
-    <p id="media-no-match" class="text-muted small text-center my-3" hidden>
-      No media matches the filter.
-    </p>
+    <div id="media-no-match" class="empty-state" hidden>
+      <span class="empty-state-title">No media matches the filter</span>
+      <span class="empty-state-hint">Clear the filter or pick another type.</span>
+    </div>
   {{ else }}
-  <div class="mediapool-empty text-center p-4 border border-secondary rounded">
-    <svg class="icon fs-1 d-block mb-m"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
-    <p class="h6 mb-m">No media yet</p>
-    <button
-      type="button"
-      class="btn btn-primary"
-      data-bs-toggle="modal"
-      data-bs-target="#uploadModal"
-    >
+  <div class="empty-state mediapool-empty">
+    <svg class="icon empty-state-icon" aria-hidden="true"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
+    <span class="empty-state-title">No media yet</span>
+    <span class="empty-state-hint">Drop files here, or use the buttons above to upload or download.</span>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#uploadModal">
       <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>&nbsp;Upload
     </button>
-    <p class="small text-muted mt-m mb-0">or drop files here</p>
   </div>
   {{ end }}
 </div>

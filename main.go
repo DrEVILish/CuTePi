@@ -9,10 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sys/unix"
 
 	"CuTePi/config"
 	"CuTePi/ctp"
@@ -47,6 +50,50 @@ func prepareTmpDir() {
 	}
 }
 
+// appliance tunes the process for show playback (PERFORMANCE_PROPOSALS 3,
+// DESIGN §7): CUTEPI_MLOCK=1 locks its memory (the presenter, the decoders'
+// buffers and the Go heap never page; needs LimitMEMLOCK=infinity), and a
+// Go memory limit (GOMEMLIMIT, else a quarter of RAM) keeps the heap from
+// creeping over a long show.
+func appliance() {
+	if os.Getenv("GOMEMLIMIT") == "" {
+		var si syscall.Sysinfo_t
+		if syscall.Sysinfo(&si) == nil && si.Totalram > 0 {
+			debug.SetMemoryLimit(int64(si.Totalram) * int64(si.Unit) / 4)
+		}
+	}
+	if os.Getenv("CUTEPI_MLOCK") == "1" {
+		if err := unix.Mlockall(unix.MCL_CURRENT | unix.MCL_FUTURE); err != nil {
+			log.Printf("CuTePi: CUTEPI_MLOCK: %v (raise LimitMEMLOCK in the unit)", err)
+		} else {
+			log.Printf("CuTePi: memory locked (CUTEPI_MLOCK)")
+		}
+	}
+}
+
+// closeInheritedFDs closes every fd from keep up that this process got from
+// its parent without close-on-exec: the service's C libraries open them so
+// (GStreamer's v4l2 decoders, /dev/video10), and a child that kept a
+// decoder's fd kept that decoder open after its pipeline was retired, in
+// itself and in the WebKit processes it starts; with it held, the Pi 4's
+// H.264 decoder gave no frame to any other decoder until a restart (DESIGN
+// §6.1). Go's own fds are all close-on-exec, so none of them is touched.
+func closeInheritedFDs(keep int) {
+	ents, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil || fd < keep {
+			continue
+		}
+		if flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err == nil && flags&unix.FD_CLOEXEC == 0 {
+			unix.Close(fd)
+		}
+	}
+}
+
 func main() {
 	// `cutepi --console graphics|text`: the systemd unit's root steps around
 	// the unprivileged service (ExecStartPre/ExecStopPost). Only this
@@ -60,11 +107,13 @@ func main() {
 	// `cutepi --webcache-…`: the live-page cache keeper's WebKit work, in a
 	// child of the service (gsp/webcache/child.go).
 	if webcache.ChildArg(os.Args[1:]) {
+		closeInheritedFDs(3)
 		os.Exit(webcache.RunChild(os.Args[1:]))
 	}
 	// `cutepi --livepage-render …`: a live page's WebKit renderer, a child of
 	// the service (gsp/scanout/remote.c).
 	if scanout.ChildArg(os.Args[1:]) {
+		closeInheritedFDs(4) // fd 3 is its socket to the service
 		os.Exit(scanout.RunChild(os.Args[1:]))
 	}
 	// A child spawned by /api/restart must not bind the port until the
@@ -89,6 +138,7 @@ func main() {
 	if err := config.LoadConfig(); err != nil {
 		log.Fatalf("CuTePi: %v", err)
 	}
+	appliance()
 	prepareTmpDir()
 	releaseConsole := gsp.ClaimWallConsole()
 	gsp.OpenWall()
@@ -98,8 +148,25 @@ func main() {
 	}
 	defer ctp.CloseDB()
 	gsp.AlphaLookup = ctp.MediaHasAlpha
-	gsp.FieldOrderLookup = ctp.MediaFieldOrder
-	gsp.CodecLookup = ctp.MediaVideoCodec
+	// A prepared copy (show compiler, DESIGN §12.17) plays instead of its
+	// source: HEVC 8-bit 4:2:0, progressive.
+	media.PreparedDir = filepath.Join(filepath.Dir(config.ThumbnailLocation()), "prepared")
+	// The renderer's URL: the stored screen key, and for a TimerPi display
+	// page this unit's fixed screen name (one TimerPi screen, every load).
+	gsp.EndpointAuth = func(u string) string { return ctp.WithScreenName(ctp.WithScreenKey(u), routes.InstanceName()) }
+	gsp.SourceLookup = func(f string) string { return media.Prepared(config.MediaLocation(), f) }
+	gsp.FieldOrderLookup = func(f string) string {
+		if gsp.SourceLookup(f) != "" {
+			return ""
+		}
+		return ctp.MediaFieldOrder(f)
+	}
+	gsp.CodecLookup = func(f string) string {
+		if gsp.SourceLookup(f) != "" {
+			return "hevc/yuv420p"
+		}
+		return ctp.MediaVideoCodec(f)
+	}
 	media.PlaybackBusy = func() bool { return !gsp.WallIdle() || len(gsp.RunningCues()) > 0 }
 
 	// One-time scan flags media whose source files are missing on disk; cues
@@ -122,12 +189,15 @@ func main() {
 	// wall is idle; drops the cached assets and source rows of removed cues
 	// (also the ones left from before a restart).
 	go routes.RunLiveCacheKeeper()
+	go routes.RunLiveStandby()
 	// Panic holding image kept armed on the wall, so a panic cuts to it at
 	// once (§12.9).
 	go routes.RunPanicStandby()
 	// Remote control (§12.8): HyperDeck / OSC UDP / OSC TCP listeners, each
 	// only when enabled in Settings > Network (all off by default).
 	routes.StartRemote()
+	// Linked units (§6.8c): pairing, mDNS, the peer poll and replication.
+	go routes.RunLink()
 
 	r := gin.Default()
 	r.SetTrustedProxies(nil)

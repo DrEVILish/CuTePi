@@ -101,6 +101,7 @@ var builtinTestPatterns = []struct {
 	{"blink", "Blink"},
 	{"solid-color", "Solid color"},
 	{"bar", "Bar"},
+	{gsp.AVSyncPattern, "A/V sync (dial, offset meter + beep)"},
 }
 
 // lastTestPattern is what the Tests toggle re-shows; the default SMPTE
@@ -210,6 +211,9 @@ func Api(rg *gin.RouterGroup) {
 	registerAudioRoute(rg)
 	registerDiskRoute(rg)
 	registerLiveRoutes(rg)
+	registerLivePairRoutes(rg)
+	registerLinkedRoutes(rg)
+	registerLinkRoutes(rg)
 	registerActiveCuesRoutes(rg)
 	registerStatusRoutes(rg)
 
@@ -509,7 +513,11 @@ func registerMediaRoutes(rg *gin.RouterGroup) {
 		for _, p := range []string{
 			filepath.Join(config.MediaLocation(), filename),
 			filepath.Join(config.ThumbnailLocation(), filename+".jpg"),
+			media.PreparedPath(filename),
 		} {
+			if p == "" {
+				continue
+			}
 			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 				logs.PrintfWarn(logs.RTEDelete, "removing %q: %v", p, err)
 			}
@@ -1134,6 +1142,16 @@ func registerCueRoutes(rg *gin.RouterGroup) {
 	rg.POST("/cue/:cuePos/play", func(c *gin.Context) {
 		cuePos := c.Param("cuePos")
 		logs.Printf(logs.RTECuePlay, "Play Cue%s", cuePos)
+		// ?at=<unix ms>: show the first frame at that instant (DESIGN §6.8c),
+		// e.g. several Pis fired for one instant.
+		if at, err := parseStartAt(c.Query("at")); err != nil {
+			respondError(c, http.StatusBadRequest, err.Error())
+			return
+		} else if !at.IsZero() {
+			gsp.StartAt(at)
+		} else if cue, err := ctp.GetCue(cuePos); err == nil {
+			armLinkedStart(cue, false)
+		}
 		if err := FireCue(cuePos); err != nil {
 			respondError(c, http.StatusInternalServerError, err.Error())
 			return
@@ -1147,7 +1165,13 @@ func registerCueRoutes(rg *gin.RouterGroup) {
 	// routes/remote.go) is shared with the HyperDeck and OSC remote
 	// transports; only the render is HTTP-specific.
 	rg.POST("/cue/selected/play", func(c *gin.Context) {
-		if err := FireSelected(); err != nil {
+		// ?at=: a linked unit's GO (Synced playback), for that instant.
+		at, err := parseStartAt(c.Query("at"))
+		if err != nil {
+			respondError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := fireSelected(at, c.Query("linked") == "1"); err != nil {
 			respondError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -1216,6 +1240,12 @@ func registerCueRoutes(rg *gin.RouterGroup) {
 			if val, present := c.GetPostForm(col); present {
 				fields[col] = strings.TrimSpace(val)
 			}
+		}
+		// Align is two radio groups (horizontal, vertical); either may be unset.
+		ah, hOK := c.GetPostForm("align_h")
+		av, vOK := c.GetPostForm("align_v")
+		if hOK || vOK {
+			fields["align"] = ah + " " + av
 		}
 		// A blank time is zero: for an image's display duration that is
 		// "indefinitely", as the field says (it used to be refused, so no
@@ -1328,6 +1358,7 @@ func registerCueRoutes(rg *gin.RouterGroup) {
 		gsp.ApplyCueMix(cue.CuePos, gsp.CueMix{Mute: cue.Mute, Volume: cue.Volume, Balance: cue.Balance, Rate: cue.Rate})
 		c.HTML(http.StatusOK, "cueinspector.html", gin.H{
 			"Cue":           cue,
+			"ScreenKey":     cue.SourceKind == "endpoint" && ctp.HasScreenKey(cue.EndpointURL),
 			"Selected":      true,
 			"MediaDuration": cue.Duration,
 			"Palette":       cuePalette,
@@ -1420,6 +1451,8 @@ func registerCueRoutes(rg *gin.RouterGroup) {
 		switch col {
 		case "posStart", "posEnd", "preWait", "cueDuration", "postWait", "fadeOut", "fadeIn":
 			validate = "time"
+		case "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b":
+			validate = "geom"
 		}
 		c.HTML(http.StatusOK, "cueeditcol.html", gin.H{
 			"cuePos":   cuePos,
@@ -1442,7 +1475,7 @@ func registerCueRoutes(rg *gin.RouterGroup) {
 		}
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, ctp.ErrInvalidTimeFormat) {
+			if errors.Is(err, ctp.ErrInvalidTimeFormat) || errors.Is(err, ctp.ErrBadCueEdit) {
 				status = http.StatusBadRequest
 			}
 			respondError(c, status, err.Error())

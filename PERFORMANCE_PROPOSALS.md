@@ -144,7 +144,25 @@ p99.9.
 3. **Finish the GPU wall:** possible again now H.264 passes; but the plane wall vs GPU wall vs Proposal 1 is one
    decision, best taken once.
 4. **Don't redraw unchanged pictures:** not started; Proposal 1 makes it unnecessary.
-5. **System settings:** CPU governor measured at 1–3 % (not adopted); clocks are Proposal 3.
+5. **System settings:** CPU governor measured at 1–3 % (not adopted); clocks are Proposal 3 (the test Pi runs arm 2.0 GHz,
+   codec/ISP/V3D 650 MHz since 2026-10-08).
+7. **Proposal 3, appliance settings (2026-11-12):** opt-in, by environment in the unit: `CUTEPI_MLOCK=1` locks the process's
+   memory (needs `LimitMEMLOCK=infinity`), `CUTEPI_PRESENTER_CPU=n` pins the presenter thread to core n (pair with
+   `isolcpus=n`), and a Go memory limit (GOMEMLIMIT, default a quarter of RAM) is always set. **Baseline, stock 6.18.50
+   kernel, test Pi:** a 1080p60 H.264 cue on the presenter while three software HEVC decodes load all four cores, 40 s:
+   60.00 fps shown, 0 dropped, commit intervals p50 16.67 / p99 16.73 / max 16.78 ms over the last ~34 s, in each run. The
+   SCHED_FIFO presenter already holds the refresh under CPU load; what a PREEMPT_RT kernel can still remove is kernel-side
+   latency (interrupt and lock holdoffs), which this load does not provoke.
+8. **PREEMPT_RT kernel (2026-11-12): built, measured, not adopted.** Raspberry Pi `rpi-6.18.y` (6.18.62) from
+   `bcm2711_defconfig` with `CONFIG_PREEMPT_RT=y`, release `6.18.62-v8-rt-cutepi+`, cross-built (no tooling on the test
+   Pi). Installed beside the stock kernel for a one-shot boot only: kernel, DTB, overlays (with `overlay_map.dtb`, which
+   maps `vc4-kms-v3d` to the Pi 4 overlay: without it the display stayed off) and cmdline under `/boot/firmware/rt/`,
+   `tryboot.txt` = `config.txt` + `os_prefix=rt/` (the previous `tryboot.txt` saved as `/root/tryboot.txt.bak-2026-11-12`).
+   Boot it with `reboot '0 tryboot'`; any later reboot returns to the stock kernel. On it everything came up (KMS wall,
+   presenter, H.264/HEVC/ISP decoders, HDMI audio). Same benchmark, 3 runs: 60.00 fps, 0 dropped, p99 16.72-16.73 ms;
+   max 16.77-16.79 ms in two runs and one 33.33 ms interval (one refresh without a commit) in the first, which the stock
+   kernel never showed in 3 runs. No gain on this load, so the stock kernel stays; the RT kernel is there for a test
+   that provokes kernel latency (heavy SD-card I/O, network floods, USB) before deciding again.
 6. **Recommend HEVC for 1080p60:** not started; Proposal 2 makes it automatic.
 
 Suggested order: Proposal 1's first proof (it also carries the new layer stack), then Proposal 2's offline proof

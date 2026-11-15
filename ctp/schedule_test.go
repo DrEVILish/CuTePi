@@ -85,3 +85,30 @@ func TestGetScheduledCuesRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestScheduledCueIsAvailableBeforeItsWholeSecond(t *testing.T) {
+	if err := ClearCueSheet(); err != nil {
+		t.Fatal(err)
+	}
+	mustRegisterMedia(t, "schedule-ahead.mp4")
+	if err := AddCue("schedule-ahead.mp4", ""); err != nil {
+		t.Fatal(err)
+	}
+	due := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	if err := SetCueSchedule(1, true, 1, 12*3600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		before time.Duration
+		want   int
+	}{{1100 * time.Millisecond, 0}, {800 * time.Millisecond, 1}, {200 * time.Millisecond, 1}} {
+		now := due.Add(-tc.before)
+		rows, err := GetScheduledCuesSince(now.Add(-time.Second), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != tc.want {
+			t.Errorf("%v before schedule: got %d cues, want %d", tc.before, len(rows), tc.want)
+		}
+	}
+}

@@ -206,6 +206,24 @@ func InitDB() error {
 	if err != nil {
 		return fmt.Errorf("ctp: creating state table: %w", err)
 	}
+	// Live-page screen keys (credentials), apart from the cue URLs that are
+	// shown, logged and exported (DESIGN §12.14 pairing).
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS endpoint_secret (
+			url    TEXT PRIMARY KEY NOT NULL,
+			secret TEXT NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("ctp: creating endpoint_secret: %w", err)
+	}
+	// Linked units (DESIGN §6.8c): paired peers and their pairing secrets,
+	// apart from config.json and never exported.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS link_peer (
+			id     TEXT PRIMARY KEY NOT NULL,
+			name   TEXT NOT NULL DEFAULT '',
+			url    TEXT NOT NULL,
+			secret TEXT NOT NULL DEFAULT ''
+		)`); err != nil {
+		return fmt.Errorf("ctp: creating link_peer: %w", err)
+	}
 	if err := repairZeroOpacity(db); err != nil {
 		return err
 	}
@@ -355,6 +373,7 @@ var cuesheetAddedCols = []struct{ name, ddl string }{
 	{"crop_r", "TEXT NOT NULL DEFAULT ''"},
 	{"crop_t", "TEXT NOT NULL DEFAULT ''"},
 	{"crop_b", "TEXT NOT NULL DEFAULT ''"},
+	{"align", "TEXT NOT NULL DEFAULT ''"},         // picture alignment: "[left|center|right] [top|middle|bottom]"
 	{"stop_others", "INTEGER NOT NULL DEFAULT 1"}, // fire stops the running cues (§6.1.2)
 	{"layer", "TEXT NOT NULL DEFAULT 'top'"},      // top|bottom|under when it keeps them
 	{"layer_under", "INTEGER NOT NULL DEFAULT 0"}, // under: the cue_id to go beneath

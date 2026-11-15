@@ -4,20 +4,20 @@
   <div class="modal-dialog">
     <div class="modal-content modal">
       <div class="modal-header">
-        <span class="modal-title" id="testModalLabel">Show Test</span>
+        <span class="modal-title" id="testModalLabel">Test patterns</span>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <div id="test-pattern-grid" class="d-flex is-wrap is-gap-xs mb-xs" aria-label="Built-in test patterns"></div>
-        <div id="test-custom-grid" class="d-flex is-wrap is-gap-xs" aria-label="Custom test patterns"></div>
-        <div class="form-check mt-xs">
-          <input class="checkbox" type="checkbox" id="testOverlay">
-          <label class="form-check-label" for="testOverlay">Show resolution &amp; frame rate on the pattern</label>
+        <div id="test-pattern-grid" class="btn-toolbar mb-xs" role="group" aria-label="Built-in test patterns"></div>
+        <div id="test-custom-grid" class="btn-toolbar" role="group" aria-label="Custom test patterns"></div>
+        <div class="field-row mt-xs">
+          <label class="label" for="testOverlay">Overlay resolution &amp; frame rate</label>
+          <label class="switch"><input type="checkbox" id="testOverlay"><span class="switch-track"><span class="switch-thumb"></span></span></label>
         </div>
-        <p class="text-muted small mt-xs mb-0">Pin your own media from its tile menu ("Add to test patterns").</p>
+        <p class="field-hint">Pin your own media from its tile menu ("Add to test patterns").</p>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Keep</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
         <button
           type="button"
           class="btn btn-danger"

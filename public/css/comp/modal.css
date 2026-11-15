@@ -15,7 +15,8 @@
    frame are the theme's — app CSS lays out only what is inside),  but not Bootstrap's hidden,
    fixed, full-screen .modal rules (Bootstrap is in a lower layer yet still
    supplies properties the theme leaves unset). It fills its .modal-dialog. */
-.modal-dialog > .modal {
+.modal-dialog > .modal,
+.modal-overlay > .modal {
   position: relative;
   top: auto;
   left: auto;

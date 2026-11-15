@@ -5,14 +5,11 @@
     <div class="modal-content modal">
       <div class="modal-header">
         <span class="modal-title" id="uploadModalLabel">Upload</span>
-        <a class="btn btn-lg" href="/upload">
-          <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-logout"/></svg>
-        </a>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <form id="dropform">
         <div class="modal-body">
-          <div id="dropzone">
+          <div id="dropzone" class="dropzone">
             <input
               id="file-input"
               type="file"
@@ -21,15 +18,17 @@
               hidden
             />
             <label for="file-input">
-              <strong>Choose a file</strong>
-              <span class="dragndrop"> or drag it here</span>
+              <svg class="icon"><use href="/ftl/assets/icons/icons.svg#icon-cloud-upload"/></svg>
+              <strong>Choose files</strong>
+              <span class="dragndrop"> or drag them here</span>
             </label>
           </div>
           <ul id="filelist"></ul>
-          <progress id="progress" value="0" max="100" hidden></progress>
-          <div id="upload-status" class="small" role="status" aria-live="polite"></div>
+          <progress id="progress" class="progress" value="0" max="100" aria-label="Upload progress" hidden></progress>
+          <div id="upload-status" role="status" aria-live="polite"></div>
         </div>
         <div class="modal-footer">
+          <a class="btn btn-ghost" href="/upload">Open the upload page</a>
           <button id="upload" class="btn btn-primary" type="submit">Upload</button>
         </div>
       </form>

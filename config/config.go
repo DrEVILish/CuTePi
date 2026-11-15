@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -53,6 +54,10 @@ type Config struct {
 		Password string `json:"password"`
 	} `json:"hotspot"`
 	Remote RemoteSettings `json:"remote"`
+	// LinkedPeers are other CuTePi units fired with this one (DESIGN §6.8c):
+	// base URLs ("http://wall-2.local"); credentials may be embedded for a
+	// password-protected peer.
+	LinkedPeers []string `json:"linked_peers,omitempty"`
 }
 
 // RemoteSettings are the remote-control listeners (§12.8). Neither protocol
@@ -707,4 +712,44 @@ func ThumbnailLocation() string {
 	confMu.RLock()
 	defer confMu.RUnlock()
 	return conf.Thumbnails.Location
+}
+
+// LinkedPeers returns the CuTePi units fired with this one.
+func LinkedPeers() []string {
+	confMu.RLock()
+	defer confMu.RUnlock()
+	return append([]string(nil), conf.LinkedPeers...)
+}
+
+// SetLinkedPeers validates (absolute http(s) URLs, no path or query; at most
+// 16) and persists the linked units.
+func SetLinkedPeers(peers []string) error {
+	var out []string
+	for _, p := range peers {
+		p = strings.TrimRight(strings.TrimSpace(p), "/")
+		if p == "" {
+			continue
+		}
+		u, err := url.Parse(p)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" || u.RawQuery != "" {
+			return fmt.Errorf("linked unit %q: use a base URL like http://wall-2.local", RedactURL(p))
+		}
+		out = append(out, p)
+	}
+	if len(out) > 16 {
+		return fmt.Errorf("at most 16 linked units")
+	}
+	confMu.Lock()
+	conf.LinkedPeers = out
+	confMu.Unlock()
+	return SaveConfig()
+}
+
+// RedactURL hides the password of a URL with embedded credentials.
+func RedactURL(s string) string {
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		return s
+	}
+	return u.Redacted()
 }

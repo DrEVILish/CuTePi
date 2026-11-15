@@ -195,6 +195,10 @@ func handleUpload(c *gin.Context) {
 		}
 		imported = append(imported, name)
 	}
+	// An Active/active backup pair's other units get the new files (§6.8c).
+	if !fromLink(c) {
+		linkMediaAdded(imported)
+	}
 	// Percent-encoded: header values are Latin-1 to XHR, file names are not.
 	if summary, err := json.Marshal(gin.H{"imported": imported, "skipped": skipped}); err == nil {
 		c.Header("X-Upload-Result", url.PathEscape(string(summary)))

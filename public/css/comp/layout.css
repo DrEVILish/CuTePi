@@ -11,6 +11,9 @@ body.app-body {
 body.app-body {
   display: flex;
   flex-direction: column;
+  /* Fill html's content box, not the viewport: a theme that pads html (the
+     nokia-3310 casing) otherwise pushed the footer below the window. */
+  height: 100%;
 }
 
 /* The standalone uploader is intentionally a normal scrolling page, unlike
@@ -33,13 +36,12 @@ body.upload-body {
   flex-direction: column;
 }
 
-/* Full-bleed console: Bootstrap's .container-fluid 12px gutters read as a
-   weird floating inset around the panes (the resizer gap and pane hairlines
-   already do the separating). Panes butt to the viewport edge; the media
-   pool carries its own interior padding instead. Two classes to out-rank
-   Bootstrap's own .container-fluid rule. */
-.app-content.container-fluid {
-  padding: 0;
+/* Full-bleed console: the panes butt to the viewport edge (the resizer gap
+   and pane hairlines do the separating); the media pool carries its own
+   interior padding. The theme's --app-main-padding tokens are the knob. */
+.app-content.app-main {
+  --app-main-padding: 0;
+  --app-main-padding-sm: 0;
 }
 
 /* Full width at every screen size. ftl-themes caps the shell at --app-max
@@ -50,39 +52,33 @@ html:root {
   --app-max: 100vw;
 }
 
-.navbar .container-fluid {
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.navbar #mediainfo {
-  flex: 1 1 34rem;
+/* Top bar: the theme's .app-bar. Only the arrangement of CuTePi's own
+   clusters inside it is set here. */
+.app-bar { gap: 0.75rem; }
+.app-bar #mediainfo {
+  flex: 1 1 20rem;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 1.5rem;
 }
+.app-bar-actions { margin-inline-start: auto; }
+.app-status-end { margin-inline-start: auto; }
 /* GO cluster: what fires + what follows, always visible. */
 .header-status .go-cluster {
   flex: 1 1 auto;
   min-width: 0;
   gap: 0;
+  flex-wrap: nowrap; /* the title ellipsises instead of dropping under GO */
 }
-/* The GO button spans the mediapool pane's width so its right edge — and
-   the go-now text that starts flush against it — lines up with the pane
-   splitter below (same --mediapool-width var the resizer writes). The 7rem
-   compensates the fixed left navbar content (status dot, clock, gaps). */
+/* The GO button has a fixed width: the same size and place whatever width
+   the media pool is dragged to (it used to follow the pool's splitter). */
 #go-btn {
-  width: max(9rem, calc(var(--mediapool-width, 320px) - 7rem));
+  width: 10rem;
   justify-content: center;
   flex: none;
 }
 
-/* The bar is theme-painted; its furniture must read in the theme's bar
-   foreground, not the app's page-muted token (windows95: grey-on-navy). */
-html[data-theme-id^="ftl:"] .app-bar :is(.topbar-clock, .ws-status, .text-muted) {
-  color: inherit;
-}
 /* What GO fires: bordered box so a cue colour can frame it (inline
    border-color when the selected cue/group has one). */
 .go-now {
@@ -118,11 +114,11 @@ html[data-theme-id^="ftl:"] .app-bar :is(.topbar-clock, .ws-status, .text-muted)
   transition: color 0.3s ease, opacity 0.3s ease;
 }
 #now-remaining.remaining-slow {
-  color: #ffd93d; /* amber */
+  color: var(--warning-text, var(--warning, #ffd93d));
   animation: rem-pulse-slow 2s ease-in-out infinite;
 }
 #now-remaining.remaining-fast {
-  color: #ff6b6b; /* red */
+  color: var(--danger-text, var(--danger, #ff6b6b));
   animation: rem-pulse-fast 1s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -150,10 +146,11 @@ html[data-theme-id^="ftl:"] .app-bar :is(.topbar-clock, .ws-status, .text-muted)
 }
 /* Now Playing cluster: identity + scrubber + pause. */
 .header-status .now-cluster {
-  flex: 0 1 24rem;
+  flex: 0 1 26rem;
   min-width: 12rem;
-  text-align: left;
+  margin-inline: auto;
 }
+.header-status .now-cluster .scrubber { flex: 1 1 auto; min-width: 0; }
 .header-status .now-title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -161,38 +158,12 @@ html[data-theme-id^="ftl:"] .app-bar :is(.topbar-clock, .ws-status, .text-muted)
   font-weight: 600;
 }
 
-.navbar .container-fluid > .d-flex.gap-2 {
-  flex-wrap: wrap;
-}
-
-/* WebSocket live-status dot in the topbar: cyan = socket up (push updates),
-   red = socket down (slow poller fallback in effect). Sized to 75% of the
-   adjacent topbar .btn height (1.5rem line + 0.75rem padding + 2px border). */
-.ws-status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: calc((2.375rem + 2px) * 0.75);
-  font-size: 1.5rem;
-  line-height: 1;
-  color: var(--bs-danger, #dc3545);
-  opacity: 0.9;
-}
-.ws-status.ws-status-on {
-  color: var(--ctp-accent, #2fd6ff);
-}
-
-/* Topbar wall clock: muted readout, tabular numerals with a fixed reserve
-   so the HH:MM:SS tick never reflows the neighbouring buttons. */
+/* Topbar wall clock: tabular numerals with a fixed reserve so the HH:MM:SS
+   tick never reflows the neighbouring buttons. */
 .topbar-clock {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--ctp-muted, #7ca6c3);
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.05em;
-  min-width: 5.5ch;
+  min-width: 8ch;
   text-align: center;
-  align-self: center;
 }
 
 .app-content > .app-main-row {
@@ -245,43 +216,6 @@ html[data-theme-id^="ftl:"] .app-bar :is(.topbar-clock, .ws-status, .text-muted)
 #mediapool-resizer:hover,
 #mediapool-resizer:active {
   background: var(--ctp-flare, #d85cff);
-}
-
-/* Collapse button hugs the RIGHT edge of the media pool pane (on the
-   border, where the splitter is), vertically centred (halfway up the pane),
-   so it reads as the "close" affordance for the panel and stays reachable
-   regardless of pool length. */
-#mediapool-collapse-btn {
-  position: absolute;
-  top: 50%;
-  right: 0;
-  transform: translate(50%, -50%);
-  z-index: 5;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.9rem;
-  height: 1.9rem;
-  padding: 0;
-  margin: 0;
-  border-width: 2px;
-  border-radius: 0.25rem;
-  background-color: var(--bs-body-bg, #212529);
-}
-#mediapool-collapse-btn i {
-  font-size: 1.1rem;
-  color: var(--bs-danger, #dc3545);
-  font-weight: 700;
-}
-#mediapool-collapse-btn:hover {
-  background-color: var(--bs-danger, #dc3545);
-  border-color: var(--bs-danger, #dc3545);
-}
-#mediapool-collapse-btn:hover i {
-  color: #fff;
-}
-body.mediapool-collapsed #mediapool-collapse-btn {
-  display: none;
 }
 
 /* Collapsed media pool: hide the panel entirely (width 0, content clipped);
@@ -340,11 +274,10 @@ body.activecues-collapsed #activecues-resizer {
   flex-direction: column;
   gap: 0.5rem;
 }
+/* A running cue is a stock .card; the wide left edge carries its colour. */
 .active-cue {
-  border: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
+  --card-pad: 0.5rem;
   border-left-width: 4px;
-  border-radius: 0.25rem;
-  padding: 0.4rem 0.5rem;
 }
 .active-cue.is-focus {
   box-shadow: inset 0 0 0 1px var(--ctp-flare, #d85cff);
@@ -355,61 +288,12 @@ body.activecues-collapsed #activecues-resizer {
   white-space: nowrap;
   min-width: 0;
 }
-.active-cue-bar {
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.12);
-  overflow: hidden;
-}
-.active-cue-bar > span {
-  display: block;
-  height: 100%;
-  background: var(--ctp-flare, #d85cff);
-}
-.activecues-count:not(:empty) {
-  margin-left: 0.35em;
-  padding: 0 0.4em;
-  border-radius: 0.6em;
-  font-size: 0.8em;
-  background: var(--ctp-flare, #d85cff);
-  color: #fff;
-}
+.active-cue-bar { flex: 1 1 auto; }
+.activecues-count { margin-left: 0.35em; }
+.activecues-count:empty { display: none; }
 
-/* Expand button floats at the left edge of the content area; hidden unless
-   the media pool is collapsed, so it is always possible to restore it. */
-#mediapool-expand-btn {
-  display: none;
-}
 .app-content {
   position: relative;
-}
-body.mediapool-collapsed #mediapool-expand-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  position: absolute;
-  top: 50%;
-  left: 4px;
-  transform: translateY(-50%);
-  z-index: 10;
-  width: 1.9rem;
-  height: 1.9rem;
-  padding: 0;
-  border-width: 2px;
-  border-color: var(--bs-success, #198754);
-  background-color: var(--bs-body-bg, #212529);
-}
-body.mediapool-collapsed #mediapool-expand-btn i {
-  font-size: 1.1rem;
-  color: var(--bs-success, #198754);
-  font-weight: 700;
-}
-body.mediapool-collapsed #mediapool-expand-btn:hover {
-  background-color: var(--bs-success, #198754);
-  border-color: var(--bs-success, #198754);
-}
-body.mediapool-collapsed #mediapool-expand-btn:hover i {
-  color: #fff;
 }
 
 .app-pane {
@@ -461,23 +345,22 @@ tr.cue-drop-indicator.cue-drop-in td {
 }
 .inspector-header {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--bs-secondary-color, #6c757d);
+  padding: 0.25rem 0.75rem 0;
+  border-bottom: 1px solid var(--ctp-hairline, var(--ctp-border, #176095));
 }
+.inspector-save-note { margin: 0 0 0 0.25rem; }
 .inspector-collapse {
   flex: 1 1 auto;
   min-height: 0;
-  /* The inspector tab content is laid out to always fit the panel, so no
-     scrollbar is ever shown - a scrollbar would indicate overflow that the
-     panes are designed to absorb instead (compact rows, media info split). */
-  overflow: hidden;
+  /* The tab content is laid out to fit the panel at its default height; at
+     a smaller height it scrolls, so no control is ever cut off (Mute sat
+     below the fold on the Audio tab). */
+  overflow-y: auto;
 }
 .cueinspector-body {
   min-height: 100%;
 }
-.inspector-tabs .tab {
-  padding: 0.15rem 0.8rem;
-  font-size: 0.85rem;
-}
+.inspector-tabs { margin: 0; padding: 0; list-style: none; flex: 0 1 auto; min-width: 0; }
 .inspector-tabpane {
   display: none;
 }
@@ -524,28 +407,12 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   gap: 0.05rem;
 }
 .insp-field-label {
-  font-size: 0.8em;
-  line-height: 1.05;
-  color: var(--ctp-muted, #adb5bd);
   white-space: nowrap;
   margin-bottom: 0;
 }
-.insp-time-field .form-control-sm,
-.insp-time-field .form-select-sm {
-  height: 1.45rem;
-  padding: 0.01rem 0.3rem;
-  font-size: 0.78rem;
-}
-/* The schedule row's checkbox keeps Bootstrap's default top offset. */
-.insp-schedule .form-check-input {
-  margin-top: 0;
-}
-/* Schedule block lives in the same narrow column: day + time stack full
-   width inside it (auto widths overflowed the 11rem column). */
-.insp-schedule .form-select-sm,
-.insp-schedule .form-control-sm {
-  width: 100%;
-}
+/* Schedule block lives in the same narrow column: time and day picker
+   share the row's leftover width. */
+.insp-schedule .input { flex: 1 1 6rem; min-width: 0; width: auto; }
 /* Multi-day picker: a native details dropdown with tick boxes. */
 .day-picker {
   position: relative;
@@ -554,66 +421,28 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
      input beside it, whatever height it renders at. */
   align-self: stretch;
 }
-.day-picker summary {
-  list-style: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: 0.01rem 0.3rem;
-  font-size: 0.78rem;
-  line-height: 1.2;
-  border: 1px solid var(--ctp-border, var(--bs-border-color, #444));
-  border-radius: 0.2rem;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--ctp-text, inherit);
-  font-family: inherit;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.day-picker summary { list-style: none; width: 100%; }
 .day-picker summary::-webkit-details-marker,
 .day-picker summary::marker {
   display: none;
   content: "";
 }
-.day-picker[open] summary {
-  border-color: var(--ctp-accent, #2fd6ff);
-}
+/* The list is a stock .dropdown surface, placed above its button. */
 .day-picker-list {
   position: absolute;
   z-index: 20;
   right: 0;
   /* Pop UPWARDS: the sheet sits at the bottom of the page. */
   bottom: calc(100% + 0.15rem);
-  padding: 0.25rem 0.4rem;
-  min-width: 8.5rem;
-  background: var(--ctp-surface-2, #26163e);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
-  gap: 0.05rem;
 }
 .day-picker-list label {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.05rem 0.2rem;
-  font-size: 0.78rem;
+  gap: 0.4rem;
   white-space: nowrap;
   cursor: pointer;
-}
-.day-picker-list label:hover {
-  background: rgba(216, 92, 255, 0.15);
-}
-#insp-fadeaction,
-#insp-fadeout {
-  height: 1.45rem;
-  min-height: 1.45rem;
 }
 .insp-time-right {
   flex: 1 1 auto;
@@ -627,11 +456,6 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   align-items: center;
   flex-wrap: wrap;
   gap: 0.3rem;
-}
-.insp-time-buttons .btn-sm {
-  padding: 0.05rem 0.5rem;
-  font-size: 0.75rem;
-  line-height: 1.2;
 }
 /* Option row: the checkbox items spread evenly across the width. */
 .insp-time-checks {
@@ -647,15 +471,6 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   align-items: flex-start;
   gap: 0.3rem;
 }
-.insp-time-checks .form-check-input {
-  margin-top: 0;
-}
-.insp-time-checks .form-control-sm,
-.insp-time-checks .form-select-sm {
-  height: 1.45rem;
-  padding: 0.01rem 0.3rem;
-  font-size: 0.78rem;
-}
 /* Playback rate rides in the trim-button strip: inline label + slider,
    same compact height as the buttons. */
 .insp-rate {
@@ -663,32 +478,23 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
   align-items: center;
   gap: 0.35rem;
 }
-.insp-rate input {
-  width: 7rem;
-  height: 1.45rem;
-  accent-color: var(--ctp-accent);
-}
+.insp-rate .slider { width: 7rem; }
 .insp-fadein { max-width: 11rem; }
 /* Live page cue: the URL sits atop the wide right column. */
 .insp-live-url { max-width: 48rem; }
 .insp-audio-wrap { display: flex; gap: 3rem; align-items: flex-start; justify-content: flex-start; padding-top: 0.75rem; }
 .insp-audio-settings { display: flex; flex-direction: column; gap: 0.45rem; }
-.insp-audio-settings input[type="range"] { min-width: 0; }
-.insp-audio-settings input { accent-color: var(--ctp-accent); }
+.insp-audio-settings .slider { width: 8rem; }
 
 .inspector-tabpanes[data-active-tab="audio"] .inspector-tabpane[data-tabpane="audio"] {
   display: block;
 }
 
-/* Silent save indicator: a small square that pulses on every commit. */
+/* Silent save indicator: a stock .lamp that lights on every commit. */
 .inspector-save-flash {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 0.15rem;
-  background: var(--bs-success, #198754);
+  margin-inline-start: auto;
   opacity: 0;
   transition: opacity 0.15s ease-out;
-  flex: 0 0 auto;
 }
 .inspector-save-flash.saved {
   opacity: 1;
@@ -698,7 +504,7 @@ body.ctp-no-audio-tab [data-inspector-tab="audio"] {
 #cueinspector-resizer {
   height: 0.35rem;
   cursor: ns-resize;
-  background: linear-gradient(to bottom, transparent, var(--bs-secondary-color, #6c757d));
+  background: linear-gradient(to bottom, transparent, var(--ctp-hairline, var(--ctp-border, #6c757d)));
   flex: 0 0 auto;
 }
 
@@ -709,36 +515,6 @@ body.cueinspector-collapsed #cueinspector-panel {
 }
 body.cueinspector-collapsed #cueinspector-resizer {
   display: none;
-}
-#cueinspector-expand-btn {
-  display: none;
-}
-body.cueinspector-collapsed #cueinspector-expand-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  position: fixed;
-  bottom: 4px;
-  right: 4px;
-  z-index: 10;
-  width: 1.9rem;
-  height: 1.9rem;
-  padding: 0;
-  border-width: 2px;
-  border-color: var(--bs-success, #198754);
-  background-color: var(--bs-body-bg, #212529);
-}
-body.cueinspector-collapsed #cueinspector-expand-btn i {
-  font-size: 1.1rem;
-  color: var(--bs-success, #198754);
-  font-weight: 700;
-}
-body.cueinspector-collapsed #cueinspector-expand-btn:hover {
-  background-color: var(--bs-success, #198754);
-  border-color: var(--bs-success, #198754);
-}
-body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
-  color: #fff;
 }
 /* Media info: one aligned label:value column; `.media-cols-2` (toggled by JS
    when the list would overflow the inspector) doubles it into two aligned
@@ -781,8 +557,10 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
 :where(body.app-body) > :where(.app-shell) {
   flex: 1 1 auto;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  /* The XL tier centres the shell with auto margins, which turns off flex
+     stretch: without a width it shrank to its content (the cuesheet pane has
+     no intrinsic width under its container query). */
+  width: 100%;
 }
 
 /* Keep the empty footer in the theme's status row without overriding its
@@ -792,26 +570,7 @@ body.cueinspector-collapsed #cueinspector-expand-btn:hover i {
   overflow-x: auto;
 }
 
-/* Settings modal: the .field wrappers in the markup give a shared theme
-   control of field spacing; under this app's own themes (no ftl stylesheet
-   linked) they carry the same 1rem rhythm the old .mt-3 label margins did. */
-:where(.modal-body) :where(.field) {
-  margin-top: 0;
-  margin-bottom: 1rem;
-}
-/* The panel buttons were floating overlays; in the footer they are plain
-   static buttons. Visibility still follows the body collapse classes. */
-#app-footer #mediapool-collapse-btn,
-#app-footer #mediapool-expand-btn,
-#app-footer #cueinspector-collapse-btn,
-#app-footer #cueinspector-expand-btn {
-  position: static;
-  transform: none;
-  width: auto;
-  height: auto;
-}
 #app-footer .panel-btn-label {
-  font-size: 0.78em;
   margin-left: 0.35em;
   white-space: nowrap;
 }
@@ -841,77 +600,6 @@ body.show-mode #app-footer #mediapool-toggle {
   opacity: 0.45;
   pointer-events: none;
 }
-/* Edit/Show visual toggle: pill track with a sliding knob + mode label.
-   Token-driven so every theme re-skins it without extra rules. */
-.mode-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45em;
-  background: transparent;
-  border: 1px solid var(--ctp-border, #176095);
-  border-radius: 999px;
-  padding: 0.2em 0.7em 0.2em 0.3em;
-  color: var(--ctp-muted, #7ca6c3);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  flex: none;
-}
-.mode-switch .mode-knob {
-  width: 2em;
-  height: 1.1em;
-  border-radius: 999px;
-  background: var(--ctp-surface-2, #0d2440);
-  border: 1px solid var(--ctp-border, #176095);
-  position: relative;
-  flex: none;
-}
-.mode-switch .mode-knob::after {
-  content: "";
-  position: absolute;
-  top: 1px;
-  left: 1px;
-  width: 0.8em;
-  height: 0.8em;
-  border-radius: 50%;
-  background: var(--ctp-muted, #7ca6c3);
-  transition: left 0.15s ease, background 0.15s ease;
-}
-.mode-switch[aria-checked="true"] {
-  color: var(--ctp-accent, #2fd6ff);
-  border-color: var(--ctp-accent, #2fd6ff);
-}
-.mode-switch[aria-checked="true"] .mode-knob::after {
-  left: calc(100% - 0.8em - 1px);
-  background: var(--ctp-accent, #2fd6ff);
-}
-@media (prefers-reduced-motion: reduce) {
-  .mode-switch .mode-knob::after { transition: none; }
-}
-
-/* ftl-themes icon pack fallback: the glyph styling lives in core.css
-   (linked only under shared themes). Without it — an app: theme — an
-   <svg class="icon"> would render as invisible bare paths, so own the
-   same defaults here; the bundle's later rules win under ftl: themes. */
-.icon {
-  width: 1.2em; height: 1.2em;
-  fill: none; stroke: currentColor; stroke-width: 2;
-  stroke-linecap: round; stroke-linejoin: round;
-  display: inline-block; vertical-align: -0.2em;
-}
-
-/* Icons inside buttons sit on the text baseline like the font glyphs they
-   replaced — otherwise an svg-only button renders with a stray tall line
-   box and the glyph drifts out of the padding box. */
-.btn .icon, .btn .icon {
-  width: 1em; height: 1em; min-width: 1em;
-  vertical-align: -0.125em;
-}
-
-.settings-tabs {
-  font-size: 0.95rem;
-}
 
 /* Tests toggle while a pattern is on the output: impossible to miss. */
 #showTestBtn.test-live {
@@ -919,11 +607,11 @@ body.show-mode #app-footer #mediapool-toggle {
   animation: test-live-pulse 1s ease-in-out infinite alternate;
 }
 @keyframes test-live-pulse {
-  from { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.9); }
-  to { box-shadow: 0 0 0 5px rgba(220, 53, 69, 0.15); }
+  from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger, #dc3545) 90%, transparent); }
+  to { box-shadow: 0 0 0 5px color-mix(in srgb, var(--danger, #dc3545) 15%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) {
-  #showTestBtn.test-live { animation: none; outline: 2px solid #fff; }
+  #showTestBtn.test-live { animation: none; outline: 2px solid var(--ctp-text, #fff); }
 }
 
 /* ── Settings window ─────────────────────────────────────────────────────
@@ -943,59 +631,88 @@ body.show-mode #app-footer #mediapool-toggle {
 }
 #settingsModal .settings-tabs {
   flex: 0 0 9.5rem;
-  display: flex;
-  flex-direction: column;
-  flex-wrap: nowrap;
-  gap: 2px;
   padding: 0.75rem 0.5rem;
   overflow-y: auto;
-  border-right: 1px solid var(--bs-border-color, rgba(255, 255, 255, 0.12));
 }
-#settingsModal .settings-tabs .tab { text-align: left; white-space: nowrap; }
 #settingsModal .settings-panes { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 0.75rem 1rem 1rem; }
 #settingsModal .settings-heading { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
-#settingsModal .settings-subheading {
-  font-size: 0.9rem; font-weight: 600; margin: 1.25rem 0 0.5rem; padding-top: 0.75rem;
-  border-top: 1px solid var(--bs-border-color, rgba(255, 255, 255, 0.12));
-}
-#settingsModal .field { margin-bottom: 0.9rem; }
-#settingsModal .field-hint { font-size: 0.8rem; margin-top: 0.2rem; }
+#settingsModal .settings-subheading { margin-top: 1.25rem; }
 #settingsModal .settings-short { max-width: 9rem; }
 #settingsModal .settings-tint-row { display: flex; gap: .5rem; align-items: center; }
 #settingsModal .settings-tint-row input[type="color"] { width: 4rem; padding: 2px; }
 #settingsModal .settings-value { font-variant-numeric: tabular-nums; }
 #settingsModal .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); column-gap: 1rem; }
-/* Checkbox rows: box and label on one line, the hint under the label. */
-#settingsModal .settings-check { display: grid; grid-template-columns: auto 1fr; column-gap: 0.5rem; align-items: start; padding-left: 0; }
-#settingsModal .settings-check .checkbox { float: none; margin: 0.2rem 0 0; }
-#settingsModal .settings-check .field-hint { grid-column: 2; }
 #settingsModal .settings-remote-table { margin-bottom: 0.75rem; }
 #settingsModal .settings-remote-table td, #settingsModal .settings-remote-table th { vertical-align: middle; }
-#settingsModal .settings-warning { margin: -0.25rem 0 0.5rem; }
-#settingsModal .settings-footer { flex: 0 0 auto; gap: 0.5rem; }
-#settingsModal .settings-status { margin-right: auto; font-size: 0.85rem; }
+#settingsModal .settings-footer { flex: 0 0 auto; }
+#settingsModal .settings-status { margin-right: auto; }
 @media (max-width: 600px) {
   #settingsModal .modal-content { height: calc(100vh - 16px); }
+  /* Phones: the tab strip (horizontal there, see settingsModal.html) sits
+     above the pane. */
   #settingsModal .settings-body { flex-direction: column; }
-  #settingsModal .settings-tabs {
-    flex: 0 0 auto; flex-direction: row; overflow-x: auto; overflow-y: hidden;
-    border-right: 0; border-bottom: 1px solid var(--bs-border-color, rgba(255, 255, 255, 0.12));
-  }
+  #settingsModal .settings-tabs { flex: 0 0 auto; padding: 0.5rem 0.5rem 0; }
 }
 #settingsModal .settings-value { margin-right: 0.5rem; }
 
 /* Group inspector columns (were Bootstrap grid .col). */
 .group-col { flex: 1 1 12rem; min-width: 0; }
 
-/* ftl-themes v4 `.row` is a flex row; Bootstrap (lower layer) still adds its
+/* ftl-themes' `.row` is a flex row; Bootstrap (lower layer) still adds its
    grid gutters and forces every child of a .row to 100% width. CuTePi uses
-   `.row` only as the library's flex row, so the grid parts are switched off. */
-.row { --bs-gutter-x: 0; --bs-gutter-y: 0; margin-left: 0; margin-right: 0; margin-top: 0; }
-.row > * { flex-shrink: 1; width: auto; max-width: none; padding-left: 0; padding-right: 0; margin-top: 0; }
-/* ...except a switch, whose track sits in its own left padding. */
-.row > .form-switch { padding-left: 2.5em; }
+   `.row` only as the library's flex row, so the grid parts are switched off
+   in a layer between the two (header.html: bootstrap < bridge < ui): above
+   Bootstrap, below the theme, so a stock control keeps its own padding and
+   width. Unlayered, this stripped the padding of every input, select and
+   button placed directly in a row. */
+@layer bridge {
+  .row { --bs-gutter-x: 0; --bs-gutter-y: 0; margin-left: 0; margin-right: 0; margin-top: 0; }
+  .row > * { flex-shrink: 1; width: auto; max-width: none; padding-left: 0; padding-right: 0; margin-top: 0; }
+}
 #settingsModal .settings-about { margin-bottom: 0.75rem; display: flex; align-items: baseline; gap: 0.5rem; } #settingsModal .settings-version { font-size: 0.8125rem; } #settingsModal .settings-about .cutepi-logo { height: 28px; width: auto; }
 
 /* Layer (Video tab, §6.1.2): the cue number field only for "Under cue". */
 .insp-layer .insp-layer-under { display: none; }
 .insp-layer:has(#insp-layer option[value="under"]:checked) .insp-layer-under { display: block; }
+
+/* Small desktops and tablets in landscape: a 320px pool and a 280px active
+   cues pane (plus a theme's rail) left the cue Name under 100px at 1024.
+   Narrow both defaults; a width the operator dragged still applies when
+   smaller. */
+@media (min-width: 901px) and (max-width: 1100px) {
+  #mediapool-pane { flex-basis: min(var(--mediapool-width, 320px), 240px); }
+  #activecues-pane { flex-basis: min(var(--activecues-width, 280px), 190px); }
+}
+
+/* Phones and portrait tablets: the side-by-side panes left no room for the cuesheet (a 320px
+   media pool filled a 390px screen), and the wrapped top bar, footer and
+   inspector left none either. On phones the page scrolls instead of being
+   held to one screen: pool strip, then the cuesheet at most of a screen,
+   then running cues and the inspector. The column resizers hide; the footer
+   toggles still apply. Up to 900px, where ftl-themes' tablet tier also goes
+   to one column (an 800px portrait tablet left Name ~80px side by side). */
+@media (max-width: 900px) {
+  html, body.app-body { height: auto; min-height: 100dvh; overflow-y: auto; }
+  .app-main-row, .app-content > .app-main-row { flex: 0 0 auto; height: auto; flex-direction: column; }
+  #mediapool-pane { flex: 0 0 auto; max-height: 30vh; overflow-y: auto; border-right: 0;
+    border-bottom: 1px solid var(--ctp-hairline, var(--ctp-border, #176095)); }
+  #cuesheet-pane { flex: 0 0 auto; height: 65vh; }
+  #mediapool-resizer, #activecues-resizer, #cueinspector-resizer { display: none; }
+  #activecues-pane { flex: 0 0 auto; max-height: 30vh; border-left: 0;
+    border-top: 1px solid var(--ctp-hairline, var(--ctp-border, #176095)); }
+  #cueinspector-panel { flex: 0 0 auto; min-height: 50vh; }
+  /* The inspector's tab panes are sized for a wide strip: on a phone they
+     stack and the panel grows with them instead of clipping. */
+  .inspector-collapse { overflow: visible; }
+  .insp-time-row { flex-direction: column; }
+  .insp-time-fields { flex: 0 0 auto; }
+  .insp-audio-wrap { flex-wrap: wrap; gap: 1rem; }
+  #go-btn { width: auto; }
+  /* GO, Stop and the mode switch stay on screen while the page scrolls. */
+  .app-bar { position: sticky; top: 0; z-index: 30; }
+  #app-footer { position: sticky; bottom: 0; z-index: 30; }
+  #app-footer .panel-btn-label { display: none; }
+}
+
+/* Linked units' warning strip (templates/linkBanner.html, link.js). */
+.link-banner { display: flex; flex-direction: column; gap: 2px; padding: 2px 8px; }

@@ -25,13 +25,13 @@ func TestThemesComeOnlyFromFtlThemes(t *testing.T) {
 			t.Fatalf("theme %+v: plain label expected", th)
 		}
 	}
-	if DefaultThemeID != "ftl:xbmc" {
+	if DefaultThemeID != "ftl:blue-future" {
 		t.Fatalf("DefaultThemeID = %q", DefaultThemeID)
 	}
 
 	r := setupTestServer(t)
 	body := get(t, r, "/").Body.String()
-	for _, want := range []string{`id="cutepi-theme-css"`, `/ftl/themes/xbmc.css`, `<option value="ftl:xbmc">`} {
+	for _, want := range []string{`id="cutepi-theme-css"`, `/ftl/themes/blue-future.css`, `<option value="ftl:blue-future">`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("index missing %q", want)
 		}

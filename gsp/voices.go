@@ -103,7 +103,10 @@ func (m *manager) takeVoicesLocked() []*voice {
 // back, hold the last frame, or leave the stack and tell the app layer the
 // cue ended (auto-continue, post-wait), as the focus does in handleEnd.
 // Returns true while the voice runs on (bus watch kept).
-func (m *manager) voiceEnd(p *gst.Pipeline) bool {
+func (m *manager) voiceEnd(p *gst.Pipeline) bool { return m.voicePassEnd(p, false) }
+
+// voicePassEnd is voiceEnd; segmentDone as in passEnd.
+func (m *manager) voicePassEnd(p *gst.Pipeline, segmentDone bool) bool {
 	m.mu.Lock()
 	i := m.voiceIndexLocked(p)
 	if i < 0 {
@@ -117,8 +120,12 @@ func (m *manager) voiceEnd(p *gst.Pipeline) bool {
 		if restart {
 			inPoint := v.inPoint
 			m.mu.Unlock()
-			seekAtRate(p, inPoint)
-			p.SetState(gst.StatePlaying)
+			if segmentDone {
+				seekClip(p, inPoint, gst.SeekFlagNone)
+			} else {
+				seekAtRate(p, inPoint)
+				p.SetState(gst.StatePlaying)
+			}
 			m.bump()
 			return true
 		}

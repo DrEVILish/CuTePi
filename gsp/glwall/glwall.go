@@ -121,10 +121,6 @@ func (l *Layer) SetRect(x, y, w, h int, keepAspect bool) {
 	C.glwall_layer_set_rect(l.l, C.int(x), C.int(y), C.int(w), C.int(h), C.int(k))
 }
 
-// AlignAudio delays a cue's audio sink (ts-offset) by the wall's display
-// delay, so its sound plays when its picture is seen.
-func AlignAudio(sink *gst.Element) { C.glwall_align_audio((*C.GstElement)(sink.Unsafe())) }
-
 // AudioOffset reports the largest ts-offset on a pipeline's sinks other than
 // the video appsink (-1 when there is none).
 func AudioOffset(p *gst.Pipeline) time.Duration {

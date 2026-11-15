@@ -5,21 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/jmoiron/sqlx"
 	"log"
 	"math"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"CuTePi/config"
-	"CuTePi/media"
 	"CuTePi/ws"
 )
 
@@ -82,6 +77,7 @@ type Cue struct {
 	CropR           string  `db:"crop_r"`
 	CropT           string  `db:"crop_t"`
 	CropB           string  `db:"crop_b"`
+	Align           string  `db:"align"`            // "[left|center|right] [top|middle|bottom]"; "" = box at X/Y, picture centred
 	StopOthers      bool    `db:"stop_others"`      // firing stops the running cues (§6.1.2)
 	Layer           string  `db:"layer"`            // top|bottom|under: its place when it keeps them
 	LayerUnder      int     `db:"layer_under"`      // under: the cue_id it goes beneath
@@ -100,6 +96,7 @@ type Cue struct {
 	Running         bool   // running on any layer (§6.1.2), the focus included
 	PlayPos         int    // ms into the playing clip (progress bar) when Playing
 	PlayDur         int    // ms total duration of the playing clip
+	PlayPaused      bool   // a running (non-focus) cue that is paused or parked on its last frame
 	InSelection     bool   // member of the multi-selection (§12.4); anchor uses Selected
 	WaitKind        string // "pre"|"post" while a chain wait counts down on this cue (§12.2)
 	WaitLeftS       int    // whole seconds left in that wait (render-time)
@@ -120,7 +117,7 @@ const cueColumns = `cuesheet.cue_id, cuesheet.cuePos, cuesheet.cueNum, cuesheet.
 	cuesheet.rotation, cuesheet.flip, cuesheet.schedule_enabled, cuesheet.schedule_days,
 	cuesheet.schedule_time_ms, cuesheet.opacity, cuesheet.geom_x, cuesheet.geom_y,
 	cuesheet.geom_w, cuesheet.geom_h, cuesheet.crop_l, cuesheet.crop_r, cuesheet.crop_t,
-	cuesheet.crop_b, cuesheet.stop_others, cuesheet.layer, cuesheet.layer_under,
+	cuesheet.crop_b, cuesheet.align, cuesheet.stop_others, cuesheet.layer, cuesheet.layer_under,
 	COALESCE((SELECT u.cueNum FROM cuesheet u WHERE u.cue_id = cuesheet.layer_under), '') AS layer_under_num`
 
 type Cuesheet struct {
@@ -352,123 +349,6 @@ func SetSelectedGroup(groupID int) error {
 	return setSelectedGroupPos(groupID)
 }
 
-// stateKeyEscFadeMs persists the ESC fade-out time in milliseconds
-// (default 500): single ESC fades the running output over this time, then
-// stops. Set in Settings > General.
-const stateKeyEscFadeMs = "escFadeMs"
-
-// DefaultEscFadeMs is the ESC fade time when nothing is stored.
-const DefaultEscFadeMs = 1000
-
-// GetEscFadeMs reports the ESC fade-out time in ms.
-func GetEscFadeMs() int {
-	var val string
-	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyEscFadeMs); err != nil {
-		return DefaultEscFadeMs
-	}
-	ms, err := strconv.Atoi(strings.TrimSpace(val))
-	if err != nil || ms < 0 {
-		return DefaultEscFadeMs
-	}
-	return ms
-}
-
-// SetEscFadeMs persists the ESC fade-out time (0..10000 ms).
-func SetEscFadeMs(ms int) error {
-	if err := ValidateEscFadeMs(ms); err != nil {
-		return err
-	}
-	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyEscFadeMs, strconv.Itoa(ms))
-	return err
-}
-
-// colorRe is the only colour syntax stored for cues and groups: CSS hex
-// (#rgb, #rgba, #rrggbb, #rrggbbaa). Group colours are emitted into style
-// attributes through safeCSS (which bypasses html/template's CSS
-// sanitiser), so a looser "starts with #" check let a value like
-// "#000;background:url(//evil)" inject arbitrary CSS.
-var colorRe = regexp.MustCompile(`^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
-
-// ValidColor reports whether c is empty (no colour) or a CSS hex colour.
-func ValidColor(c string) bool {
-	return c == "" || colorRe.MatchString(c)
-}
-
-// ValidateEscFadeMs checks an Esc fade duration without persisting it.
-func ValidateEscFadeMs(ms int) error {
-	if ms < 0 || ms > 10000 {
-		return fmt.Errorf("esc fade must be 0..10000 ms")
-	}
-	return nil
-}
-
-// stateKeyGoAdvance persists the GO-bar behaviour: fire the selected unit and
-// then move the selection to the next one (default on), so repeated GOs walk
-// the show. The group- and cue-play routes consult it after firing.
-const stateKeyGoAdvance = "goAdvance"
-
-// GetGoAdvance reports whether firing GO advances the selection.
-func GetGoAdvance() bool {
-	var val string
-	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyGoAdvance); err != nil {
-		return true // default on
-	}
-	return strings.TrimSpace(val) != "0"
-}
-
-// SetGoAdvance persists the GO-advance behaviour.
-func SetGoAdvance(on bool) error {
-	v := "1"
-	if !on {
-		v = "0"
-	}
-	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyGoAdvance, v)
-	if err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
-// stateKeyShowMode persists Edit/Show mode: Show mode arms scheduled cue
-// triggers and test-pattern output; Edit mode (default) is for building the
-// show without either firing.
-const stateKeyShowMode = "showMode"
-
-// GetShowMode reports whether the console is in Show mode.
-func GetShowMode() bool {
-	var val string
-	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyShowMode); err != nil {
-		return false // default Edit
-	}
-	return strings.TrimSpace(val) != "0"
-}
-
-// SetShowMode persists Edit/Show mode.
-func SetShowMode(on bool) error {
-	v := "1"
-	if !on {
-		v = "0"
-	}
-	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyShowMode, v)
-	if err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
-// Cue health results (§12.3): every fire records its outcome so a mid-show
-// scan finds broken cues at a glance.
-const (
-	CueResultNever = 0
-	CueResultOK    = 1
-	CueResultError = 2
-)
-
 // stateKeySelectedSet persists multi-selection (§12.4): the JSON list of
 // cuePos values in the selection (the ANCHOR is the classic selectedCuePos).
 // Any single-selection write clears it.
@@ -540,641 +420,6 @@ func SetCueResult(cuePos int, result int) {
 		return
 	}
 	bumpCuesheetVersion()
-}
-
-// Panic holding image (§12.9): when set, PANIC loads-and-holds this pool
-// item instead of cutting to black. Empty = off (plain panic).
-const stateKeyPanicHold = "panicHoldImage"
-
-// GetPanicHoldImage returns the configured holding image filename ("" = off).
-func GetPanicHoldImage() string {
-	var val string
-	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyPanicHold); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(val)
-}
-
-// SetPanicHoldImage persists the holding image ("" clears it).
-func SetPanicHoldImage(filename string) error {
-	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyPanicHold, strings.TrimSpace(filename))
-	if err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
-// Test patterns (§12.10): pool items the operator pinned into the Tests
-// menu. Persisted as a JSON filename list in state; built-in GStreamer
-// patterns live in the routes layer.
-const stateKeyTestPatterns = "testPatterns"
-
-// TestPatterns lists the custom (pool) test patterns.
-func TestPatterns() []string {
-	var val string
-	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyTestPatterns); err != nil {
-		return nil
-	}
-	var out []string
-	_ = json.Unmarshal([]byte(val), &out)
-	return out
-}
-
-// AddTestPattern pins a media item into the Tests menu (idempotent).
-func AddTestPattern(filename string) error {
-	list := TestPatterns()
-	for _, p := range list {
-		if p == filename {
-			return nil
-		}
-	}
-	return saveTestPatterns(append(list, filename))
-}
-
-// RemoveTestPattern unpins a media item (removing it from the Tests menu
-// without touching the media itself).
-func RemoveTestPattern(filename string) error {
-	list := TestPatterns()
-	out := make([]string, 0, len(list))
-	for _, p := range list {
-		if p != filename {
-			out = append(out, p)
-		}
-	}
-	return saveTestPatterns(out)
-}
-
-func saveTestPatterns(list []string) error {
-	blob, err := json.Marshal(list)
-	if err != nil {
-		return err
-	}
-	_, err = db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyTestPatterns, string(blob))
-	if err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
-// SelectUnit is one selectable entry in sheet order: a cue row or a group
-// header (exported — the renderer's GO-bar preview walks the same list, so
-// the preview can never disagree with what GO/Space fires). Collapsed groups
-// contribute only their header; their members are unreachable.
-type SelectUnit struct {
-	CuePos  int  // >0 for cues, 0 for group headers
-	GroupID int  // >0 for group headers, 0 for cues
-	IsGroup bool // GroupID > 0
-}
-
-// FlatRow is one rendered (and keyboard-selectable) row of the cuesheet in
-// visual order: a group header (Group != nil) or a cue (Cue != nil), at the
-// given nesting depth (0 = top level). Shared by the cuesheet renderer and
-// the keyboard-selection walk so the two can never disagree.
-type FlatRow struct {
-	Group *Group
-	Cue   *Cue
-	Depth int
-	// GroupColor is the innermost containing group's colour ("" = none),
-	// carried so member rows can draw the folder outline in it.
-	GroupColor string
-	// Group-boundary flags for the folder outline (§5.4): a cue is the
-	// last rendered member of its direct group's run.
-	LastInGroup bool
-	// SpanDepth: depth of the innermost OPEN group span this row sits in
-	// (-1 = none). The folder box draws one vertical line per open span,
-	// so nested groups stack their left edges on deeper rows.
-	SpanDepth int
-	// Folder-box verticals: SpanBase colours the line at the cell's left
-	// edge (the outermost open span); SpanShadows stacks one 1px line per
-	// further open span, each in ITS OWN group's colour (never the cue's).
-	SpanBase    string
-	SpanShadows string
-}
-
-// groupAncestors returns the chain of parent group ids above gid (nearest
-// first), guarded against parent-cycles and dangling parents.
-func groupAncestors(gid int, byID map[int]Group) []int {
-	var chain []int
-	g, ok := byID[gid]
-	for ok && g.ParentGroupID != 0 && len(chain) <= len(byID) {
-		if chainContains(chain, g.ParentGroupID) {
-			break // cycle: stop walking
-		}
-		chain = append(chain, g.ParentGroupID)
-		g, ok = byID[g.ParentGroupID]
-	}
-	return chain
-}
-
-func chainContains(chain []int, id int) bool {
-	for _, v := range chain {
-		if v == id {
-			return true
-		}
-	}
-	return false
-}
-
-// cueInCollapsed reports whether the cue belongs to gid's subtree — a direct
-// member or a member of a descendant subgroup. Only those rows hide when gid
-// collapses; anything else parked inside the span renders at its position.
-// Dangling parents (healed at startup) and parent-cycles never match: the
-// walk is capped at the group count.
-func cueInCollapsed(cue *Cue, gid int, byID map[int]Group) bool {
-	for p, n := cue.Parent, 0; p != 0 && n <= len(byID); n++ {
-		if p == gid {
-			return true
-		}
-		g, ok := byID[p]
-		if !ok {
-			return false
-		}
-		p = g.ParentGroupID
-	}
-	return false
-}
-
-// FlattenSheet folds the MERGED visual sequence (cues and group headers by
-// sheet_index) into rendered rows: a group header (Group != nil) or a cue
-// (Cue != nil) at its nesting depth. A header OPENS a span; the next header
-// of the same or shallower depth closes it. A cue renders inside the
-// innermost open span only when its STORED parent equals that span's group —
-// otherwise as a top-level gap row at its position. Read-only: never writes.
-// Collapsing hides a group's subtree members only (header stays); unrelated
-// rows parked inside the span keep rendering. Empty groups render wherever
-// their header sits — every group position is real, nothing trails.
-func FlattenSheet(cs *Cuesheet) []FlatRow {
-	byID := make(map[int]Group, len(cs.Groups))
-	for _, g := range cs.Groups {
-		byID[g.GroupID] = g
-	}
-	hidden := make(map[int]bool, len(cs.Groups))
-	depthOf := make(map[int]int, len(cs.Groups))
-	for gid := range byID {
-		chain := groupAncestors(gid, byID)
-		depthOf[gid] = len(chain)
-		for _, anc := range chain {
-			if byID[anc].Collapse {
-				hidden[gid] = true
-				break
-			}
-		}
-	}
-
-	groups := make([]Group, len(cs.Groups))
-	copy(groups, cs.Groups)
-	sort.Slice(groups, func(i, j int) bool { return groups[i].SheetIndex < groups[j].SheetIndex })
-
-	type item struct {
-		kind string // "cue" | "group"
-		cue  *Cue
-		g    *Group
-	}
-	items := make([]item, 0, len(cs.Cues)+len(cs.Groups))
-	gi := 0
-	for _, cue := range cs.Cues {
-		for gi < len(groups) && groups[gi].SheetIndex <= cue.SheetIndex {
-			g := groups[gi]
-			items = append(items, item{kind: "group", g: &g})
-			gi++
-		}
-		c := cue
-		items = append(items, item{kind: "cue", cue: &c})
-	}
-	for ; gi < len(groups); gi++ {
-		g := groups[gi]
-		items = append(items, item{kind: "group", g: &g})
-	}
-
-	rows := make([]FlatRow, 0, len(items))
-	type span struct {
-		groupID  int
-		depth    int
-		lastRow  int // index in rows of the last emitted row of this span
-		skipping bool
-	}
-	var stack []span
-	closeTo := func(depth int) {
-		for len(stack) > 0 && stack[len(stack)-1].depth >= depth {
-			top := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if top.lastRow >= 0 && top.lastRow < len(rows) {
-				rows[top.lastRow].LastInGroup = true // bottom edge of the folder outline
-			}
-		}
-	}
-	// The innermost open (non-gapped) span's depth: one folder-box line is
-	// drawn per open span, so a row's verticals run from depth 0 to this.
-	// Gapped spans (stray rows parked inside them) draw nothing until the
-	// span resumes (§6.4).
-	spanDepth := func() int {
-		for i := len(stack) - 1; i >= 0; i-- {
-			if stack[i].lastRow != -1 {
-				return stack[i].depth
-			}
-		}
-		return -1
-	}
-	// The innermost open (non-gapped) span's depth: one folder-box line is
-	// drawn per open span, so a row's verticals run from depth 0 to this.
-	// Gapped spans (stray rows parked inside them) draw nothing until the
-	// span resumes (§6.4).
-	// spanPaint answers "what colour is each vertical on this row?": one
-	// line per OPEN span, coloured by THAT span's group (uncoloured groups
-	// fall back to the theme's success tone — never the cue's colour).
-	// Returns the outermost line's colour and a box-shadow stack for the
-	// deeper lines (1.1rem per level). Empty when no span is open.
-	spanPaint := func() (string, string) {
-		type paint struct {
-			depth int
-			color string
-		}
-		var open []paint
-		for _, s := range stack {
-			if s.lastRow == -1 {
-				continue // gapped span: its box closes and resumes around strays
-			}
-			color := "var(--ctp-success, #42ddb2)"
-			if g, ok := byID[s.groupID]; ok && g.Color != "" {
-				color = g.Color
-			}
-			open = append(open, paint{depth: s.depth, color: color})
-		}
-		if len(open) == 0 {
-			return "", ""
-		}
-		base := open[0].color
-		var sb strings.Builder
-		for k := 1; k < len(open); k++ {
-			if k > 1 {
-				sb.WriteString(", ")
-			}
-			fmt.Fprintf(&sb, "%.1frem 0 0 %s", float64(open[k].depth)*1.1, open[k].color)
-		}
-		return base, sb.String()
-	}
-	for it := range items {
-		if items[it].kind == "group" {
-			g := items[it].g
-			d := depthOf[g.GroupID]
-			closeTo(d)
-			// Header visible unless a PROPER ancestor is collapsed.
-			if hidden[g.GroupID] {
-				stack = append(stack, span{groupID: g.GroupID, depth: d, lastRow: -1, skipping: true})
-				continue
-			}
-			rows = append(rows, FlatRow{Group: g, Depth: d, SpanDepth: d})
-			// A collapsed group's own members are hidden too (not just
-			// descendants of collapsed ancestors): the header stays, its span
-			// skips. Without this, collapsing changed state but rendered
-			// nothing — the button and arrow keys looked dead.
-			stack = append(stack, span{groupID: g.GroupID, depth: d, lastRow: len(rows) - 1, skipping: g.Collapse})
-			// Verticals for the header row: outer open spans plus its own.
-			rows[len(rows)-1].SpanBase, rows[len(rows)-1].SpanShadows = spanPaint()
-			continue
-		}
-		// A cue: member of the innermost open span.
-		if len(stack) == 0 {
-			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0, SpanDepth: -1})
-			continue
-		}
-		// The cue's STORED parent may belong to an outer open span (its
-		// visual position sits after a nested subgroup): surface that span
-		// by closing the inner spans first, or the cue leaks out of its
-		// folder outline as a depth-0 stray (regression: the outline closed
-		// around the subgroup and members after it drew no side borders).
-		if items[it].cue.Parent != stack[len(stack)-1].groupID {
-			for i := len(stack) - 1; i >= 0; i-- {
-				if stack[i].groupID == items[it].cue.Parent {
-					closeTo(stack[i].depth + 1) // close strictly deeper spans; the parent stays open
-					break
-				}
-			}
-		}
-		top := stack[len(stack)-1]
-		if top.skipping && cueInCollapsed(items[it].cue, top.groupID, byID) {
-			continue // member of a collapsed group's subtree: not rendered
-		}
-		// Literal membership (§6.4): the cue renders inside this span only
-		// when its STORED parent is this span's group. Anything else —
-		// top-level cues and strays whose group sits elsewhere — renders as
-		// a plain top-level row at its position; the folder outline closes
-		// above it and resumes after it. The renderer never rewrites.
-		if items[it].cue.Parent != top.groupID {
-			if top.lastRow >= 0 && top.lastRow < len(rows) {
-				rows[top.lastRow].LastInGroup = true
-			}
-			// Gapping the innermost span first: the stray row's verticals
-			// only cover spans that stay open (the closed one resumes after).
-			top.lastRow = -1
-			stack[len(stack)-1] = top
-			base, shadows := spanPaint()
-			rows = append(rows, FlatRow{Cue: items[it].cue, Depth: 0, SpanDepth: spanDepth(),
-				SpanBase: base, SpanShadows: shadows})
-			continue
-		}
-		// The innermost open span's colour draws the member's folder
-		// outline (QLab-style); empty when the group has no colour.
-		groupColor := ""
-		if g, ok := byID[top.groupID]; ok {
-			groupColor = g.Color
-		}
-		cue := items[it].cue
-		// Members sit one level deeper than their group header (§6.4):
-		// top-depth + 1 so the CSS indent formula puts the first level at
-		// 1.5rem, +1.1rem per nesting level after.
-		base, shadows := spanPaint()
-		rows = append(rows, FlatRow{Cue: cue, Depth: top.depth + 1, GroupColor: groupColor,
-			SpanDepth: spanDepth(), SpanBase: base, SpanShadows: shadows})
-		// Every open span contains this row: nested subgroup headers and
-		// member rows extend each enclosing span's visual last row, so the
-		// folder outline and the selected block outline close at the span's
-		// true end (not at the last direct member before a nested header).
-		for i := range stack {
-			if stack[i].lastRow >= 0 {
-				stack[i].lastRow = len(rows) - 1
-			}
-		}
-		top.lastRow = len(rows) - 1
-		stack[len(stack)-1] = top
-	}
-	closeTo(-1) // close everything at the sequence end
-	return rows
-}
-
-// SelectUnits returns the sheet's selectable entries in order: every rendered
-// row (group headers at any nesting level, plus their visible cues). Users of
-// collapsed groups are skipped entirely.
-func SelectUnits() ([]SelectUnit, error) {
-	cs, err := GetCuesheet()
-	if err != nil {
-		return nil, err
-	}
-	return SheetUnits(&cs), nil
-}
-
-// SheetUnits is SelectUnits for a sheet the caller already loaded (a render
-// reads the sheet once, not once per helper).
-func SheetUnits(cs *Cuesheet) []SelectUnit {
-	rows := FlattenSheet(cs)
-	units := make([]SelectUnit, 0, len(rows))
-	for _, r := range rows {
-		if r.Group != nil {
-			units = append(units, SelectUnit{GroupID: r.Group.GroupID, IsGroup: true})
-			continue
-		}
-		units = append(units, SelectUnit{CuePos: r.Cue.CuePos})
-	}
-	return units
-}
-
-// SelectionStepAt returns the current selection expressed on SelectUnits'
-// index space (or -1 when nothing is selected).
-func SelectUnitIndex() (int, error) {
-	units, err := SelectUnits()
-	if err != nil {
-		return -1, err
-	}
-	return UnitIndex(units), nil
-}
-
-// UnitIndex is the current selection's index in units (-1 when nothing in
-// them is selected).
-func UnitIndex(units []SelectUnit) int {
-	var selCue, selGroup int
-	var val string
-	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?;`, stateKeySelectedCue); err == nil {
-		selInt, perr := strconv.Atoi(strings.TrimSpace(val))
-		if perr == nil {
-			if selInt < 0 {
-				selGroup = -selInt
-			} else {
-				selCue = selInt
-			}
-		}
-	}
-	for i, u := range units {
-		if selGroup != 0 && u.GroupID == selGroup {
-			return i
-		}
-		if selGroup == 0 && u.CuePos == selCue {
-			return i
-		}
-	}
-	return -1
-}
-
-// ExtendSelection grows the anchor+set selection to cover every VISIBLE unit
-// between the anchor and the target (SelectUnits order: visual, collapsed
-// members excluded, headers included as -groupID). The anchor keeps its
-// identity (cue pos or -groupID); everything else in the span joins the set.
-// No anchor (or anchor/target off-sheet, e.g. after a re-render) falls back
-// to a plain single-select of the target.
-func ExtendSelection(targetCue, targetGroup int) error {
-	units, err := SelectUnits()
-	if err != nil {
-		return err
-	}
-	ti := -1
-	for i, u := range units {
-		if targetGroup != 0 && u.IsGroup && u.GroupID == targetGroup {
-			ti = i
-			break
-		}
-		if targetGroup == 0 && !u.IsGroup && u.CuePos == targetCue {
-			ti = i
-			break
-		}
-	}
-	ai, err := SelectUnitIndex()
-	if err != nil {
-		return err
-	}
-	if ai < 0 || ti < 0 {
-		if targetGroup != 0 {
-			return SetSelectedGroup(targetGroup)
-		}
-		return SetCue(strconv.Itoa(targetCue))
-	}
-	var anchor int
-	if sel, _ := SelectedCuePos(); sel != 0 {
-		anchor = sel
-	} else if gid, _ := SelectedGroupPos(); gid != 0 {
-		anchor = -gid
-	}
-	lo, hi := ai, ti
-	if lo > hi {
-		lo, hi = hi, lo
-	}
-	set := make([]int, 0, hi-lo)
-	for _, u := range units[lo : hi+1] {
-		var id int
-		if u.IsGroup {
-			id = -u.GroupID
-		} else {
-			id = u.CuePos
-		}
-		if id != anchor {
-			set = append(set, id)
-		}
-	}
-	// Keep selection members outside the span (matches the old numeric-range
-	// behaviour of accumulating, not replacing). Stale entries (cues/groups
-	// deleted since they were selected, e.g. past a bulk delete) are pruned:
-	// a dead position must not sneak back into a later bulk op.
-	have := make(map[int]bool, len(set))
-	for _, p := range set {
-		have[p] = true
-	}
-	live, _ := selectedSetPruned()
-	for _, p := range live {
-		if !have[p] {
-			set = append(set, p)
-		}
-	}
-	return SetGroupSelection(anchor, set)
-}
-
-// selectedSetPruned returns the stored multi-selection minus entries whose
-// row no longer exists (deleted cues/groups). Dead positions otherwise hide
-// in the set until a later ExtendSelection/Bulk call resurrects them.
-func selectedSetPruned() ([]int, error) {
-	set := SelectedSet()
-	if len(set) == 0 {
-		return set, nil
-	}
-	out := make([]int, 0, len(set))
-	for _, p := range set {
-		if p < 0 {
-			var g int
-			if err := db.Get(&g, `SELECT group_id FROM cue_group WHERE group_id = ?`, -p); err == nil {
-				out = append(out, p)
-			}
-			continue
-		}
-		var c int
-		if err := db.Get(&c, `SELECT cuePos FROM cuesheet WHERE cuePos = ?`, p); err == nil {
-			out = append(out, p)
-		}
-	}
-	if len(out) != len(set) {
-		_ = setSelectedSet(out)
-	}
-	return out, nil
-}
-
-// ExtendStep grows/shrinks the multi-selection one visible unit for
-// Shift+arrows (dir +1 down, -1 up). The head is the selected unit farthest
-// along dir; it steps one further — or back toward the anchor, shrinking the
-// span. Stepping onto the anchor clears the set. No anchor: plain step.
-func ExtendStep(dir int) error {
-	units, err := SelectUnits()
-	if err != nil {
-		return err
-	}
-	ai, err := SelectUnitIndex()
-	if err != nil {
-		return err
-	}
-	if ai < 0 {
-		return SelectStep(dir)
-	}
-	idOf := func(u SelectUnit) int {
-		if u.IsGroup {
-			return -u.GroupID
-		}
-		return u.CuePos
-	}
-	at := make(map[int]int, len(units))
-	for i, u := range units {
-		at[idOf(u)] = i
-	}
-	var anchor int
-	if sel, _ := SelectedCuePos(); sel != 0 {
-		anchor = sel
-	} else if gid, _ := SelectedGroupPos(); gid != 0 {
-		anchor = -gid
-	}
-	// The head (focus end) isn't stored: take the selected unit farthest
-	// from the anchor, preferring the stepping side on ties. Stepping back
-	// toward the anchor shrinks the span; stepping onto it clears the set.
-	head := ai
-	best := -1
-	for _, p := range SelectedSet() {
-		i, ok := at[p]
-		if !ok {
-			continue
-		}
-		d := i - ai
-		if d < 0 {
-			d = -d
-		}
-		if d > best || d == best && (dir > 0 && i > head || dir < 0 && i < head) {
-			best, head = d, i
-		}
-	}
-	head += dir
-	if head < 0 || head >= len(units) {
-		return nil
-	}
-	if head == ai {
-		return SetGroupSelection(anchor, nil)
-	}
-	lo, hi := ai, head
-	if lo > hi {
-		lo, hi = hi, lo
-	}
-	set := make([]int, 0, hi-lo)
-	for _, u := range units[lo : hi+1] {
-		if id := idOf(u); id != anchor {
-			set = append(set, id)
-		}
-	}
-	return SetGroupSelection(anchor, set)
-}
-
-// ExpandGroup uncollapses a group so a joined cue lands visibly instead of
-// vanishing into a closed folder. No-op when already open.
-func ExpandGroup(groupID int) error {
-	_, err := db.Exec(`UPDATE cue_group SET collapse = 0 WHERE group_id = ?`, groupID)
-	if err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
-// SelectStep moves the selection one unit forward/backward through
-// SelectUnits()' list (groups and cues alike); clamps at the ends.
-func SelectStep(dir int) (err error) {
-	units, err := SelectUnits()
-	if err != nil || len(units) == 0 {
-		return err
-	}
-	idx, err := SelectUnitIndex()
-	if err != nil {
-		return err
-	}
-	idx += dir
-	if idx < 0 || idx >= len(units) {
-		return nil
-	}
-	u := units[idx]
-	if u.IsGroup {
-		return setSelectedGroupPos(u.GroupID)
-	}
-	return setSelectedCuePos(u.CuePos)
-}
-
-// routes.autoContinueFrom), so only the query for that next cue remains.
-// NextCuePos returns the next existing cue position strictly after endingPos
-// in sheet order, or 0 (and nil) when endingPos is the last cue.
-func NextCuePos(endingPos int) (int, error) {
-	return nextSheetCue(endingPos, 1)
 }
 
 func GetCuesheet() (cuesheet Cuesheet, err error) {
@@ -1261,150 +506,6 @@ func WaveformPeaks(filename string) (string, error) {
 		return "", nil
 	}
 	return peaks, err
-}
-
-// AddEndpoint stores a live HTTP(S) page source. Live pages are not pool
-// items: each live cue owns its own row (hidden from the pool, the HyperDeck
-// clip list and the media worker), so editing one cue's URL never changes
-// another cue. It has no file path, duration, thumbnail or waveform.
-func AddEndpoint(title, rawURL string) (int, error) {
-	title = strings.TrimSpace(title)
-	u, err := validateEndpointURL(rawURL)
-	if err != nil {
-		return 0, err
-	}
-	if title == "" {
-		title = u.Host
-	}
-	var id int
-	err = db.QueryRow(`INSERT INTO mediapool (filename, source_kind, endpoint_url, endpoint_title, mimetype,
-		size, duration, resolution, thumbnail_pending, waveform, waveform_pending, missing, media_meta)
-		VALUES (NULL, 'endpoint', ?, ?, 'application/x-cutepi-endpoint', 0, 0, '', 0, '', 0, 0, '') RETURNING media_id`,
-		u.String(), title).Scan(&id)
-	if err != nil {
-		return 0, err
-	}
-	return id, nil
-}
-
-// AddLiveCue appends a live-page cue to the end of the sheet (where pool
-// adds land too) and selects it, so the inspector opens on it. Returns the
-// new cue's position.
-// LiveCueFadeInMs is a new live cue's fade-in.
-const LiveCueFadeInMs = 1000
-
-func AddLiveCue(title, rawURL string) (int, error) {
-	id, err := AddEndpoint(title, rawURL)
-	if err != nil {
-		return 0, err
-	}
-	if err := AddEndpointCue(id, "", 0, false); err != nil {
-		_, _ = db.Exec(`DELETE FROM mediapool WHERE media_id = ?`, id)
-		return 0, err
-	}
-	var pos int
-	if err := db.Get(&pos, `SELECT cuePos FROM cuesheet WHERE media_id = ?`, id); err != nil {
-		return 0, err
-	}
-	// Live pages fade in once loaded (DESIGN §12.14); editable per cue.
-	if _, err := db.Exec(`UPDATE cuesheet SET fadeIn = ? WHERE cuePos = ?`, LiveCueFadeInMs, pos); err != nil {
-		return pos, err
-	}
-	if err := SetCue(strconv.Itoa(pos)); err != nil {
-		return pos, err
-	}
-	return pos, nil
-}
-
-// SetCueEndpointURL points a live cue at a different page. The cue gets a
-// fresh source row: the old one is left orphaned for the live-page cache
-// keeper, which drops the old site's cached assets (if no other cue uses
-// it) and then the row.
-func SetCueEndpointURL(cuePos int, rawURL string) error {
-	u, err := validateEndpointURL(rawURL)
-	if err != nil {
-		return err
-	}
-	var cur struct {
-		MediaID int    `db:"media_id"`
-		URL     string `db:"endpoint_url"`
-		Title   string `db:"endpoint_title"`
-	}
-	err = db.Get(&cur, `SELECT m.media_id, m.endpoint_url, m.endpoint_title FROM cuesheet c
-		JOIN mediapool m ON m.media_id = c.media_id
-		WHERE c.cuePos = ? AND m.source_kind = 'endpoint'`, cuePos)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("cue %d is not a live page", cuePos)
-	}
-	if err != nil {
-		return err
-	}
-	if cur.URL == u.String() {
-		return nil
-	}
-	id, err := AddEndpoint(cur.Title, u.String())
-	if err != nil {
-		return err
-	}
-	if _, err := db.Exec(`UPDATE cuesheet SET media_id = ? WHERE cuePos = ?`, id, cuePos); err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
-// LiveSource is a live-page source row: its id and page URL.
-type LiveSource struct {
-	MediaID int    `db:"media_id"`
-	URL     string `db:"endpoint_url"`
-}
-
-// LiveSources lists the live-page sources that cues use.
-func LiveSources() ([]LiveSource, error) {
-	var out []LiveSource
-	err := db.Select(&out, `SELECT media_id, endpoint_url FROM mediapool WHERE source_kind = 'endpoint'
-		AND media_id IN (SELECT media_id FROM cuesheet) ORDER BY media_id`)
-	return out, err
-}
-
-// OrphanEndpoints lists the live-page sources no cue uses any more.
-func OrphanEndpoints() ([]LiveSource, error) {
-	var out []LiveSource
-	err := db.Select(&out, `SELECT media_id, endpoint_url FROM mediapool WHERE source_kind = 'endpoint'
-		AND media_id NOT IN (SELECT media_id FROM cuesheet) ORDER BY media_id`)
-	return out, err
-}
-
-// DeleteOrphanEndpoint removes one unused live-page source row (a no-op if
-// a cue has started using it again meanwhile).
-func DeleteOrphanEndpoint(mediaID int) error {
-	_, err := db.Exec(`DELETE FROM mediapool WHERE media_id = ? AND source_kind = 'endpoint'
-		AND media_id NOT IN (SELECT media_id FROM cuesheet)`, mediaID)
-	return err
-}
-
-// PruneEndpoints removes live-page sources no cue uses any more (their cue
-// was deleted, or a show was cleared). They are invisible anyway; this just
-// keeps the table tidy. Run at startup.
-func PruneEndpoints() error {
-	_, err := db.Exec(`DELETE FROM mediapool WHERE source_kind = 'endpoint'
-		AND media_id NOT IN (SELECT media_id FROM cuesheet)`)
-	return err
-}
-
-// ValidateEndpointURL reports whether rawURL is acceptable as a live page:
-// an absolute http(s) URL with no embedded credentials.
-func ValidateEndpointURL(rawURL string) error {
-	_, err := validateEndpointURL(rawURL)
-	return err
-}
-
-func validateEndpointURL(rawURL string) (*url.URL, error) {
-	u, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
-		return nil, fmt.Errorf("endpoint URL must be an absolute http or https URL without embedded credentials")
-	}
-	return u, nil
 }
 
 // AddEndpointCue inserts an endpoint into the sheet using the normal cue
@@ -1595,189 +696,6 @@ func RenameMedia(oldName, newName string) error {
 	bumpMediaVersion()
 	bumpCuesheetVersion()
 	return nil
-}
-
-// stateKeyAutoNumber persists auto-numbering (§12.5): new cues numbered
-// 1, 2, 3…; mid-sheet inserts take the numeric midpoint of their
-// neighbours. Off = the plain MAX+1 sequence with no midpoint inserts.
-const stateKeyAutoNumber = "autoNumberCues"
-
-// GetAutoNumber reports whether auto-numbering is on (default on).
-func GetAutoNumber() bool {
-	var val string
-	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyAutoNumber); err != nil {
-		return true
-	}
-	return strings.TrimSpace(val) != "0"
-}
-
-// SetAutoNumber persists the auto-numbering setting.
-func SetAutoNumber(on bool) error {
-	v := "1"
-	if !on {
-		v = "0"
-	}
-	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyAutoNumber, v)
-	if err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
-// ErrDuplicateCueNum marks a cue number that another cue or group header
-// already uses. It is an operator mistake, not a fault: callers reject the
-// edit and leave the old number in place without logging an error.
-var ErrDuplicateCueNum = errors.New("cue number already in use")
-
-type duplicateCueNumError struct{ num string }
-
-func (e *duplicateCueNumError) Error() string {
-	return fmt.Sprintf("Cue number %s is already used", e.num)
-}
-func (e *duplicateCueNumError) Is(target error) bool { return target == ErrDuplicateCueNum }
-
-// sameCueNum treats "12" and "12.0" as the same number; text numbers compare
-// case-insensitively.
-func sameCueNum(a, b string) bool {
-	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
-	if strings.EqualFold(a, b) {
-		return true
-	}
-	fa, aok := parseCueNumFloat(a)
-	fb, bok := parseCueNumFloat(b)
-	return aok && bok && fa == fb
-}
-
-// otherCueNums lists every cue and group-header number except the cue at
-// exceptCuePos and the group exceptGroupID (0 = none).
-func otherCueNums(q sqlx.Queryer, exceptCuePos, exceptGroupID int) ([]string, error) {
-	var nums []string
-	err := sqlx.Select(q, &nums, `
-		SELECT COALESCE(cueNum, '') FROM cuesheet WHERE cuePos != ?
-		UNION ALL
-		SELECT COALESCE(cue_num, '') FROM cue_group WHERE group_id != ?`, exceptCuePos, exceptGroupID)
-	return nums, err
-}
-
-// checkCueNumFree returns a duplicateCueNumError when num is already used.
-// Blank numbers never collide.
-func checkCueNumFree(q sqlx.Queryer, num string, exceptCuePos, exceptGroupID int) error {
-	num = strings.TrimSpace(num)
-	if num == "" {
-		return nil
-	}
-	nums, err := otherCueNums(q, exceptCuePos, exceptGroupID)
-	if err != nil {
-		return err
-	}
-	for _, n := range nums {
-		if sameCueNum(n, num) {
-			return &duplicateCueNumError{num}
-		}
-	}
-	return nil
-}
-
-// maxCueNum is the highest numeric cue or group-header number (0 if none).
-func maxCueNum(q sqlx.Queryer) (float64, error) {
-	nums, err := otherCueNums(q, 0, 0)
-	if err != nil {
-		return 0, err
-	}
-	max := 0.0
-	for _, n := range nums {
-		if f, ok := parseCueNumFloat(n); ok && f > max {
-			max = f
-		}
-	}
-	return max, nil
-}
-
-// freeCueNum keeps num when it is unused, otherwise hands out the next whole
-// number above every existing one (imports appended onto a sheet).
-func freeCueNum(q sqlx.Queryer, num string) (string, error) {
-	err := checkCueNumFree(q, num, 0, 0)
-	if !errors.Is(err, ErrDuplicateCueNum) {
-		return num, err
-	}
-	max, err := maxCueNum(q)
-	if err != nil {
-		return "", err
-	}
-	return formatCueNum(math.Floor(max) + 1), nil
-}
-
-// currentCueNum reads the stored number of one cue.
-func currentCueNum(cuePos int) (string, error) {
-	var cur string
-	err := db.Get(&cur, `SELECT COALESCE(cueNum, '') FROM cuesheet WHERE cuePos = ?`, cuePos)
-	return cur, err
-}
-
-// parseCueNumFloat parses a cueNum that is a plain decimal number ("12",
-// "12.5"); ok=false for hand-set text numbers, which auto-numbering never
-// touches.
-func parseCueNumFloat(s string) (float64, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || f < 0 {
-		return 0, false
-	}
-	return f, true
-}
-
-// formatCueNum renders a cue number without a trailing ".0" (12 → "12",
-// 12.5 → "12.5").
-func formatCueNum(f float64) string {
-	s := strconv.FormatFloat(f, 'f', -1, 64)
-	return s
-}
-
-// nextCueNum computes the cue number for a new cue landing at visual
-// position sheetIndex. With auto-numbering on: an append gets the next whole
-// number; an insert between two numeric neighbours (in sheet order, the
-// order the operator sees) gets their midpoint ("12.5" between 12 and 13).
-// Off (or non-numeric neighbours) falls back to MAX+1.
-func nextCueNum(tx *sqlx.Tx, sheetIndex float64, auto bool, step float64) (string, error) {
-	maxNum, err := maxCueNum(tx)
-	if err != nil {
-		return "", err
-	}
-	// The next multiple of step above the highest number (step 1: MAX+1).
-	next := (math.Floor(maxNum/step) + 1) * step
-	if !auto {
-		return formatCueNum(next), nil
-	}
-	{
-		var prevNum, nextNum sql.NullString
-		_ = tx.Get(&prevNum, `SELECT cueNum FROM cuesheet WHERE sheet_index < ? ORDER BY sheet_index DESC, cuePos DESC LIMIT 1`, sheetIndex)
-		_ = tx.Get(&nextNum, `SELECT cueNum FROM cuesheet WHERE sheet_index > ? ORDER BY sheet_index, cuePos LIMIT 1`, sheetIndex)
-		p, pok := parseCueNumFloat(prevNum.String)
-		n, nok := parseCueNumFloat(nextNum.String)
-		if pok && nok && n > p {
-			// Walk up from the midpoint in 0.5 steps until the number is
-			// free (the UNIQUE constraint makes collision a hard error).
-			mid := (p + n) / 2
-			for step := 0.0; step < 50; step += 0.5 {
-				cand := formatCueNum(mid + step)
-				err := checkCueNumFree(tx, cand, 0, 0)
-				if err == nil {
-					return cand, nil
-				}
-				if !errors.Is(err, ErrDuplicateCueNum) {
-					return "", err
-				}
-			}
-		}
-	}
-	// Append (or unparseable neighbours): the next whole number above the
-	// max (12.5 → 13), so appends keep a clean integer sequence.
-	return formatCueNum(next), nil
 }
 
 // BulkEdit applies one operation to many cues in ONE transaction (§12.4),
@@ -2272,7 +1190,26 @@ var editableCueColumns = map[string]bool{
 	"rate":         true,
 	"balance":      true,
 	"mute":         true,
+	"geom_x":       true,
+	"geom_y":       true,
+	"geom_w":       true,
+	"geom_h":       true,
+	"crop_l":       true,
+	"crop_r":       true,
+	"crop_t":       true,
+	"crop_b":       true,
+	"align":        true,
 }
+
+// ErrBadCueEdit marks UpdateCue errors that are the caller's fault (a column
+// that is not editable, or a value that does not validate), so the edit route
+// answers 400 rather than 500.
+var ErrBadCueEdit = errors.New("bad cue edit")
+
+type badCueEdit struct{ error }
+
+func (badCueEdit) Is(target error) bool { return target == ErrBadCueEdit }
+func (e badCueEdit) Unwrap() error      { return e.error }
 
 // CueColumnValue returns the current string value of one of the
 // editable cue columns, for pre-filling the inline-edit form. col is
@@ -2322,6 +1259,24 @@ func CueColumnValue(cue Cue, col string) (string, error) {
 		return strconv.FormatFloat(cue.Balance, 'f', -1, 64), nil
 	case "mute":
 		return strconv.FormatBool(cue.Mute), nil
+	case "geom_x":
+		return cue.GeomX, nil
+	case "geom_y":
+		return cue.GeomY, nil
+	case "geom_w":
+		return cue.GeomW, nil
+	case "geom_h":
+		return cue.GeomH, nil
+	case "crop_l":
+		return cue.CropL, nil
+	case "crop_r":
+		return cue.CropR, nil
+	case "crop_t":
+		return cue.CropT, nil
+	case "crop_b":
+		return cue.CropB, nil
+	case "align":
+		return cue.Align, nil
 	default:
 		return "", fmt.Errorf("cue column %q is not editable", col)
 	}
@@ -2362,7 +1317,7 @@ func checkCueNumChange(cuePos int, num string) error {
 
 func UpdateCue(cuePos string, col string, val string) (err error) {
 	if !editableCueColumns[col] {
-		return fmt.Errorf("cue column %q is not editable", col)
+		return badCueEdit{fmt.Errorf("cue column %q is not editable", col)}
 	}
 	cuePosInt, err := strconv.Atoi(cuePos)
 	if err != nil {
@@ -2373,7 +1328,7 @@ func UpdateCue(cuePos string, col string, val string) (err error) {
 	// boolean columns, normalize the common true/false spellings.
 	setVal, err := parseCueColumn(col, val)
 	if err != nil {
-		return err
+		return badCueEdit{err}
 	}
 	if col == "cueNum" {
 		if err := checkCueNumChange(cuePosInt, setVal); err != nil {
@@ -2471,6 +1426,8 @@ func parseCueColumn(col string, val string) (string, error) {
 			return "", fmt.Errorf("invalid %s %q (want pixels like 960, or a percentage like 50%%)", col, val)
 		}
 		return v, nil
+	case "align":
+		return normalizeAlign(val)
 	case "fit_mode":
 		switch v := strings.TrimSpace(val); v {
 		case "fit", "stretch", "fill-width", "fill-height", "fill":
@@ -2534,7 +1491,7 @@ func UpdateCueFields(cuePos string, fields map[string]string) (err error) {
 		"cueNum", "title", "posStart", "posEnd", "preWait", "cueDuration",
 		"postWait", "hold", "loop", "loop_count", "color", "parent", "fadeOut",
 		"fadeAction", "autoContinue", "volume", "fadeIn", "rate", "balance", "mute",
-		"fadeCurve", "fit_mode", "rotation", "flip", "opacity", "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b",
+		"fadeCurve", "fit_mode", "rotation", "flip", "opacity", "geom_x", "geom_y", "geom_w", "geom_h", "crop_l", "crop_r", "crop_t", "crop_b", "align",
 		"schedule_enabled", "schedule_days", "schedule_time_ms", "stop_others", "layer", "layer_under",
 	} {
 		val, ok := fields[col]
@@ -2617,199 +1574,6 @@ func SetCueLayerUnderPos(cuePos, underPos int) error {
 	_, err := db.Exec(`UPDATE cuesheet SET layer_under = COALESCE((SELECT cue_id FROM cuesheet WHERE cuePos = ?), 0)
 		WHERE cuePos = ?`, underPos, cuePos)
 	return err
-}
-
-// SetCueSchedule persists a cue's recurring schedule. The
-// scheduler fires enabled cues whose day-of-week bit is set in
-// ScheduleDays and whose ScheduleTimeMs (ms since midnight) matches
-// the wall clock to the second. Day: 1=Mon .. 7=Sun; timeSec: seconds
-// since midnight (0..86399) — second precision is what multi-node
-// sync-fire needs, minute precision can't hit 14:31:00.
-func SetCueSchedule(cuePos int, enabled bool, day int, timeSec int) error {
-	// Day: 1=Mon .. 7=Sun. Guard before the shift: day=0 would be 1<<-1
-	// (panic) and day=8 would set a bit no reader ever matches.
-	if day < 1 || day > 7 || timeSec < 0 || timeSec >= 24*3600 {
-		return errors.New("invalid schedule day or time")
-	}
-	if !enabled {
-		// Keep the stored day/time on disable (inspector path behaviour):
-		// re-enabling must resume from the same trigger, not a wiped one.
-		_, err := db.Exec(`UPDATE cuesheet SET schedule_enabled = 0 WHERE cuePos = ?;`, cuePos)
-		if err != nil {
-			return err
-		}
-		bumpCuesheetVersion()
-		return nil
-	}
-	_, err := db.Exec(`
-		UPDATE cuesheet
-		SET schedule_enabled = ?, schedule_days = ?, schedule_time_ms = ?
-		WHERE cuePos = ?;`,
-		boolToInt(enabled), 1<<(day-1), timeSec*1000, cuePos)
-	if err != nil {
-		return err
-	}
-	bumpCuesheetVersion()
-	return nil
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
-// ScheduleInfo holds one row of the schedule query for the
-// scheduler; it carries only the fields the scheduler needs.
-type ScheduleInfo struct {
-	CueID         int     `db:"cue_id"` // stable identity: cuePos changes on reorder
-	CuePos        int     `db:"cuePos"`
-	Title         string  `db:"title"`
-	Filename      string  `db:"filename"`
-	SourceKind    string  `db:"source_kind"`
-	EndpointURL   string  `db:"endpoint_url"`
-	EndpointTitle string  `db:"endpoint_title"`
-	ScheduleMs    int     `db:"schedule_time_ms"`
-	PosStart      int     `db:"posStart"`
-	PosEnd        int     `db:"posEnd"`
-	Hold          bool    `db:"hold"`
-	Loop          bool    `db:"loop"`
-	LoopCount     int     `db:"loop_count"`
-	Volume        float64 `db:"volume"`
-	LoudnessGain  float64 `db:"loudness_gain"`
-	Rate          float64 `db:"rate"`
-	Balance       float64 `db:"balance"`
-	Mute          bool    `db:"mute"`
-	FadeIn        int     `db:"fadeIn"`
-	FadeCurve     string  `db:"fade_curve"`
-	FitMode       string  `db:"fit_mode"`
-	Rotation      int     `db:"rotation"`
-	Flip          string  `db:"flip"`
-	Opacity       float64 `db:"opacity"`
-	GeomX         string  `db:"geom_x"`
-	GeomY         string  `db:"geom_y"`
-	GeomW         string  `db:"geom_w"`
-	GeomH         string  `db:"geom_h"`
-	CropL         string  `db:"crop_l"`
-	CropR         string  `db:"crop_r"`
-	CropT         string  `db:"crop_t"`
-	CropB         string  `db:"crop_b"`
-	StopOthers    bool    `db:"stop_others"`
-	Layer         string  `db:"layer"`
-	LayerUnder    int     `db:"layer_under"`
-	Mimetype      string  `db:"mimetype"`
-}
-
-// AsCue rebuilds the cue-level view of a scheduled row (the subset the
-// transport honours: filename, trim, playback settings) so one opts builder
-// serves both a fetched cue and a fetched schedule. Not a DB round trip:
-// the fire path re-fetches a fresh ctp.Cue when it fires, which is what
-// keeps late edits honest.
-func (s ScheduleInfo) AsCue() Cue {
-	return Cue{
-		Media:      Media{Filename: s.Filename, SourceKind: s.SourceKind, EndpointURL: s.EndpointURL, EndpointTitle: s.EndpointTitle, Mimetype: s.Mimetype, LoudnessGain: s.LoudnessGain},
-		CuePos:     s.CuePos,
-		Title:      s.Title,
-		PosStart:   s.PosStart,
-		PosEnd:     s.PosEnd,
-		Hold:       s.Hold,
-		Loop:       s.Loop,
-		LoopCount:  s.LoopCount,
-		Volume:     s.Volume,
-		Rate:       s.Rate,
-		Balance:    s.Balance,
-		Mute:       s.Mute,
-		FadeIn:     s.FadeIn,
-		FadeCurve:  s.FadeCurve,
-		FitMode:    s.FitMode,
-		Rotation:   s.Rotation,
-		Flip:       s.Flip,
-		Opacity:    s.Opacity,
-		GeomX:      s.GeomX,
-		GeomY:      s.GeomY,
-		GeomW:      s.GeomW,
-		GeomH:      s.GeomH,
-		CropL:      s.CropL,
-		CropR:      s.CropR,
-		CropT:      s.CropT,
-		CropB:      s.CropB,
-		StopOthers: s.StopOthers,
-		Layer:      s.Layer,
-		LayerUnder: s.LayerUnder,
-	}
-}
-
-// NextSchedule reports the next upcoming enabled schedule strictly after
-// now (any weekday): how far away it is plus its cue number/title. ok=false
-// when nothing is scheduled. The GO button flashes on sub-minute horizons.
-func NextSchedule(now time.Time) (dueIn time.Duration, num, title string, ok bool) {
-	var rows []struct {
-		Days   int    `db:"schedule_days"`
-		TimeMs int    `db:"schedule_time_ms"`
-		CueNum string `db:"cueNum"`
-		Title  string `db:"title"`
-	}
-	if err := db.Select(&rows, `SELECT schedule_days, schedule_time_ms, cueNum, title
-		FROM cuesheet WHERE schedule_enabled = 1`); err != nil || len(rows) == 0 {
-		return 0, "", "", false
-	}
-	todayBit := (int(now.Weekday()) + 6) % 7 // Mon=0 .. Sun=6
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	best := time.Duration(1 << 62)
-	for _, r := range rows {
-		for d := 0; d < 7; d++ {
-			if r.Days&(1<<((todayBit+d)%7)) == 0 {
-				continue
-			}
-			at := midnight.Add(time.Duration(d)*24*time.Hour + time.Duration(r.TimeMs)*time.Millisecond)
-			if !at.After(now) {
-				continue
-			}
-			if wait := at.Sub(now); wait < best {
-				best, num, title, ok = wait, r.CueNum, r.Title, true
-			}
-			break // earliest matching weekday for this cue
-		}
-	}
-	return best, num, title, ok
-}
-
-// GetScheduledCuesSince returns the cues due after from (exclusive, whole
-// seconds) up to now: GetScheduledCues' one-second window, stretched back
-// to from when the scheduler was stalled. The span never crosses midnight:
-// from is clamped to the start of now's day.
-func GetScheduledCuesSince(from, now time.Time) ([]ScheduleInfo, error) {
-	day := int(now.Weekday())
-	if day == 0 {
-		day = 7 // Sunday = bit6
-	}
-	timeMs := now.Hour()*3600*1000 + now.Minute()*60*1000 + now.Second()*1000
-	fromMs := -1 // start of day
-	if y, d := from.YearDay(), from.Year(); y == now.YearDay() && d == now.Year() {
-		fromMs = from.Hour()*3600*1000 + from.Minute()*60*1000 + from.Second()*1000
-	}
-	if fromMs > timeMs-1000 {
-		fromMs = timeMs - 1000
-	}
-	var rows []ScheduleInfo
-	err := db.Select(&rows, `
-		SELECT c.cue_id, c.cuePos, c.title, COALESCE(m.filename, '') AS filename, m.source_kind, m.endpoint_url, m.endpoint_title, c.schedule_time_ms, c.posStart, c.posEnd,
-			c.hold, c.loop, c.loop_count, c.volume, m.loudness_gain,
-			c.rate, c.balance, c.mute, c.fadeIn, c.fade_curve,
-			c.fit_mode, c.rotation, c.flip, c.opacity, c.geom_x, c.geom_y, c.geom_w, c.geom_h, c.crop_l, c.crop_r, c.crop_t, c.crop_b,
-			c.stop_others, c.layer, c.layer_under,
-			m.mimetype
-		FROM cuesheet c
-		JOIN mediapool m ON c.media_id = m.media_id
-		WHERE c.schedule_enabled = 1
-		AND ((c.schedule_days & ?) = ?)
-		AND c.schedule_time_ms <= ? + 250
-		AND c.schedule_time_ms > ?
-		AND (c.last_played_at = 0 OR c.last_played_at < ?)
-		ORDER BY c.schedule_time_ms ASC, c.sheet_index ASC`,
-		1<<(day-1), 1<<(day-1), timeMs, fromMs, now.UnixMilli())
-	return rows, err
 }
 
 // sequence into the given order, keeping group headers at their relative
@@ -3010,220 +1774,6 @@ func RemoveCue(cuePos string) (err error) {
 	return nil
 }
 
-// RegisterMedia inserts a newly-uploaded file (already saved to the media
-// directory as filename) into the mediapool, using the given probed
-// metadata. The thumbnail is left pending for the background worker.
-// ponytail: the `title` param is kept for API stability but no longer
-// persisted - nothing ever read media_title; restore the column write (the
-// DB column stays, nullable) if a surface for it appears.
-func RegisterMedia(filename string, size int64, meta media.Metadata, title string) (err error) {
-	// Upsert on filename: re-uploading a file the pool already knows replaces
-	// its probe metadata and re-queues background work while keeping media_id
-	// (and so every cue's FK to it) stable. A plain INSERT here made any
-	// re-upload of a registered filename fail with a UNIQUE constraint error,
-	// breaking the operator's "replace a file" flow.
-	metaJSON, merr := json.Marshal(meta.Info)
-	metaInfo := ""
-	if merr == nil && meta.Info != nil {
-		metaInfo = string(metaJSON)
-	}
-	_, err = db.Exec(`
-		INSERT INTO mediapool (filename, mimetype, size, duration, resolution, media_meta, thumbnail_pending, waveform_pending)
-		VALUES (:filename, :mimetype, :size, :duration, :resolution, :media_meta, 1, 1)
-		ON CONFLICT(filename) DO UPDATE SET
-			mimetype = excluded.mimetype,
-			size = excluded.size,
-			duration = excluded.duration,
-			resolution = excluded.resolution,
-			media_meta = excluded.media_meta,
-			thumbnail_pending = 1,
-			loudness_gain = 0,
-			missing = 0,
-			waveform_pending = 1;
-	`,
-		sql.Named("filename", filename),
-		sql.Named("mimetype", meta.Mimetype),
-		sql.Named("size", size),
-		sql.Named("duration", meta.Duration),
-		sql.Named("resolution", meta.Resolution),
-		sql.Named("media_meta", metaInfo),
-	)
-	if err != nil {
-		log.Printf("Error registering uploaded file: %v", err)
-		return err
-	}
-	bumpMediaVersion()
-	return nil
-}
-
-// PendingThumbnails returns media rows still awaiting background work
-// (thumbnail and/or waveform generation), so a background worker can pick
-// them up (including after a restart, since the pending flags are persisted
-// in the DB rather than an in-memory queue).
-func PendingThumbnails() (medias []Media, err error) {
-	err = db.Select(&medias, `SELECT * FROM mediapool WHERE source_kind = 'file' AND (thumbnail_pending = 1 OR waveform_pending = 1)`)
-	if err != nil {
-		log.Printf("Error listing pending media work: %v", err)
-		return nil, err
-	}
-	return medias, nil
-}
-
-// MarkThumbnailDone clears the pending flag for a media file, e.g. after
-// its thumbnail has been (re)generated.
-func MarkThumbnailDone(mediaID int) (err error) {
-	_, err = db.Exec(`UPDATE mediapool SET thumbnail_pending = 0 WHERE media_id = ?;`, mediaID)
-	if err != nil {
-		log.Printf("Error marking thumbnail done: %v", err)
-		return err
-	}
-	bumpMediaVersion()
-	return nil
-}
-
-// RequestThumbnailRefresh flags a media file's thumbnail for regeneration.
-func RequestThumbnailRefresh(filename string) (err error) {
-	_, err = db.Exec(`UPDATE mediapool SET thumbnail_pending = 1 WHERE filename = ?;`, filename)
-	if err != nil {
-		log.Printf("Error requesting thumbnail refresh: %v", err)
-		return err
-	}
-	bumpMediaVersion()
-	return nil
-}
-
-// MediaHasAlpha reports whether a registered file's video carries an alpha
-// channel, from the metadata recorded at import (false when unknown).
-func MediaHasAlpha(filename string) bool {
-	var meta string
-	if db.Get(&meta, `SELECT media_meta FROM mediapool WHERE filename = ?`, filename) != nil || meta == "" {
-		return false
-	}
-	var info media.MediaInfo
-	if json.Unmarshal([]byte(meta), &info) != nil {
-		return false
-	}
-	return info.HasAlpha()
-}
-
-// MediaFieldOrder is a media file's field order as probed at import (ffprobe:
-// "tt", "bb", "tb", "bt"), "" for progressive or unknown video. Files
-// imported before the field order was kept report "i" when they were
-// recorded as interlaced.
-func MediaFieldOrder(filename string) string {
-	var meta string
-	if db.Get(&meta, `SELECT media_meta FROM mediapool WHERE filename = ?`, filename) != nil || meta == "" {
-		return ""
-	}
-	var info media.MediaInfo
-	if json.Unmarshal([]byte(meta), &info) != nil || info.Video == nil || !info.Video.Interlaced {
-		return ""
-	}
-	if info.Video.FieldOrder != "" {
-		return info.Video.FieldOrder
-	}
-	return "i"
-}
-
-// MediaVideoCodec is a media file's video codec and pixel format as probed
-// at import ("hevc/yuv420p", "h264/yuv420p10le", ...), "" if unknown.
-func MediaVideoCodec(filename string) string {
-	var meta string
-	if db.Get(&meta, `SELECT media_meta FROM mediapool WHERE filename = ?`, filename) != nil || meta == "" {
-		return ""
-	}
-	var info media.MediaInfo
-	if json.Unmarshal([]byte(meta), &info) != nil || info.Video == nil {
-		return ""
-	}
-	return info.Video.Codec + "/" + info.Video.PixFmt
-}
-
-func MediaLoudnessGain(filename string) (gain float64, err error) {
-	err = db.Get(&gain, `SELECT loudness_gain FROM mediapool WHERE filename = ?`, filename)
-	return
-}
-
-func StoreLoudnessGain(mediaID int, gain float64) error {
-	if math.IsNaN(gain) || math.IsInf(gain, 0) {
-		return fmt.Errorf("invalid loudness gain")
-	}
-	_, err := db.Exec(`UPDATE mediapool SET loudness_gain = ? WHERE media_id = ?`, gain, mediaID)
-	return err
-}
-
-// StoreWaveform persists the computed amplitude peaks (JSON) for a media
-// file and clears its waveform-pending flag.
-func StoreWaveform(mediaID int, peaksJSON string) (err error) {
-	_, err = db.Exec(`INSERT INTO media_waveform (media_id, peaks, updated) VALUES (?, ?, ?)
-		ON CONFLICT(media_id) DO UPDATE SET peaks = excluded.peaks, updated = excluded.updated`,
-		mediaID, peaksJSON, time.Now().UnixMilli())
-	if err == nil {
-		_, err = db.Exec(`UPDATE mediapool SET waveform_pending = 0 WHERE media_id = ?;`, mediaID)
-	}
-	if err != nil {
-		log.Printf("Error storing waveform: %v", err)
-		return err
-	}
-	bumpMediaVersion()
-	return nil
-}
-
-// FailWaveform gives up on a waveform that cannot be computed (undecodable
-// file, missing codec): clears the pending flag so the worker stops
-// retrying it every poll tick, leaving the timeline empty. The Analyse
-// button can retry on demand via RequestWaveformAnalysis.
-func FailWaveform(mediaID int) (err error) {
-	_, err = db.Exec(`UPDATE mediapool SET waveform_pending = 0 WHERE media_id = ?;`, mediaID)
-	if err != nil {
-		log.Printf("Error clearing waveform flag: %v", err)
-		return err
-	}
-	bumpMediaVersion()
-	return nil
-}
-
-// RequestWaveformAnalysis flags a media file for (re)analysis by the
-// background worker. "Analyse" regenerates the amplitude peaks used by the
-// Cue Inspector's trim timeline.
-func RequestWaveformAnalysis(filename string) (err error) {
-	_, err = db.Exec(`UPDATE mediapool SET waveform_pending = 1 WHERE filename = ?;`, filename)
-	if err != nil {
-		log.Printf("Error requesting waveform analysis: %v", err)
-		return err
-	}
-	bumpMediaVersion()
-	return nil
-}
-
-func Delete(filename string) (err error) {
-	res, err := db.Exec(`
-		DELETE FROM mediapool
-		WHERE filename = :filename;
-	`, sql.Named("filename", filename))
-	if err != nil {
-		log.Printf("Error deleting cue from mediapool: %v", err)
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("media %q not found in pool", filename)
-	}
-	// A deleted file must not linger as a pinned test pattern or as the
-	// panic holding image (both would point at nothing).
-	if err := RemoveTestPattern(filename); err != nil {
-		log.Printf("Error unpinning deleted media %q from test patterns: %v", filename, err)
-	}
-	if GetPanicHoldImage() == filename {
-		if err := SetPanicHoldImage(""); err != nil {
-			log.Printf("Error clearing deleted panic holding image %q: %v", filename, err)
-		}
-	}
-	bumpMediaVersion()
-	bumpCuesheetVersion()
-	return nil
-}
-
 func ClearCueSheet() (err error) {
 	_, err = db.Exec(`DELETE FROM cuesheet;`)
 	if err != nil {
@@ -3247,44 +1797,26 @@ func ClearCueSheet() (err error) {
 	return nil
 }
 
-// UpdateMediaMeta persists refreshed detailed media info (JSON MediaInfo)
-// for an already-registered media file.
-func UpdateMediaMeta(filename string, metaJSON string) (err error) {
-	_, err = db.Exec(`UPDATE mediapool SET media_meta = ? WHERE filename = ?;`, metaJSON, filename)
-	if err != nil {
-		return err
+// normalizeAlign validates a picture alignment: at most one horizontal word
+// (left, center, right) and one vertical (top, middle, bottom), stored as
+// "<h> <v>" with either part possibly absent.
+func normalizeAlign(val string) (string, error) {
+	var h, v string
+	for _, w := range strings.Fields(strings.ToLower(val)) {
+		switch w {
+		case "left", "center", "right":
+			if h != "" {
+				return "", fmt.Errorf("invalid align %q (one of left, center, right)", val)
+			}
+			h = w
+		case "top", "middle", "bottom":
+			if v != "" {
+				return "", fmt.Errorf("invalid align %q (one of top, middle, bottom)", val)
+			}
+			v = w
+		default:
+			return "", fmt.Errorf("invalid align %q (want left/center/right and top/middle/bottom)", val)
+		}
 	}
-	bumpMediaVersion()
-	return nil
-}
-
-// validGeom accepts pixels ("960", "960px", "-20") or a percentage ("50%").
-func validGeom(v string) bool {
-	v = strings.TrimSuffix(strings.TrimSuffix(v, "%"), "px")
-	f, err := strconv.ParseFloat(v, 64)
-	return err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
-}
-
-// stateKeyTestOverlay: test patterns carry a label with the display's
-// resolution and refresh rate (§12.10). Off by default.
-const stateKeyTestOverlay = "testOverlay"
-
-// GetTestOverlay reports whether test patterns show the display-mode label.
-func GetTestOverlay() bool {
-	var val string
-	if err := db.Get(&val, `SELECT value FROM state WHERE key = ?`, stateKeyTestOverlay); err != nil {
-		return false
-	}
-	return strings.TrimSpace(val) == "1"
-}
-
-// SetTestOverlay persists the test-pattern display-mode label setting.
-func SetTestOverlay(on bool) error {
-	v := "0"
-	if on {
-		v = "1"
-	}
-	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, stateKeyTestOverlay, v)
-	return err
+	return strings.TrimSpace(h + " " + v), nil
 }

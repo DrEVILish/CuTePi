@@ -616,7 +616,7 @@ static gpointer present_thread(gpointer d) {
     {
       /* How long after its time a frame reaches the screen: SetPlane has
        * just returned at the vblank that latched it (both clocks are
-       * CLOCK_MONOTONIC). Cue sound is delayed by this (glwall_align_audio). */
+       * CLOCK_MONOTONIC). The audio bus delays cue sound by this (audiobus.go). */
       GstBuffer *fb = gst_sample_get_buffer(f->sample);
       GstClockTime base = gst_element_get_base_time(W.wall);
       if (fb && GST_CLOCK_TIME_IS_VALID(GST_BUFFER_PTS(fb)) && GST_CLOCK_TIME_IS_VALID(base)) {
@@ -1174,10 +1174,6 @@ void glwall_layer_ramp(glwall_layer *l, double from, double to, uint64_t start_n
 int64_t glwall_display_delay(void) {
   gint64 d = W.delay_ns ? W.delay_ns : DEFAULT_DELAY_NS;
   return d + GST_SECOND / (2 * (W.hz ? W.hz : 60));
-}
-
-void glwall_align_audio(GstElement *sink) {
-  g_object_set(sink, "ts-offset", (gint64)glwall_display_delay(), NULL);
 }
 
 /* The largest ts-offset on a pipeline's sinks other than the video appsink

@@ -135,6 +135,7 @@ func handleYoutubeDownload(c *gin.Context) {
 		return
 	}
 	logs.Printf(logs.YDLRender, "stage=complete filename=%q", filename)
+	linkMediaAdded([]string{filename}) // to an Active/active pair's other units (§6.8c)
 	writeLine(map[string]any{"done": true, "filename": filename})
 }
 

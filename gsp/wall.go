@@ -33,7 +33,7 @@ type wallLayer struct {
 	visible bool                        // part of the on-screen stack (not a warm/prerolling slot)
 	parked  bool                        // invisible at the top zpos, ready to be raised (panic image)
 	still   atomic.Bool                 // shows a single-frame image: no video to share commits with
-	framed  atomic.Bool                 // the sink has received its first frame
+	framed  *atomic.Bool                // the sink has received its first frame (its own allocation: the sink probe must not pin the layer and its pipeline)
 
 	// Alpha writes are commits that wait for the next vblank (~16 ms), so
 	// they run on the layer's own writer: callers (fade loops holding the
@@ -241,7 +241,7 @@ func newWallLayer(p *gst.Pipeline, opts LoadOpts) (*wallLayer, error) {
 	if plane == nil {
 		return nil, fmt.Errorf("all %d display layers are in use", len(w.planes))
 	}
-	l := &wallLayer{p: p, plane: plane, opacity: opacityOf(opts), kick: make(chan struct{}, 1), quit: make(chan struct{})}
+	l := &wallLayer{p: p, plane: plane, framed: new(atomic.Bool), opacity: opacityOf(opts), kick: make(chan struct{}, 1), quit: make(chan struct{})}
 	_ = w.setAlpha(plane, 0)
 	go l.writer(w)
 	bits, ok := rotationBits(opts.Rotation, opts.Flip)
@@ -567,6 +567,22 @@ func incomingShown(p *gst.Pipeline) {
 	}
 }
 
+// incomingOnScreen releases the fades waiting on p once it is really on
+// screen: on the plane presenter, after the first commit carrying its raised
+// layer returns (that commit latched at a vblank); elsewhere at once, when the
+// layer has been shown. The wait is capped so a crossfade never stalls.
+func incomingOnScreen(p *gst.Pipeline) {
+	l := layerOf(p)
+	if l == nil || l.plane == nil || !planewall.IsOpen() {
+		incomingShown(p)
+		return
+	}
+	go func() {
+		planewall.WaitShown(l.plane.id, 250*time.Millisecond)
+		incomingShown(p)
+	}()
+}
+
 var (
 	outMu    sync.Mutex
 	outgoers = map[*gst.Pipeline]*outgoing{}
@@ -682,6 +698,15 @@ func wallRect(opts LoadOpts, dw, dh int) (x, y, w, h int) {
 	}
 	if h <= 0 {
 		h = dh
+	}
+	// An aligned box smaller than the display, with no X/Y of its own, goes
+	// against the chosen edges (centre: in the middle).
+	ah, av, hok, vok := alignOf(opts.Align)
+	if hok && strings.TrimSpace(opts.GeomX) == "" {
+		x = (dw - w) * (ah + 1) / 2
+	}
+	if vok && strings.TrimSpace(opts.GeomY) == "" {
+		y = (dh - h) * (av + 1) / 2
 	}
 	return
 }
@@ -804,6 +829,31 @@ type frameLayout struct {
 	cropL, cropR, cropT, cropB int // pixels of the frame videocrop sees
 	preW, preH                 int // 90/270 path: pre-rotation scaled size
 	outW, outH                 int // shown frame size after crop and rotation (stretch aspect)
+	// fit mode with an alignment: the picture's rectangle inside the box
+	// (box-relative); fitW 0 = not aligned, the sink centres it.
+	fitX, fitY, fitW, fitH int
+}
+
+// alignOf reads LoadOpts.Align: h and v are -1 (left/top), 0 (centre) or +1
+// (right/bottom); hok/vok tell whether that axis is set at all.
+func alignOf(a string) (h, v int, hok, vok bool) {
+	for _, w := range strings.Fields(a) {
+		switch w {
+		case "left":
+			h, hok = -1, true
+		case "center":
+			h, hok = 0, true
+		case "right":
+			h, hok = 1, true
+		case "top":
+			v, vok = -1, true
+		case "middle":
+			v, vok = 0, true
+		case "bottom":
+			v, vok = 1, true
+		}
+	}
+	return
 }
 
 // computeLayout applies the cue's crop (source pixels or % per edge), then the
@@ -815,7 +865,7 @@ type frameLayout struct {
 //	fill-height  picture as tall as the box; left/right overflow is cropped
 //	fill         covers the box; whichever side overflows is cropped
 //
-// Overflow crops are centred. swRotate: the frame is scaled (preW x preH)
+// Overflow crops follow the alignment (centred when unset). swRotate: the frame is scaled (preW x preH)
 // before videocrop, so crops are expressed in that scaled frame.
 func computeLayout(opts LoadOpts, srcW, srcH, bw, bh int, swRotate bool) frameLayout {
 	var l frameLayout
@@ -856,13 +906,32 @@ func computeLayout(opts LoadOpts, srcW, srcH, bw, bh int, swRotate bool) frameLa
 			ey = (oh - fbh/s) / 2
 		}
 	}
+	ah, av, hok, vok := alignOf(opts.Align)
 	fcl, fcr, fct, fcb := float64(cl), float64(cr), float64(ct), float64(cb)
-	if rot {
-		fcl, fcr, fct, fcb = fcl+ey, fcr+ey, fct+ex, fcb+ex
-	} else {
-		fcl, fcr, fct, fcb = fcl+ex, fcr+ex, fct+ey, fcb+ey
+	// A fill mode's overflow comes off the screen side away from the
+	// alignment (top keeps the picture's top); centred or unset, evenly.
+	// Those screen sides go back through the turn and mirror to the source
+	// edges videocrop cuts (glCropEdges maps source to screen, so the inverse
+	// direction: 90R and 90L swap, every other direction is its own inverse).
+	d := glDirection(opts.Rotation, opts.Flip)
+	switch d {
+	case dir90R:
+		d = dir90L
+	case dir90L:
+		d = dir90R
 	}
+	el, er, et, eb := glCropEdges(d, ex*float64(1+ah), ex*float64(1-ah), ey*float64(1+av), ey*float64(1-av))
+	fcl, fcr, fct, fcb = fcl+el, fcr+er, fct+et, fcb+eb
 	fw, fh := ow-2*ex, oh-2*ey
+	if (hok || vok) && (opts.FitMode == "" || opts.FitMode == "fit") {
+		// shortcut: square source pixels assumed; anamorphic sources would
+		// need their pixel aspect here.
+		s := math.Min(fbw/fw, fbh/fh)
+		pw, ph := fw*s, fh*s
+		l.fitW, l.fitH = int(math.Round(pw)), int(math.Round(ph))
+		l.fitX = int(math.Round((fbw - pw) * float64(ah+1) / 2))
+		l.fitY = int(math.Round((fbh - ph) * float64(av+1) / 2))
+	}
 	k := 1.0
 	if swRotate {
 		// Scale so the shown (cropped, turned) region lands at box size.
@@ -891,8 +960,19 @@ func cropPx(v string, full int) int {
 // ms after Go were short of frames (HEVC 2 and 4 frames in the first two 100
 // ms, H.264 3, MPEG-2 5, against 6); with 100 ms every cue measured ran 6 a
 // 100 ms from its first moving frame. The prerolled frame is shown at
-// opacity 0 meanwhile (movingOnPlane).
-const pwStartLatency = 100 * time.Millisecond
+// opacity 0 until its due time. 35 ms since 2026-11-13 (HEVC and
+// H.264 1080p60 still 18-19 frames in the first 300 ms): the sound
+// needs busLatency plus the input's 5 ms render delay to be in time for the
+// first frame, and the first frame is shown at its time (startPlayback),
+// which must stay under 50 ms after GO.
+const pwStartLatency = 35 * time.Millisecond
+
+// pwQueueFrames frames (133 ms at 60 fps), at most pwQueueBytes (a 4K RGB
+// source keeps two): the software-decoded tail's buffer (configureKMSTail).
+const (
+	pwQueueFrames = 8
+	pwQueueBytes  = 72 << 20
+)
 
 func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts LoadOpts, srcW, srcH int, still bool) error {
 	w := kmsWall()
@@ -925,18 +1005,23 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 		sink.Set("skip-vsync", true) // one vsync waiter per DRM fd: several sinks share it
 	}
 	// First-frame flag: a live page has no preroll, so its show waits on this.
+	framed := l.framed
 	sink.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer, func(*gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
-		l.framed.Store(true)
+		framed.Store(true)
 		return gst.PadProbeRemove
 	})
 	x, y, bw, bh := wallRect(opts, w.Width, w.Height)
-	// kmssink fits the (cropped) frame inside this box, aspect kept.
+	flip := firstByFactory(byFactory, "videoflip")
+	lay := computeLayout(opts, srcW, srcH, bw, bh, flip != nil)
+	// The sink fits the (cropped) frame inside this box, aspect kept and
+	// centred; an aligned fit gets the picture's own rectangle instead.
+	if lay.fitW > 0 && lay.fitH > 0 {
+		x, y, bw, bh = x+lay.fitX, y+lay.fitY, lay.fitW, lay.fitH
+	}
 	sink.SetArg("render-rectangle", fmt.Sprintf("<%d,%d,%d,%d>", x, y, bw, bh))
 	if id := firstByFactory(byFactory, "identity"); id != nil {
 		id.Set("drop-allocation", true)
 	}
-	flip := firstByFactory(byFactory, "videoflip")
-	lay := computeLayout(opts, srcW, srcH, bw, bh, flip != nil)
 	if flip != nil {
 		flip.SetArg("method", rotationMethod(opts.Rotation)) // enum: SetArg parses the nick; Set(string) is silently ignored
 		if cf := firstByFactory(byFactory, "capsfilter"); cf != nil && lay.preW > 0 && lay.preH > 0 {
@@ -971,6 +1056,20 @@ func configureKMSTail(p *gst.Pipeline, byFactory map[string][]*gst.Element, opts
 			if _, err := e.GetPropertyType("qos"); err == nil {
 				e.Set("qos", false)
 			}
+		}
+	}
+	// Software-decoded frames on the presenter: the tail's queue holds
+	// pwQueueFrames of them. Its default 10 MB cap held one or two 1080p
+	// frames of 4:2:2 or RGB video (DNxHR HQ, HAP, PNG, QuickTime RLE,
+	// ProRes 422: 4-8 MB a frame), so pwStartLatency could not fill ahead
+	// and a decoder hiccup at the start or a CPU burst mid-play showed at
+	// once as missing frames. DMABuf tails keep the default: a hardware
+	// decoder's few capture buffers must not wait in a queue.
+	if planeSink && firstByFactory(byFactory, "videoconvert") != nil && firstByFactory(byFactory, "v4l2convert") == nil {
+		if q := firstByFactory(byFactory, "queue"); q != nil {
+			q.Set("max-size-buffers", uint(pwQueueFrames))
+			q.Set("max-size-bytes", uint(pwQueueBytes))
+			q.Set("max-size-time", uint64(0))
 		}
 	}
 	if vc := firstByFactory(byFactory, "videocrop"); vc != nil {

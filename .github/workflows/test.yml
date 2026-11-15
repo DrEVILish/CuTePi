@@ -1,0 +1,14 @@
+name: test
+on: [push, pull_request]
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: true}
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      # cgo: the gsp packages link GStreamer, sqlite and the C decoders.
+      - run: sudo apt-get update && sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
+      - run: go vet ./...
+      - run: go test ./...

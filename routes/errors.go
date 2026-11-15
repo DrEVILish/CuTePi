@@ -29,6 +29,17 @@ func respondError(c *gin.Context, status int, msg string) {
 	c.HTML(status, "error.html", gin.H{"error": msg})
 }
 
+// notFound answers unknown paths. A browser navigation gets the error page
+// with a way back to the control centre; API and script clients keep the
+// plain-text 404 they always had.
+func notFound(c *gin.Context) {
+	if strings.HasPrefix(c.Request.URL.Path, "/api/") || !strings.Contains(c.GetHeader("Accept"), "text/html") {
+		c.String(404, "404 page not found")
+		return
+	}
+	c.HTML(404, "error.html", gin.H{"title": "Page not found", "error": "There is nothing at " + c.Request.URL.Path + "."})
+}
+
 // redactPaths strips the server's data, temp, media and thumbnail directory
 // prefixes from a user-facing message, so errors name files, never where the
 // server keeps them (O5). Both the configured and the absolute spelling of

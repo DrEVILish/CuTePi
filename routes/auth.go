@@ -3,6 +3,7 @@ package routes
 import (
 	"crypto/subtle"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -16,12 +17,15 @@ import (
 //   - AuthMiddleware: the optional operator password, on every route
 //     including the WebSocket handshake;
 //   - CachePolicy: no-store everywhere except images (private);
-//   - LimitBody: per-route request body caps.
+//   - LimitBody: per-route request body caps;
+//   - LinkMiddleware: linked units' mirroring and forwarding (§6.8c).
 func UseMiddleware(r *gin.Engine) {
 	r.Use(SameOrigin())
 	r.Use(AuthMiddleware())
 	r.Use(CachePolicy())
 	r.Use(LimitBody())
+	r.Use(LinkMiddleware())
+	r.NoRoute(notFound)
 }
 
 // maxBodyBytes caps the bodies of the routes that carry media (uploads,
@@ -76,8 +80,18 @@ func LimitBody() gin.HandlerFunc {
 // browser's cached credentials on same-origin requests.
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// A paired unit proves itself with the pairing secret, a failover
+		// page with a token signed with it (§6.8c); the pairing handshake's
+		// answer with its nonce, and the other peer routes refuse
+		// anything without the secret.
+		if id := peerIDFromKey(c.Request); id != "" {
+			c.Set(ctxLinkPeer, id)
+			c.Next()
+			return
+		}
 		pw := config.AuthPassword()
-		if pw == "" {
+		if pw == "" || pageTokenOK(c.Request) || c.Request.URL.Path == "/api/peer/pair/accept" ||
+			(strings.HasPrefix(c.Request.URL.Path, "/api/peer/") && c.Request.URL.Path != "/api/peer/pair/request") {
 			c.Next()
 			return
 		}
