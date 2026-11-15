@@ -196,13 +196,11 @@ func (p *Preparer) Enqueue(files []string) {
 	}
 	if !p.running {
 		p.running = true
-		ctx, cancel := context.WithCancel(context.Background())
-		p.cancel = cancel
-		go p.loop(ctx)
+		go p.loop()
 	}
 }
 
-func (p *Preparer) loop(ctx context.Context) {
+func (p *Preparer) loop() {
 	for {
 		p.mu.Lock()
 		var j *PrepareJob
@@ -212,22 +210,29 @@ func (p *Preparer) loop(ctx context.Context) {
 				break
 			}
 		}
-		if j == nil || ctx.Err() != nil {
+		if j == nil {
 			p.running = false
 			p.mu.Unlock()
 			return
 		}
+		ctx, cancel := context.WithCancel(context.Background())
+		p.cancel = cancel
 		j.State = "preparing"
 		p.mu.Unlock()
 		err := p.Run(ctx, j.Filename)
+		cancel()
 		p.mu.Lock()
-		switch {
-		case errors.Is(err, ErrNotPreparable):
-			j.State, j.Error = "skipped", err.Error()
-		case err != nil:
-			j.State, j.Error = "failed", err.Error()
-		default:
-			j.State = "done"
+		p.cancel = nil
+		// Cancel owns its terminal result even when Run finishes later.
+		if j.State == "preparing" {
+			switch {
+			case errors.Is(err, ErrNotPreparable):
+				j.State, j.Error = "skipped", err.Error()
+			case err != nil:
+				j.State, j.Error = "failed", err.Error()
+			default:
+				j.State = "done"
+			}
 		}
 		p.mu.Unlock()
 	}

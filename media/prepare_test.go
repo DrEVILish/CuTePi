@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -186,5 +187,93 @@ func TestPrepareRejectsSourceReplacedDuringEncode(t *testing.T) {
 	}
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
 		t.Fatalf("obsolete prepared copy was published: %v", err)
+	}
+}
+
+func TestPreparerCancelDrainsBeforeRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"success", nil},
+		{"cancelled", context.Canceled},
+		{"skipped", ErrNotPreparable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type start struct {
+				filename string
+				err      error
+				active   int32
+			}
+			started := make(chan start, 3)
+			cancelled, release := make(chan struct{}), make(chan struct{})
+			var calls, active atomic.Int32
+			p := &Preparer{Run: func(ctx context.Context, filename string) error {
+				n := active.Add(1)
+				defer active.Add(-1)
+				first := calls.Add(1) == 1
+				started <- start{filename, ctx.Err(), n}
+				if first {
+					<-ctx.Done()
+					close(cancelled)
+					<-release
+					return tc.err
+				}
+				return nil
+			}}
+			t.Cleanup(func() {
+				p.Cancel()
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			})
+			p.Enqueue([]string{"clip.mp4", "old-pending.mp4"})
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("first job did not start")
+			}
+			p.Cancel()
+			select {
+			case <-cancelled:
+			case <-time.After(2 * time.Second):
+				t.Fatal("running job did not receive cancellation")
+			}
+			p.Enqueue([]string{"clip.mp4", "clip.mp4"})
+			if jobs := p.Jobs(); len(jobs) != 3 || jobs[2].State != "queued" {
+				t.Fatalf("retry must queue once while cancelled job drains: %+v", jobs)
+			}
+			select {
+			case got := <-started:
+				t.Fatalf("job started before cancelled runner drained: %+v", got)
+			default:
+			}
+			close(release)
+			select {
+			case got := <-started:
+				if got.filename != "clip.mp4" || got.err != nil || got.active != 1 {
+					t.Errorf("retry must run alone with fresh context: %+v", got)
+				}
+				deadline := time.Now().Add(2 * time.Second)
+				for p.Jobs()[2].State == "queued" || p.Jobs()[2].State == "preparing" {
+					if time.Now().After(deadline) {
+						t.Fatalf("retry did not finish: %+v", p.Jobs())
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if jobs := p.Jobs(); jobs[2].State != "done" {
+					t.Errorf("retry failed: %+v", jobs)
+				}
+			case <-time.After(2 * time.Second):
+				t.Errorf("retry stayed queued after cancelled runner drained: %+v", p.Jobs())
+			}
+			for _, job := range p.Jobs()[:2] {
+				if job.State != "failed" || job.Error != "cancelled" {
+					t.Errorf("cancelled job result overwritten: %+v", job)
+				}
+			}
+		})
 	}
 }
