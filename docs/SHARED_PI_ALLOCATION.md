@@ -1,48 +1,65 @@
 # Shared CuTePi / TimerPi Pi allocation
 
-Status: 2026-11-15, updated after CuTePi hardware verification. The earlier read-only preflight is complete. Three normal stock-kernel boots were used during decoder recovery/comparison; no network configuration or controller was activated. The pre-boot mesh runtime did not survive those boots.
+Status: 2026-11-15. The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
 
 ## Ownership and slots
 
-- CuTePi lead retains playback, deployment and DRM ownership of 192.168.10.73.
-- [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) is the sole shared network-configuration writer.
-- The read-only network preflight slot is complete. The Pi remains allocated to CuTePi playback; the CuTePi audit/fix/build work continues in CT110.
-- The CuTePi hardware-test slot is released; the real service runs the tested c98ea65 application with the original saved show restored. No PI_LOCK remains.
-- No second Pi is allocated. Historical .55 is unverified, .162 is the CuTePi UI/dev server, and .50 is CT110, not playback hardware.
-- Disruptive mesh/sync drills need a named second Pi, a preserved Ethernet management route, recorded rollback and an explicitly agreed shared time slot. Do not run either network controller until that slot is agreed.
-- Do not run the TimerPi installer on this CuTePi playback Pi.
+- Both 192.168.10.73 and 192.168.10.55 are allocated for TimerPi/shared-Pi preparation under the new owner grant. Neither 192.168.10.162 (the amd64 UI/dev server) nor 192.168.10.50 (CT110) is the second Pi.
+- CuTePi lead retains playback, deployment and DRM ownership. TimerPi lead remains the sole shared network-configuration writer.
+- The CuTePi hardware-test slot is released; .73 last ran the tested c98ea65 application with the original saved show restored. No PI_LOCK remains. CuTePi project work continues in CT110; no additional CuTePi hardware measurement is currently scheduled.
+- No known conflict prevents read-only checks. Existing workloads remain protected: .73 runs cutepi; .55 runs cutepi-follower and has an active/exited cutepi-mesh unit. Do not stop, restart, replace or reconfigure these on TimerPi's behalf yet.
+- The allocation grant does not settle the shared network profile or grant a disruptive slot. Disruptive mesh/sync drills still require an agreed profile, preserved Ethernet management, recorded rollback and an explicitly agreed shared time slot. Do not start or reconfigure either network controller before that agreement; preserve .55's existing controller.
+- The separate .55 reboot restriction remains: explicit owner approval is required. Do not run the TimerPi installer on a CuTePi playback Pi.
+- Existing direct PVE-root SSH access to root@192.168.10.73 and root@192.168.10.55 was verified by TimerPi's fresh preflight. Use the existing SSH identity and host-key trust; no new credentials are needed or shared here.
 
-## Verified playback Pi inventory
+## Fresh read-only inventory: 2026-11-15
 
-| Property | Observed value |
-|---|---|
-| Host/model | cutepi; Raspberry Pi 4 Model B Rev 1.5 |
-| OS/kernel | Debian 13.7/Trixie (TimerPi preflight); stock 6.18.50+rpt-rpi-v8 |
-| SSH / wired management | root@192.168.10.73; eth0 192.168.10.73/24; default gateway 192.168.10.1 |
-| Playback | real cutepi service active, unprivileged cutepi user, port80, HDMI1080p60; data /var/lib/cutepi |
-| Radio | After hardware recovery: wlan0 DOWN, type managed. Before the boots it was IBSS cutepi-mesh, channel1 /2412MHz,20MHz on brcmfmac/phy0. No new radio profile was applied. |
-| Mesh address / bridge | bat0 is absent after the normal boots; previously 10.77.0.73/24. Wired eth0 remains UP at 192.168.10.73/24 and unbridged. |
-| Advertised capability | IBSS, managed, AP; channels13/2472 and36/5180 listed usable, actual joins not tested |
-| Regulatory report | global GB; phy country99; observational facts, not a channel qualification |
-| Clock | NTP=yes; NTPSynchronized=yes |
-| Service/controller | cutepi-mesh LoadState=not-found; runtime mesh exists despite no installed unit |
-| Known controller scripts | /opt/cutepi/tools/mesh/batman-wifi.sh and /root/batman-wifi.sh; last-applied script not established |
-| batctl | absent from PATH and checked common locations; no private path established |
+| Property | Playback Pi: 192.168.10.73 | Second Pi: 192.168.10.55 |
+|---|---|---|
+| Host/model | cutepi; Raspberry Pi 4 Model B Rev 1.5 | pisignage; Raspberry Pi 4 Model B Rev 1.5 |
+| Running kernel | 6.18.50+rpt-rpi-v8 | 6.12.109+rpt-rpi-v8 |
+| Wired management | eth0 UP, 192.168.10.73/24; default gateway 192.168.10.1 | eth0 UP, 192.168.10.55/24; default gateway 192.168.10.1 |
+| Interface drivers | eth0: bcmgenet; wlan0: brcmfmac | eth0: bcmgenet; wlan0: brcmfmac |
+| Radio | wlan0 DOWN, type managed; iw reports channel 34/5170MHz while down, which is not an active join | wlan0 UP, IBSS cutepi-mesh, channel 1/2412MHz, 20MHz |
+| Mesh / bridge | bat0 absent; Ethernet remains unbridged after hardware recovery | bat0 10.77.0.55/24; eth0 unbridged, no br0 |
+| Playback service | cutepi active/running | cutepi-follower active/running; cutepi unit absent |
+| Mesh service/controller | cutepi-mesh unit absent; no runtime mesh | cutepi-mesh loaded, active/exited; existing mesh must be preserved |
+| Other checked units | timerpi, timerpi-mesh and cutepi-follower absent | TimerPi units absent |
 
-The repository deploy/cutepi-mesh.service is an optional unit template, not proof of an installed or running controller. Existing script uses ip/iw/modprobe rather than batctl.
+An active/exited mesh unit describes its systemd state, not proof of peer connectivity or application synchronisation. Both Pis are reachable over their wired management addresses; no mesh drill or sync qualification was performed in this preflight.
+
+## Earlier inventory and evidence
+
+### Playback Pi: .73
+
+CuTePi's hardware verification on 2026-11-15 recorded the real cutepi service running as the unprivileged cutepi user on port 80, HDMI 1080p60 video/audio, and data in /var/lib/cutepi. Its tested application was c98ea65 with the original show restored. Debian 13.7/Trixie was recorded in TimerPi's earlier preflight; the fresh checks above did not establish a newer OS or application version.
+
+Three normal stock-kernel boots during decoder recovery/comparison removed the earlier runtime IBSS cutepi-mesh/channel 1/2412MHz and bat0 10.77.0.73/24 configuration. No network configuration or controller was activated during that work. The fresh preflight confirms that mesh is still absent; the previous “runtime mesh exists” statement was stale.
+
+Earlier capability observations: phy0 advertised IBSS, managed and AP, with channels 13/2472 and 36/5180 listed usable; actual joins were not tested. Regulatory reports were global GB and phy country 99, not channel qualification. NTP=yes and NTPSynchronized=yes were observed then, not reverified here. Known scripts were /opt/cutepi/tools/mesh/batman-wifi.sh and /root/batman-wifi.sh; their last application was not established. batctl was absent from PATH and checked common locations; no private path was established. The repository deploy/cutepi-mesh.service is an optional template, not proof of an installed unit on .73; its script uses ip/iw/modprobe rather than batctl.
+
+### Second Pi: .55
+
+The following are historical 2026-11-12 facts, retained separately from the fresh observations:
+
+- Physical Pi 4B Rev1.5, approximately 4 GiB RAM. Upgraded from Debian 12 to Debian 13/Trixie with a clean dpkg audit. Kernel 6.18.60 was installed but not booted; the fresh preflight still reports running kernel 6.12.109+rpt-rpi-v8.
+- Go 1.27.1 and GStreamer 1.26.2 were installed with a then-current CuTePi follower build. Its current binary commit remains unverified. The follower was configured with headless/dummy video and no attached monitor then; current display attachment was not checked.
+- Wi-Fi was identified as BCM43455/CYW43455 SDIO. The stock brcmfmac driver was restored after temporary driver experiments; power saving was off then. These firmware/configuration details were not rechecked in the fresh preflight.
+- PiSignage player/Node/mpv/Chromium autostart was stopped; application files were retained under /root/pisignage-removed. Node/Chromium packages remained installed then. Their current state was not rechecked.
+- Wired two-Pi sync tests used .73 and .55. The .55 show was restored and the units unlinked afterwards; the follower service was left running. The new preflight confirms a running follower, without establishing its current show or linkage.
+
+Historical sources: [Debian Trixie upgrade](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/393cb3cf-d8b5-4cb4-b12c-bb67a3b50b4d), [Wi-Fi driver research](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/thread:delegated-task:command%3Amcp%3A2f467470-d027-4796-9e33-e7f21ed684a1%3Adelegate-task%3A31767eda-ee53-4119-8e07-0915c08fd551), and [multi-unit sync tests](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/thread:delegated-task:command%3Amcp%3A2f467470-d027-4796-9e33-e7f21ed684a1%3Adelegate-task%3A18db06a5-509f-4efd-ad2b-ce347afea43f). [DESIGN.md](../DESIGN.md) also records the two-Pi measurements.
 
 ## Shared profile decision remains open
 
-CuTePi's last active profile was cutepi-mesh on2412 with a separate10.77 network and unbridged Ethernet. That runtime is currently down after the hardware-test boots; it has not been recreated because the shared network writer and controller-activation agreement still apply. TimerPi's product profile fixes ESSID timerpi and proposes channel13 /2472 (or channel36 /5180 under its radio policy), bat0 and eth0 bridged through br0, plus mDNS/event-key election/cloud synchronization. Both controllers cannot manage the same radio/bridge independently.
+CuTePi's existing profile uses cutepi-mesh on 2412 MHz with a separate 10.77 network and unbridged Ethernet. It is active on .55 and absent on .73 after the hardware-test boots. TimerPi's product profile fixes ESSID timerpi and proposes channel 13/2472MHz (or channel 36/5180MHz under its radio policy), bat0 and eth0 bridged through br0, plus mDNS/event-key election/cloud synchronisation. Both controllers cannot manage the same radio/bridge independently.
 
-Resolve [the shared network-profile decision](../.scratch/design-review/issues/12-shared-network-profile.md) with the owner before convergence. Preserve TimerPi's existing fixed-ESSID decision; do not silently rewrite either product's network contract.
+Resolve [the shared network-profile decision](../.scratch/design-review/issues/12-shared-network-profile.md), cross-linked to [TimerPi issue #7](https://github.com/DrEVILish/timerpi/issues/7), with the owner before convergence. Preserve TimerPi's existing fixed-ESSID decision; do not silently rewrite either product's network contract. Allocation and wired reachability do not prove BATMAN-adv transport or application sync.
 
-## Recovery observation
+## Recovery observation and playback constraints
 
-The H.264/MMAL decoder remained unusable across application restarts during experimental hardware tests and recovered on normal stock boots. The final c98ea65 service passed a real H.264 output check after the original show was restored. [Hardware evidence](reviews/2026-11-15-hardware.md) records the limits. Mesh restoration is a network-owner coordination item; no automatic convergence with TimerPi is authorised. Capability/regulatory/clock rows above retain their preflight observations.
+The H.264/MMAL decoder remained unusable across application restarts during experimental hardware tests and recovered on normal stock boots. The final c98ea65 service passed a real H.264 output check after the original show was restored. [Hardware evidence](reviews/2026-11-15-hardware.md) records the limits. Mesh restoration on .73 remains a network-owner coordination item; no automatic convergence with TimerPi is authorised.
 
-## Playback constraints
-
-AGENTS.md remains authoritative: no new applications, Node/npm/browser installation, service restarts/reboots, radio/bridge/route changes or DRM access during read-only preflight. Never open /dev/dri/card* before cutepi; do not read debug DRM state while measuring. Keep required avahi, NetworkManager/wpa_supplicant, ssh, timesyncd and polkit. Do not re-enable the disabled services/timers listed in AGENTS.md. Hardware testing uses the real service and independent picture/audio evidence.
+[AGENTS.md](../AGENTS.md) remains authoritative for .73: no new applications, Node/npm/browser installation, or re-enabling disabled services/timers. Keep required avahi, NetworkManager/wpa_supplicant, ssh, timesyncd and polkit. Read-only preflight permits no service restarts/reboots, radio/bridge/route changes or DRM access. Never open /dev/dri/card* before cutepi; do not read debug DRM state while measuring. Hardware testing uses the real service and independent picture/audio evidence.
 
 No credentials, screen keys, pairing secrets or passwords belong in coordination messages or this file.
