@@ -1,6 +1,6 @@
 # Shared CuTePi / TimerPi Pi allocation
 
-Status: 2026-11-15, 16:52:14 UTC. A fresh network-only 500-client experiment is reserved; no services have been paused for this new slot. The previous session remains fully released at 16:15:02 UTC, with both CuTePi services and original networks restored.
+Status: 2026-11-15, 16:52:14 UTC. A fresh network-only 500-client experiment is reserved; the .55 follower was paused at 16:55:00 UTC for this new slot, while .73 playback remains running. The previous session remains fully released at 16:15:02 UTC, with both CuTePi services and original networks restored.
 
 The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
 
@@ -22,9 +22,19 @@ The owner requested “Let's try 500ms for 500-clients”. CuTePi accepted a fre
 - Experiment gate: operator p95 at 500 ms for this 500-client workload only. Preserve delivery-completeness evidence. No result is available yet. The earlier 250 ms gates and wireless 1000-client p95=1.378s NOT QUALIFIED result remain unchanged.
 - .73 real cutepi playback and DRM ownership remain running throughout. No DRM access, service restart, reboot, installer, deployment/show/data changes or permanent network-profile conversion.
 - TimerPi alone owns fresh network baselines, controller/radio/filter transitions, guarded rollback and restoration; Ethernet management must remain available. The previous session's captures do not replace fresh baselines.
-- CuTePi owns only .55 cutepi-follower pause/restore. No pause is authorised yet: TimerPi will provide an exact UTC stage time after fresh baselines/rollback are ready. CuTePi then captures the current exact transient unit/env and PID, pauses only the follower, verifies process/cgroup exit and sends STOPPED before any radio transition.
+- CuTePi owns only .55 cutepi-follower pause/restore. TimerPi supplied 16:55:00 UTC after confirming fresh baselines and validated rollback. CuTePi captured the current exact transient unit/env and PID, paused only the follower, verified process/cgroup exit and sent STOPPED before any radio transition.
 - Last follower restoration was transient; do not reuse an old PID or assume plain systemctl start can restore an unloaded transient unit. Keep fresh configuration captures private.
-- After the experiment, TimerPi explicitly hands back the original network/controller baseline before CuTePi restores/verifies the follower. Temporary cleanup and full session release follow. No Pi commands were issued by CuTePi to reserve this slot.
+- After the experiment, TimerPi explicitly hands back the original network/controller baseline before CuTePi restores/verifies the follower. Temporary cleanup and full session release follow. No Pi commands were issued to reserve the slot; the later authorised service-only pause is recorded below.
+
+### Follower paused at the agreed 16:55:00 UTC boundary
+
+TimerPi confirmed fresh validated network archives, private current follower/controller captures, rollback scripts with syntax/inactive-guard checks, isolated port18080 display-off apps, retained Ethernet management and guarded 15-minute network rollback timers to arm before transition. It will prevent controller auto-reapply only after the STOPPED acknowledgment; CuTePi does not manage mesh units.
+
+CuTePi independently captured the current .55 transient unit/properties, process argv/env/cwd and binary identity at 16:54:34.219 UTC in CT110 /var/lib/cutepi-work/handover-20261115-1655. It was active/running as PID 1715109 with no custom stop hooks. The stop refused to proceed if PID or active state changed.
+
+Only systemctl stop cutepi-follower.service was issued at 16:55:00.022 UTC. Verification at 16:55:00.108 UTC found inactive/dead, MainPID=0, ControlPID=0, original PID 1715109 absent and an empty/removed cgroup. The transient unit unloaded as expected. TimerPi received explicit STOPPED acknowledgment before controller/radio transition.
+
+Follower restoration remains pending explicit original-network/controller handback and will use this fresh private baseline, not the earlier session's capture. No mesh/controller/radio/filter, DRM or .73 commands were issued by CuTePi. The experiment has no result yet; the 500 ms gate remains scoped only to 500 clients and prior results are unchanged.
 
 ## Qualification session: 2026-11-15, 15:16:39 to 16:14:03 UTC
 
@@ -76,7 +86,7 @@ TimerPi explicitly handed back the original networks and .55 follower at 16:11:1
 - .73: eth0 UP 192.168.10.73/24 with gateway 192.168.10.1; wlan0 down/managed/rfkill soft-blocked, power saving on, no bat0 or cutepi-mesh. A last-tuned channel reported while down is cached state, not an active join.
 - Isolated TimerPi apps stopped; test SSH relay/control session closed; Ethernet clsact filters removed; timed network rollback timers stopped; temporary TimerPi mesh/status masks removed. No permanent CuTePi network-profile conversion occurred.
 
-CuTePi recreated only cutepi-follower.service with systemd-run from its private captured transient definition/environment. The first immediate argv check observed the systemd pre-exec startup transition; subsequent checks verified the actual CuTePi process without issuing another start. At 16:14:03.148 UTC the follower was active/running as PID1715109, Transient=yes, with HTTP 200 on original port 80. Its actual argv, captured environment variables, working directory and lifecycle properties (Type, Restart, KillMode, Description) matched the baseline. The original binary path was used; no deployment or show/data replacement occurred. CuTePi issued no mesh/network or DRM commands for follower restoration.
+CuTePi recreated only cutepi-follower.service with systemd-run from its private captured transient definition/environment. The first immediate argv check observed the systemd pre-exec startup transition; subsequent checks verified the actual CuTePi process without issuing another start. At 16:14:03.148 UTC the follower was active/running as PID 1715109, Transient=yes, with HTTP 200 on original port 80. Its actual argv, captured environment variables, working directory and lifecycle properties (Type, Restart, KillMode, Description) matched the baseline. The original binary path was used; no deployment or show/data replacement occurred. CuTePi issued no mesh/network or DRM commands for follower restoration.
 
 TimerPi received the RESTORATION ACK and may remove only its own temporary units/files. CuTePi hardware ownership is restored and the active test slot is closed; TimerPi subsequently confirmed cleanup and released the reservation at 16:15:02 UTC. No further CuTePi hardware work is queued. Original networks must remain unchanged.
 
