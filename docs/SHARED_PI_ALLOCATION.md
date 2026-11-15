@@ -7,10 +7,29 @@ Status: 2026-11-15. The owner authorised both physical Pis for TimerPi/shared-Pi
 - Both 192.168.10.73 and 192.168.10.55 are allocated for TimerPi/shared-Pi preparation under the new owner grant. Neither 192.168.10.162 (the amd64 UI/dev server) nor 192.168.10.50 (CT110) is the second Pi.
 - CuTePi lead retains playback, deployment and DRM ownership. TimerPi lead remains the sole shared network-configuration writer.
 - The CuTePi hardware-test slot is released; .73 last ran the tested c98ea65 application with the original saved show restored. No PI_LOCK remains. CuTePi project work continues in CT110; no additional CuTePi hardware measurement is currently scheduled.
-- No known conflict prevents read-only checks. Existing workloads remain protected: .73 runs cutepi; .55 runs cutepi-follower and has an active/exited cutepi-mesh unit. Do not stop, restart, replace or reconfigure these on TimerPi's behalf yet.
-- The allocation grant does not settle the shared network profile or grant a disruptive slot. Disruptive mesh/sync drills still require an agreed profile, preserved Ethernet management, recorded rollback and an explicitly agreed shared time slot. Do not start or reconfigure either network controller before that agreement; preserve .55's existing controller.
+- No competing CuTePi hardware measurement/deploy is scheduled for the reserved qualification session below. Existing workloads remain protected until the timed handover: .73 runs cutepi; .55 runs cutepi-follower and has an active/exited cutepi-mesh unit.
+- The original allocation grant did not settle the shared network profile or grant a disruptive slot. The later owner-directed qualification session below reserves a temporary timerpi/ch13/GB test window, subject to captured baselines, rollback and timed service handovers. Permanent profile convergence remains undecided. Preserve Ethernet management throughout; TimerPi alone changes network controllers.
 - The separate .55 reboot restriction remains: explicit owner approval is required. Do not run the TimerPi installer on a CuTePi playback Pi.
 - Existing direct PVE-root SSH access to root@192.168.10.73 and root@192.168.10.55 was verified by TimerPi's fresh preflight. Use the existing SSH identity and host-key trust; no new credentials are needed or shared here.
+
+## Reserved qualification session: 2026-11-15, from 15:16:39 UTC
+
+The owner directed TimerPi to perform correct hardware tests and finish delivery. CuTePi accepted TimerPi's requested shared session from 15:16:39 UTC until explicit release/rollback handback. This reservation supersedes the earlier no-slot status for temporary qualification only. It is not a permanent network-profile decision or a claim that tests have passed.
+
+- Initial stage: isolated TimerPi build/data on temporary port18080, display off, no CuTePi data/service changes. Existing playback continues.
+- Radio stage: temporary TimerPi PRODUCT profile timerpi/ch13/GB, with wired management retained. TimerPi is the sole network writer and captures baselines/rollback before transport changes. Exact disruptive-stage start times have not yet been exchanged.
+- Display stage, if required: exclusive .73 DRM handover after the real cutepi service is stopped and its processes have released the display. Never run competing DRM tools while CuTePi playback is active.
+- No reboot is planned. Existing .55 reboot restrictions and .73 software-install/disabled-service restrictions remain.
+- These are coordination records, not fresh device observations. CuTePi has issued no Pi commands or service changes for this reservation.
+
+### Controlled pause and restore handover
+
+1. Before a pause, TimerPi supplies the exact UTC stage/start time and confirms protected baselines and rollback exist: unit definitions/drop-ins, active/enabled state, process ownership, binary identity, and show/data state; network baselines belong to TimerPi. Keep raw captures private because unit arguments/configuration may contain secrets. Preserve the original binary, data and service configuration; do not redeploy CuTePi.
+2. CuTePi acknowledges the agreed service-only action and records its completion before TimerPi proceeds. On .55, CuTePi pauses cutepi-follower; TimerPi alone stops or otherwise controls cutepi-mesh and its network side effects. An active/exited unit may still have an ExecStop that changes networking.
+3. Before .73 display testing, TimerPi confirms its display is off. CuTePi stops the real cutepi service and verifies its processes have exited without opening a DRM card. A failed or incomplete stop does not release ownership. Only an explicit stopped/released acknowledgment permits TimerPi display access.
+4. During testing, only TimerPi changes radios/controllers/bridges/routes. No CuTePi deployment, show edit, concurrent hardware benchmark or DRM probe is scheduled.
+5. For restoration, TimerPi first stops its test processes and children, releases DRM, restores its network changes to the captured baseline, and confirms wired management and controller ownership. Restore .73's original down/managed/no-bat0 state and .55's original cutepi-mesh state; do not automatically apply the same mesh to both.
+6. CuTePi then restores only services it paused and their original runtime state. Verify the original binary/configuration/show, service health and HTTP access; qualify .73 playback with independent picture/audio evidence when playback resumes. Report failures and retain the reservation until recovery or explicit handback. Do not label restoration complete from service status alone.
 
 ## Fresh read-only inventory: 2026-11-15
 
@@ -58,7 +77,7 @@ Resolve [the shared network-profile decision](../.scratch/design-review/issues/1
 
 ## Recovery observation and playback constraints
 
-The H.264/MMAL decoder remained unusable across application restarts during experimental hardware tests and recovered on normal stock boots. The final c98ea65 service passed a real H.264 output check after the original show was restored. [Hardware evidence](reviews/2026-11-15-hardware.md) records the limits. Mesh restoration on .73 remains a network-owner coordination item; no automatic convergence with TimerPi is authorised.
+The H.264/MMAL decoder remained unusable across application restarts during experimental hardware tests and recovered on normal stock boots. The final c98ea65 service passed a real H.264 output check after the original show was restored. [Hardware evidence](reviews/2026-11-15-hardware.md) records the limits. The temporary qualification may change .73 networking under TimerPi ownership, but rollback must restore its captured pre-session state. No permanent or automatic convergence with TimerPi is authorised.
 
 [AGENTS.md](../AGENTS.md) remains authoritative for .73: no new applications, Node/npm/browser installation, or re-enabling disabled services/timers. Keep required avahi, NetworkManager/wpa_supplicant, ssh, timesyncd and polkit. Read-only preflight permits no service restarts/reboots, radio/bridge/route changes or DRM access. Never open /dev/dri/card* before cutepi; do not read debug DRM state while measuring. Hardware testing uses the real service and independent picture/audio evidence.
 

@@ -22,8 +22,10 @@ Use one named network writer across projects, retain CuTePi playback/deploy/DRM 
 
 ## Evidence to inspect
 
-[Verified shared Pi inventory and allocation](../../../docs/SHARED_PI_ALLOCATION.md). CuTePi tools/mesh/batman-wifi.sh currently uses cutepi-mesh/2412/bat0 10.77.0.x and leaves eth0 unbridged. TimerPi lead reports its product profile uses timerpi, ch13/5GHz36 radio policy and br0 with eth0. The .73 read-only slot is complete; no second Pi or disruptive slot is allocated.
+[Verified shared Pi inventory and allocation](../../../docs/SHARED_PI_ALLOCATION.md). CuTePi tools/mesh/batman-wifi.sh currently uses cutepi-mesh/2412/bat0 10.77.0.x and leaves eth0 unbridged. TimerPi lead reports its product profile uses timerpi, ch13/5GHz36 radio policy and br0 with eth0. Both physical Pis (.73 and .55) are now allocated. The owner-directed temporary qualification session is reserved in the canonical allocation record: timerpi/ch13/GB, retained Ethernet, captured rollback and timed playback handovers. Permanent shared-profile convergence remains open.
 
 ## Comments
 
 2026-11-15 — Both project leads acknowledged the owner-authorised coordination, single network writer and Ethernet/rollback constraints. This is a decision ticket, not permission to convert either device or rewrite either product spec.
+
+2026-11-15, 15:16:39 UTC — CuTePi accepted TimerPi's owner-directed qualification session until explicit release/rollback handback. TimerPi alone owns network changes; CuTePi owns playback/deploy/DRM pause and restoration. Exact disruptive-stage times remain to be exchanged. Temporary qualification does not resolve this permanent-profile decision.
