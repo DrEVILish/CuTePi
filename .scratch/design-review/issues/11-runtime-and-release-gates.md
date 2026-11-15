@@ -20,6 +20,8 @@ Publish reproducible artifacts and measured per-hardware qualification. Require 
 
 AGENTS.md; cutepi.service; deploy/install-service-user.sh; .github/workflows/test.yml; tools/codec-corpus/support.py; TEST_REPORT.md. Consult the matching ownership thread for its read-only initial assessment; source line numbers can move during audit fixes.
 
+[Codec evidence](../../../docs/CODEC_EVIDENCE.md): pin imported decoder/SDK revisions and runtime selection. The reference review did not rerun hardware tests; qualify the resulting CuTePi artifact independently, with nonoverlapping workloads and no additional test-Pi tooling.
+
 ## Comments
 
 2026-11-15 — Charted from owner-confirmed scope and area assessments. This is an open decision, not an approved change or a resolved implementation ticket.

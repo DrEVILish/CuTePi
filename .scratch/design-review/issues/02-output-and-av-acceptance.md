@@ -20,6 +20,8 @@ Use one original command timestamp plus presentation timestamps, independent sca
 
 DESIGN.md §2, §6.1.4, §6.8c, §12.11; tools/codec-corpus/support.py; gsp/startat.go. Consult the matching ownership thread for its read-only initial assessment; source line numbers can move during audit fixes.
 
+[Codec evidence](../../../docs/CODEC_EVIDENCE.md): retain the decoder pixel checks, but qualify actual scanout/audio separately. Include buffering effects on first output, frame-count verification and an exclusive measurement slot; discard-sink throughput does not prove the target.
+
 ## Comments
 
 2026-11-15 — Charted from owner-confirmed scope and area assessments. This is an open decision, not an approved change or a resolved implementation ticket.

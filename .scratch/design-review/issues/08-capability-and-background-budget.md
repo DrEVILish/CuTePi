@@ -20,6 +20,8 @@ Report separate capability states backed by hardware/path/profile evidence, boun
 
 DESIGN.md §2, §5.7, §12.15, §12.17; routes/supported.go; media/estimate.go; media/media.go; media/prepare.go. Consult the matching ownership thread for its read-only initial assessment; source line numbers can move during audit fixes.
 
+[Codec evidence](../../../docs/CODEC_EVIDENCE.md): carry forward the corrected CineForm transparency results and unresolved RGB quality loss, AV1 startup-buffering tradeoff, PNG native-buffer costs and explicit bob field order. Verify the actual CuTePi decoder path before using standalone results as capability evidence.
+
 ## Comments
 
 2026-11-15 — Charted from owner-confirmed scope and area assessments. This is an open decision, not an approved change or a resolved implementation ticket.

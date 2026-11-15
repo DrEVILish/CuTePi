@@ -30,6 +30,10 @@ Cross-area changes are coordinated here before another writer starts. The audit/
 
 Prioritise safety/data preservation first, then the readiness/output/command contracts, then linked behavior and operator feedback, then qualified releases. This is an ordering recommendation, not a claim of verified <50 ms performance.
 
+## Codec evidence
+
+[RaspberryPi Codecs evidence index](CODEC_EVIDENCE.md) connects the owner-supplied reference thread to the review. gsp owns decoder integration and playback behavior; media and worker use the capability evidence; deploy and tools own qualification of the actual CuTePi artifact. The codec thread remains reference material and has not been messaged or changed.
+
 ## Shared hardware
 
 [Shared Pi allocation](SHARED_PI_ALLOCATION.md) records verified inventory, TimerPi network ownership and current slots. Network changes are coordinated between project leads; no independent mesh controller runs on shared hardware.
