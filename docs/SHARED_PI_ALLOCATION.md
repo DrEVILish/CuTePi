@@ -1,8 +1,8 @@
 # Shared CuTePi / TimerPi Pi allocation
 
-Status: 2026-11-15, updated after final handback and follower restoration at 16:14:03 UTC. Active hardware testing is closed; both CuTePi services are restored. TimerPi confirmed its temporary-unit/file cleanup complete and released the session at 16:15:02 UTC.
+Status: 2026-11-15, 16:52:14 UTC. A fresh network-only 500-client experiment is reserved; no services have been paused for this new slot. The previous session remains fully released at 16:15:02 UTC, with both CuTePi services and original networks restored.
 
- The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
+The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
 
 ## Ownership and slots
 
@@ -13,6 +13,18 @@ Status: 2026-11-15, updated after final handback and follower restoration at 16:
 - The original allocation grant did not settle the shared network profile or grant a disruptive slot. The later owner-directed qualification session below reserves a temporary timerpi/ch13/GB test window, subject to captured baselines, rollback and timed service handovers. Permanent profile convergence remains undecided. Preserve Ethernet management throughout; TimerPi alone changes network controllers.
 - The separate .55 reboot restriction remains: explicit owner approval is required. Do not run the TimerPi installer on a CuTePi playback Pi.
 - Existing direct PVE-root SSH access to root@192.168.10.73 and root@192.168.10.55 was verified by TimerPi's fresh preflight. Use the existing SSH identity and host-key trust; no new credentials are needed or shared here.
+
+## New network-only experiment: reserved from 2026-11-15 16:52:14 UTC
+
+The owner requested “Let's try 500ms for 500-clients”. CuTePi accepted a fresh shared qualification slot until explicit original-network/follower restoration and temporary-cleanup handback. No competing CuTePi hardware measurement or deployment is scheduled. This is separate from the completed session below.
+
+- Scope: temporary timerpi/channel 13/GB BATMAN path, isolated TimerPi data and display-off services on port 18080 on both Pis. Synthetic 500 clients traverse .73 SSH -> bat0 -> .55.
+- Experiment gate: operator p95 at 500 ms for this 500-client workload only. Preserve delivery-completeness evidence. No result is available yet. The earlier 250 ms gates and wireless 1000-client p95=1.378s NOT QUALIFIED result remain unchanged.
+- .73 real cutepi playback and DRM ownership remain running throughout. No DRM access, service restart, reboot, installer, deployment/show/data changes or permanent network-profile conversion.
+- TimerPi alone owns fresh network baselines, controller/radio/filter transitions, guarded rollback and restoration; Ethernet management must remain available. The previous session's captures do not replace fresh baselines.
+- CuTePi owns only .55 cutepi-follower pause/restore. No pause is authorised yet: TimerPi will provide an exact UTC stage time after fresh baselines/rollback are ready. CuTePi then captures the current exact transient unit/env and PID, pauses only the follower, verifies process/cgroup exit and sends STOPPED before any radio transition.
+- Last follower restoration was transient; do not reuse an old PID or assume plain systemctl start can restore an unloaded transient unit. Keep fresh configuration captures private.
+- After the experiment, TimerPi explicitly hands back the original network/controller baseline before CuTePi restores/verifies the follower. Temporary cleanup and full session release follow. No Pi commands were issued by CuTePi to reserve this slot.
 
 ## Qualification session: 2026-11-15, 15:16:39 to 16:14:03 UTC
 
@@ -80,7 +92,7 @@ These are TimerPi's handback results, not new CuTePi playback acceptance claims:
 
 | Scenario | Reported outcome |
 |---|---|
-| Fixed legacy IBSS join, timerpi/channel13/GB | Transport passed; forced-mesh signed copy, blackout and takeover passed |
+| Fixed legacy IBSS join, timerpi/channel 13/GB | Transport passed; forced-mesh signed copy, blackout and takeover passed |
 | Old-primary reunion and member writes | Retour retained replacement edits; member writes returned 409 |
 | Caught-up former-primary takeover | 12.03 s; edits retained |
 | Wired native/external 200 and 1000 clients on both Pis | Passed |
