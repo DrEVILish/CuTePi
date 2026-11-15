@@ -97,6 +97,10 @@ func PrepareArgs(src, dst string, v *MediaVideoInfo, w, h, hz int) ([]string, er
 // is held (SIGSTOP) whenever PlaybackBusy reports playback and resumed when
 // the wall is idle again, so preparing never takes CPU from a show.
 func PrepareVideo(ctx context.Context, src, dst string, v *MediaVideoInfo, w, h, hz int) error {
+	source, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
 	tmp := dst + ".part"
 	args, err := PrepareArgs(src, tmp, v, w, h, hz)
 	if err != nil {
@@ -104,6 +108,13 @@ func PrepareVideo(ctx context.Context, src, dst string, v *MediaVideoInfo, w, h,
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
+	}
+	for PlaybackBusy != nil && PlaybackBusy() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
 	cmd := exec.CommandContext(ctx, lookPath("nice"), append([]string{"-n", "19", lookPath("ffmpeg")}, args...)...)
 	var out strings.Builder
@@ -122,6 +133,11 @@ func PrepareVideo(ctx context.Context, src, dst string, v *MediaVideoInfo, w, h,
 			if err != nil {
 				os.Remove(tmp)
 				return fmt.Errorf("media: preparing %q: %w: %s", filepath.Base(src), err, strings.TrimSpace(out.String()))
+			}
+			current, statErr := os.Stat(src)
+			if statErr != nil || !os.SameFile(source, current) || source.Size() != current.Size() || !source.ModTime().Equal(current.ModTime()) {
+				os.Remove(tmp)
+				return fmt.Errorf("media: source %q changed while preparing", filepath.Base(src))
 			}
 			return os.Rename(tmp, dst)
 		case <-tick.C:

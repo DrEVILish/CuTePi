@@ -1,7 +1,9 @@
 package bobdeint
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -77,6 +79,14 @@ func TestMatchesLinearDeinterlace(t *testing.T) {
 // bytes for luma, 32 for chroma) holding the same pixels as system-memory
 // output.
 func TestDMABufOutput(t *testing.T) {
+	heap, err := os.OpenFile("/dev/dma_heap/linux,cma", os.O_RDWR, 0)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		t.Skipf("CMA DMA heap unavailable: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	heap.Close()
 	gst.Init(nil)
 	if !Register() {
 		t.Fatal("not registered")

@@ -298,3 +298,26 @@ func TestSchedulerStallKeepsCurrentRecoveryCue(t *testing.T) {
 		t.Fatalf("recovery query = %v, %v; want one cue", rows, err)
 	}
 }
+
+func TestSchedulerRegressionScheduledFreshOptions(t *testing.T) {
+	t.Setenv("CUTEPI_WALL_SINK", "fakesink")
+	due := scheduleFixture(t, "audit-fresh.wav", 3*time.Second)
+	gsp.Panic()
+	defer gsp.Panic()
+	rows, err := ctp.GetScheduledCuesSince(due.Add(-2*time.Second), due.Add(-500*time.Millisecond))
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("schedule rows %v %v", len(rows), err)
+	}
+	armed := rows[0]
+	opts := cueOpts(armed.AsCue(), false)
+	if err := gsp.Warm(armed.Filename, opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctp.UpdateCue("1", "rate", "2"); err != nil {
+		t.Fatal(err)
+	}
+	fireScheduled(armed, "audit", due, opts, true)
+	if got := gsp.Rate(); got != 2 {
+		t.Fatalf("latest rate 2 ignored by scheduled warm start: got %v", got)
+	}
+}

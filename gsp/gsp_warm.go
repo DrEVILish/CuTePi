@@ -41,8 +41,8 @@ func takeSpare() *gst.Pipeline {
 
 // armedLocked reports whether either slot holds file+opts (mgr.mu held).
 func armedLocked(file string, opts LoadOpts) bool {
-	return (mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts) ||
-		(spare.p != nil && spare.file == file && spare.opts == opts)
+	return (mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts && warmSourceMatches(mgr.warm, file)) ||
+		(spare.p != nil && spare.file == file && spare.opts == opts && warmSourceMatches(spare.p, file))
 }
 
 // retireAll retires every non-nil pipeline. Never call it holding mgr.mu.
@@ -96,6 +96,7 @@ func awaitWarmBuild(file string, opts LoadOpts, max time.Duration) {
 // is retired, never installed.
 func Warm(file string, opts LoadOpts) error {
 	gstInit()
+	source := snapshotWarmSource(file)
 	if glOpen {
 		return nil // GL wall: prewarm not wired yet; cold builds are quick
 	}
@@ -106,11 +107,11 @@ func Warm(file string, opts LoadOpts) error {
 	warmMu.Lock() // one build at a time: a second arm of the same cue finds it armed
 	defer warmMu.Unlock()
 	mgr.mu.Lock()
-	if mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts {
+	if mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts && warmSourceMatches(mgr.warm, file) {
 		mgr.mu.Unlock()
 		return nil
 	}
-	if spare.p != nil && spare.file == file && spare.opts == opts {
+	if spare.p != nil && spare.file == file && spare.opts == opts && warmSourceMatches(spare.p, file) {
 		// Armed as the next cue: it becomes the slot (the selection moved
 		// onto it), and what the slot held goes.
 		old := mgr.takeWarm()
@@ -138,6 +139,7 @@ func Warm(file string, opts LoadOpts) error {
 	if err != nil {
 		return err
 	}
+	warmSources.Store(p, source)
 	// Preroll parked (paused): first buffers decoded, nothing displayed, no
 	// audible output until a later activation starts the pipeline.
 	p.SetState(gst.StatePaused)
@@ -180,6 +182,7 @@ func Warm(file string, opts LoadOpts) error {
 // stale-arm rule for its other callers).
 func WarmNext(file string, opts LoadOpts) error {
 	gstInit()
+	source := snapshotWarmSource(file)
 	if glOpen || !Layered() {
 		return nil
 	}
@@ -205,6 +208,7 @@ func WarmNext(file string, opts LoadOpts) error {
 	if err != nil {
 		return err
 	}
+	warmSources.Store(p, source)
 	p.SetState(gst.StatePaused)
 	if result, _ := p.GetState(gst.StateNull, gst.ClockTime(5*time.Second)); result != gst.StateChangeSuccess {
 		retirePipeline(p) // as Warm: an arm that did not preroll is not kept
@@ -285,7 +289,7 @@ func IsWarm(file string, opts LoadOpts) bool {
 func IsWarmSlot(file string, opts LoadOpts) bool {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	return mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts
+	return mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts && warmSourceMatches(mgr.warm, file)
 }
 
 // InstallWarm activates the prewarmed pipeline for file+opts if the slot is
@@ -296,10 +300,10 @@ func InstallWarm(file string, opts LoadOpts) bool {
 		return false
 	}
 	mgr.mu.Lock()
-	p, ok := mgr.warm, mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts
+	p, ok := mgr.warm, mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts && warmSourceMatches(mgr.warm, file)
 	if ok {
 		mgr.warm, mgr.warmFile, mgr.warmOpts = nil, "", LoadOpts{} // claim before retiring anything else
-	} else if spare.p != nil && spare.file == file && spare.opts == opts {
+	} else if spare.p != nil && spare.file == file && spare.opts == opts && warmSourceMatches(spare.p, file) {
 		p, ok = takeSpare(), true
 	}
 	mgr.mu.Unlock()
@@ -605,4 +609,26 @@ func linkExtraStream(pipeline *gst.Pipeline, srcPad *gst.Pad, kind, streamID str
 func failLink(pipeline *gst.Pipeline, from *gst.Element, err error) {
 	logs.PrintfWarn(logs.GSPPipeStopped, "gsp: %v", err)
 	pipeline.GetPipelineBus().Post(gst.NewErrorMessage(from, gst.NewGError(4, err), err.Error(), nil))
+}
+
+type warmSource struct {
+	path string
+	info os.FileInfo
+}
+
+var warmSources sync.Map // pipeline -> source identity captured before it was built
+
+func snapshotWarmSource(file string) warmSource {
+	path := sourcePath(file)
+	info, _ := os.Stat(path)
+	return warmSource{path, info}
+}
+func warmSourceMatches(p *gst.Pipeline, file string) bool {
+	value, ok := warmSources.Load(p)
+	if !ok {
+		return false
+	}
+	was := value.(warmSource)
+	now := snapshotWarmSource(file)
+	return was.info != nil && now.info != nil && was.path == now.path && os.SameFile(was.info, now.info) && was.info.Size() == now.info.Size() && was.info.ModTime().Equal(now.info.ModTime())
 }

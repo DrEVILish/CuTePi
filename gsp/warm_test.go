@@ -359,3 +359,28 @@ func TestWarmSparePromoteAndInstall(t *testing.T) {
 	}
 	Panic()
 }
+
+func TestWarmRegressionWarmSourceReplacement(t *testing.T) {
+	Panic()
+	defer Panic()
+	file := warmFixture(t, "audit-replace.wav", tinyWav(2))
+	opts := LoadOpts{WarmPreroll: true}
+	if err := Warm(file, opts); err != nil {
+		t.Fatal(err)
+	}
+	_, _, old := slotState()
+	path := filepath.Join(config.MediaLocation(), file)
+	if err := os.WriteFile(path+".new", tinyWav(1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+".new", path); err != nil {
+		t.Fatal(err)
+	}
+	if err := Warm(file, opts); err != nil {
+		t.Fatal(err)
+	}
+	_, _, now := slotState()
+	if old == now {
+		t.Fatal("replaced source still uses the pipeline prerolled from the old inode")
+	}
+}

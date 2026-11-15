@@ -138,13 +138,16 @@ func (m *manager) voicePassEnd(p *gst.Pipeline, segmentDone bool) bool {
 		return true
 	}
 	pos, cb := v.cuePos, m.onCueEnd
+	if pos > 0 && cb != nil {
+		m.callbacks.Add(1)
+	}
 	m.voices = append(m.voices[:i], m.voices[i+1:]...)
 	m.version++
 	m.mu.Unlock()
 	retirePipeline(p)
 	broadcastSoon()
 	if pos > 0 && cb != nil {
-		go cb(pos)
+		go func() { defer m.callbacks.Done(); cb(pos) }()
 	}
 	return false
 }

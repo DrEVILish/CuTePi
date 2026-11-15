@@ -39,7 +39,9 @@ import (
 // field name.
 func setupTestServer(t *testing.T) *gin.Engine {
 	t.Helper()
+	drainTestWork()
 	dir := t.TempDir()
+	t.Cleanup(drainTestWork)
 	config.SetDbLocation(":memory:")
 	config.SetConfigFilePath(dir + "/config.json")
 	config.SetDirsForTesting(dir)

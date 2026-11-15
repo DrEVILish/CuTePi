@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"CuTePi/gsp"
 	"os"
 	"testing"
 	"time"
@@ -19,4 +20,13 @@ func TestMain(m *testing.M) {
 	restartServer = func(time.Duration) error { return nil }
 	shutdownServer = func(time.Duration) {}
 	os.Exit(m.Run())
+}
+
+// A test's callbacks must finish before another test replaces the package DB.
+func drainTestWork() {
+	gsp.SetCueEndHook(nil)
+	gsp.SetEndpointFailureHook(nil)
+	gsp.Panic()
+	gsp.WaitCallbacks()
+	linkElectionJobs.Wait()
 }

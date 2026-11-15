@@ -236,14 +236,7 @@ func buildPipeline(spec pipelineSpec) (*gst.Pipeline, error) {
 		if err != nil {
 			return nil, err
 		}
-		srcFile := config.MediaLocation() + "/" + spec.filename
-		if filepath.IsAbs(spec.filename) {
-			srcFile = spec.filename // generated test signals live outside the pool
-		} else if SourceLookup != nil {
-			if p := SourceLookup(spec.filename); p != "" {
-				srcFile = p
-			}
-		}
+		srcFile := sourcePath(spec.filename)
 		src.Set("location", srcFile)
 	}
 
@@ -587,4 +580,17 @@ func setResolutionCaps(capsEl *gst.Element) {
 	h, _ := strconv.Atoi(strings.SplitN(d.Resolution, "x", 2)[1])
 	capsEl.Set("caps", gst.NewCapsFromString(
 		fmt.Sprintf("video/x-raw,width=%d,height=%d", w, h)))
+}
+
+// sourcePath is shared by the file loader and warm-cache freshness checks.
+func sourcePath(filename string) string {
+	if filepath.IsAbs(filename) {
+		return filename
+	}
+	if SourceLookup != nil {
+		if p := SourceLookup(filename); p != "" {
+			return p
+		}
+	}
+	return filepath.Join(config.MediaLocation(), filename)
 }

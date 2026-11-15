@@ -223,8 +223,12 @@ func TestLinkAuth(t *testing.T) {
 	if w := run("OPTIONS", pre); w.Code != http.StatusNoContent || w.Header().Get("Access-Control-Allow-Origin") != "http://unit-a" {
 		t.Fatalf("preflight from a paired page origin: %d %v", w.Code, w.Header())
 	}
+	if w := run("POST", pre); w.Code != http.StatusForbidden {
+		t.Fatalf("paired origin without token: %d", w.Code)
+	}
+	pre[pageKeyHeader] = tok
 	if w := run("POST", pre); w.Code != http.StatusOK {
-		t.Fatalf("cross-origin POST from a paired page origin: %d", w.Code)
+		t.Fatalf("paired origin with token: %d", w.Code)
 	}
 	if w := run("OPTIONS", map[string]string{"Origin": "http://evil"}); w.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("CORS for an unregistered origin")
@@ -282,5 +286,43 @@ func TestBackupGroupMirrorIncludesSharedInstant(t *testing.T) {
 		}
 	default:
 		t.Fatal("group GO was not mirrored")
+	}
+}
+
+func TestLinkPageRejectsForeignOrigin(t *testing.T) {
+	setupTestServer(t)
+	peer := alivePeer("other", peerHello{})
+	resetLink(t, linkModeBackup, peer)
+	t.Cleanup(func() { resetLink(t, linkModeOff) })
+	r := gin.New()
+	UseMiddleware(r)
+	registerLinkRoutes(r.Group("/api"))
+	req := httptest.NewRequest(http.MethodGet, "http://cutepi.example/api/link/page", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("foreign origin got %d", w.Code)
+	}
+	if len(peer.queue) != 0 {
+		t.Fatal("foreign origin was sent to a peer")
+	}
+	// Reverse-proxy names still work and can register their own page.
+	req = httptest.NewRequest(http.MethodGet, "http://cutepi-test.drevilish.com/api/link/page", nil)
+	req.Header.Set("Origin", "http://cutepi-test.drevilish.com")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("proxy origin got %d", w.Code)
+	}
+}
+
+func TestUnpairedOriginCannotUseOldGrant(t *testing.T) {
+	setupTestServer(t)
+	resetLink(t, linkModeBackup, alivePeer("gone", peerHello{}))
+	link.origins["http://gone"] = "gone"
+	delete(link.peers, "gone")
+	if linkOriginAllowed("http://gone") {
+		t.Fatal("origin grant survived peer removal")
 	}
 }

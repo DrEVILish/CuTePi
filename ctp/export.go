@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 
@@ -15,98 +16,112 @@ import (
 // referenced file is carried in the ZIP instead. Group membership is exported
 // once Cue Groups exist; the manifest reserves that shape via file layout.
 type ExportCue struct {
-	Filename      string  `json:"filename"`
-	SourceKind    string  `json:"sourceKind,omitempty"`
-	EndpointURL   string  `json:"endpointUrl,omitempty"`
-	EndpointTitle string  `json:"endpointTitle,omitempty"`
-	CueNum        string  `json:"cueNum"`
-	Title         string  `json:"title"`
-	PosStart      int     `json:"posStart"`
-	PosEnd        int     `json:"posEnd"`
-	PreWait       int     `json:"preWait"`
-	CueDuration   int     `json:"cueDuration"`
-	PostWait      int     `json:"postWait"`
-	Hold          bool    `json:"hold"`
-	Loop          bool    `json:"loop"`
-	LoopCount     int     `json:"loopCount"`
-	AutoContinue  bool    `json:"autoContinue"`
-	Color         string  `json:"color"`
-	Parent        int     `json:"parent"`
-	FadeOut       int     `json:"fadeOut"`
-	FadeAction    string  `json:"fadeAction"`
-	FadeCurve     string  `json:"fadeCurve"`
-	FitMode       string  `json:"fitMode"`
-	Rotation      int     `json:"rotation"`
-	Flip          string  `json:"flip"`
-	Opacity       float64 `json:"opacity,omitempty"` // 0/absent (older shows) = 100 %
-	GeomX         string  `json:"geomX,omitempty"`
-	GeomY         string  `json:"geomY,omitempty"`
-	GeomW         string  `json:"geomW,omitempty"`
-	GeomH         string  `json:"geomH,omitempty"`
-	CropL         string  `json:"cropL,omitempty"`
-	CropR         string  `json:"cropR,omitempty"`
-	CropT         string  `json:"cropT,omitempty"`
-	CropB         string  `json:"cropB,omitempty"`
-	Align         string  `json:"align,omitempty"`
-	StopOthers    *bool   `json:"stopOthers,omitempty"` // absent (older shows) = true
-	Layer         string  `json:"layer,omitempty"`      // "" = top
-	LayerUnder    string  `json:"layerUnder,omitempty"` // under: the cue number it goes beneath
-	Volume        float64 `json:"volume"`
-	FadeIn        int     `json:"fadeIn"`
-	Rate          float64 `json:"rate"`
-	Balance       float64 `json:"balance"`
-	Mute          bool    `json:"mute"`
+	CuePos          int      `json:"cuePos,omitempty"`
+	SheetIndex      *float64 `json:"sheetIndex,omitempty"`
+	ScheduleEnabled bool     `json:"scheduleEnabled,omitempty"`
+	ScheduleDays    int      `json:"scheduleDays,omitempty"`
+	ScheduleTimeMs  int      `json:"scheduleTimeMs,omitempty"`
+	LayerUnderPos   int      `json:"layerUnderPos,omitempty"`
+	Filename        string   `json:"filename"`
+	SourceKind      string   `json:"sourceKind,omitempty"`
+	EndpointURL     string   `json:"endpointUrl,omitempty"`
+	EndpointTitle   string   `json:"endpointTitle,omitempty"`
+	CueNum          string   `json:"cueNum"`
+	Title           string   `json:"title"`
+	PosStart        int      `json:"posStart"`
+	PosEnd          int      `json:"posEnd"`
+	PreWait         int      `json:"preWait"`
+	CueDuration     int      `json:"cueDuration"`
+	PostWait        int      `json:"postWait"`
+	Hold            bool     `json:"hold"`
+	Loop            bool     `json:"loop"`
+	LoopCount       int      `json:"loopCount"`
+	AutoContinue    bool     `json:"autoContinue"`
+	Color           string   `json:"color"`
+	Parent          int      `json:"parent"`
+	FadeOut         int      `json:"fadeOut"`
+	FadeAction      string   `json:"fadeAction"`
+	FadeCurve       string   `json:"fadeCurve"`
+	FitMode         string   `json:"fitMode"`
+	Rotation        int      `json:"rotation"`
+	Flip            string   `json:"flip"`
+	Opacity         *float64 `json:"opacity,omitempty"` // nil in older shows means fully opaque
+	GeomX           string   `json:"geomX,omitempty"`
+	GeomY           string   `json:"geomY,omitempty"`
+	GeomW           string   `json:"geomW,omitempty"`
+	GeomH           string   `json:"geomH,omitempty"`
+	CropL           string   `json:"cropL,omitempty"`
+	CropR           string   `json:"cropR,omitempty"`
+	CropT           string   `json:"cropT,omitempty"`
+	CropB           string   `json:"cropB,omitempty"`
+	Align           string   `json:"align,omitempty"`
+	StopOthers      *bool    `json:"stopOthers,omitempty"` // absent (older shows) = true
+	Layer           string   `json:"layer,omitempty"`      // "" = top
+	LayerUnder      string   `json:"layerUnder,omitempty"` // under: the cue number it goes beneath
+	Volume          float64  `json:"volume"`
+	FadeIn          int      `json:"fadeIn"`
+	Rate            float64  `json:"rate"`
+	Balance         float64  `json:"balance"`
+	Mute            bool     `json:"mute"`
 }
 
 // ExportCues lists every cue (sheet order) as an ExportCue plus the currently
 // selected cue position, for building a .CTP manifest.
 func ExportCues() (cues []ExportCue, selected int, err error) {
 	type row struct {
-		CueNum        string  `db:"cueNum"`
-		Title         string  `db:"title"`
-		Filename      string  `db:"filename"`
-		SourceKind    string  `db:"source_kind"`
-		EndpointURL   string  `db:"endpoint_url"`
-		EndpointTitle string  `db:"endpoint_title"`
-		PosStart      int     `db:"posStart"`
-		PosEnd        int     `db:"posEnd"`
-		PreWait       int     `db:"preWait"`
-		CueDuration   int     `db:"cueDuration"`
-		PostWait      int     `db:"postWait"`
-		Hold          bool    `db:"hold"`
-		Loop          bool    `db:"loop"`
-		LoopCount     int     `db:"loop_count"`
-		AutoContinue  bool    `db:"autoContinue"`
-		Color         string  `db:"color"`
-		Parent        int     `db:"parent"`
-		FadeOut       int     `db:"fadeOut"`
-		FadeAction    string  `db:"fadeAction"`
-		FadeCurve     string  `db:"fade_curve"`
-		FitMode       string  `db:"fit_mode"`
-		Rotation      int     `db:"rotation"`
-		Flip          string  `db:"flip"`
-		Opacity       float64 `db:"opacity"`
-		GeomX         string  `db:"geom_x"`
-		GeomY         string  `db:"geom_y"`
-		GeomW         string  `db:"geom_w"`
-		GeomH         string  `db:"geom_h"`
-		CropL         string  `db:"crop_l"`
-		CropR         string  `db:"crop_r"`
-		CropT         string  `db:"crop_t"`
-		CropB         string  `db:"crop_b"`
-		Align         string  `db:"align"`
-		StopOthers    bool    `db:"stop_others"`
-		Layer         string  `db:"layer"`
-		LayerUnder    string  `db:"layer_under_num"`
-		Volume        float64 `db:"volume"`
-		FadeIn        int     `db:"fadeIn"`
-		Rate          float64 `db:"rate"`
-		Balance       float64 `db:"balance"`
-		Mute          bool    `db:"mute"`
+		CuePos          int     `db:"cuePos"`
+		SheetIndex      float64 `db:"sheet_index"`
+		ScheduleEnabled bool    `db:"schedule_enabled"`
+		ScheduleDays    int     `db:"schedule_days"`
+		ScheduleTimeMs  int     `db:"schedule_time_ms"`
+		LayerUnderPos   int     `db:"layer_under_pos"`
+		CueNum          string  `db:"cueNum"`
+		Title           string  `db:"title"`
+		Filename        string  `db:"filename"`
+		SourceKind      string  `db:"source_kind"`
+		EndpointURL     string  `db:"endpoint_url"`
+		EndpointTitle   string  `db:"endpoint_title"`
+		PosStart        int     `db:"posStart"`
+		PosEnd          int     `db:"posEnd"`
+		PreWait         int     `db:"preWait"`
+		CueDuration     int     `db:"cueDuration"`
+		PostWait        int     `db:"postWait"`
+		Hold            bool    `db:"hold"`
+		Loop            bool    `db:"loop"`
+		LoopCount       int     `db:"loop_count"`
+		AutoContinue    bool    `db:"autoContinue"`
+		Color           string  `db:"color"`
+		Parent          int     `db:"parent"`
+		FadeOut         int     `db:"fadeOut"`
+		FadeAction      string  `db:"fadeAction"`
+		FadeCurve       string  `db:"fade_curve"`
+		FitMode         string  `db:"fit_mode"`
+		Rotation        int     `db:"rotation"`
+		Flip            string  `db:"flip"`
+		Opacity         float64 `db:"opacity"`
+		GeomX           string  `db:"geom_x"`
+		GeomY           string  `db:"geom_y"`
+		GeomW           string  `db:"geom_w"`
+		GeomH           string  `db:"geom_h"`
+		CropL           string  `db:"crop_l"`
+		CropR           string  `db:"crop_r"`
+		CropT           string  `db:"crop_t"`
+		CropB           string  `db:"crop_b"`
+		Align           string  `db:"align"`
+		StopOthers      bool    `db:"stop_others"`
+		Layer           string  `db:"layer"`
+		LayerUnder      string  `db:"layer_under_num"`
+		Volume          float64 `db:"volume"`
+		FadeIn          int     `db:"fadeIn"`
+		Rate            float64 `db:"rate"`
+		Balance         float64 `db:"balance"`
+		Mute            bool    `db:"mute"`
 	}
 	var rows []row
 	err = db.Select(&rows, `
-		SELECT cuesheet.cueNum, cuesheet.title, COALESCE(mediapool.filename,'') AS filename,
+		SELECT cuesheet.cuePos, cuesheet.sheet_index, cuesheet.schedule_enabled, cuesheet.schedule_days, cuesheet.schedule_time_ms,
+ COALESCE((SELECT u.cuePos FROM cuesheet u WHERE u.cue_id = cuesheet.layer_under), 0) AS layer_under_pos,
+ cuesheet.cueNum, cuesheet.title, COALESCE(mediapool.filename,'') AS filename,
 			mediapool.source_kind, mediapool.endpoint_url, mediapool.endpoint_title,
 			cuesheet.posStart, cuesheet.posEnd, cuesheet.preWait,
 			cuesheet.cueDuration, cuesheet.postWait, cuesheet.hold,
@@ -117,7 +132,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			COALESCE((SELECT u.cueNum FROM cuesheet u WHERE u.cue_id = cuesheet.layer_under), '') AS layer_under_num
 		FROM cuesheet
 		LEFT JOIN mediapool ON cuesheet.media_id = mediapool.media_id
-		ORDER BY cuesheet.cuePos
+		ORDER BY cuesheet.sheet_index, cuesheet.cuePos
 	`)
 	if err != nil {
 		log.Printf("Error ExportCues: %v", err)
@@ -126,6 +141,8 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 	cues = make([]ExportCue, 0, len(rows))
 	for _, r := range rows {
 		cues = append(cues, ExportCue{
+			CuePos: r.CuePos, SheetIndex: &r.SheetIndex,
+			ScheduleEnabled: r.ScheduleEnabled, ScheduleDays: r.ScheduleDays, ScheduleTimeMs: r.ScheduleTimeMs, LayerUnderPos: r.LayerUnderPos,
 			Filename:      r.Filename,
 			SourceKind:    r.SourceKind,
 			EndpointURL:   r.EndpointURL,
@@ -147,7 +164,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			FadeAction:    r.FadeAction,
 			FadeCurve:     r.FadeCurve,
 			FitMode:       r.FitMode,
-			Opacity:       r.Opacity,
+			Opacity:       &r.Opacity,
 			GeomX:         r.GeomX,
 			GeomY:         r.GeomY,
 			GeomW:         r.GeomW,
@@ -190,24 +207,22 @@ func MediaRegistered(filename string) (bool, error) {
 // to nothing and import releases every cue to the top level, which is also
 // what pre-group builds did.
 type ExportGroup struct {
-	GroupID       int    `json:"groupId"`
-	Name          string `json:"name"`
-	ParentGroupID int    `json:"parentGroupId"`
-	Collapse      bool   `json:"collapse"`
-	Slideshow     bool   `json:"slideshow"`
-	AwardsMode    bool   `json:"awardsMode"`
-	Shuffle       bool   `json:"shuffle"`
-	Loop          bool   `json:"loop"`
-	FadeMS        int    `json:"fadeMs"`
-	DurationMS    int    `json:"durationMs"`
-	CueNum        string `json:"cueNum"`
-	Color         string `json:"color"`
+	SheetIndex    *float64 `json:"sheetIndex,omitempty"`
+	GroupID       int      `json:"groupId"`
+	Name          string   `json:"name"`
+	ParentGroupID int      `json:"parentGroupId"`
+	Collapse      bool     `json:"collapse"`
+	Slideshow     bool     `json:"slideshow"`
+	AwardsMode    bool     `json:"awardsMode"`
+	Shuffle       bool     `json:"shuffle"`
+	Loop          bool     `json:"loop"`
+	FadeMS        int      `json:"fadeMs"`
+	DurationMS    int      `json:"durationMs"`
+	CueNum        string   `json:"cueNum"`
+	Color         string   `json:"color"`
 }
 
-// ExportGroups lists every cue group ordered by id. Creation order equals id
-// order (a group can only be created inside an existing parent), so parents
-// always precede their children — ImportGroups relies on that to remap
-// nested parent ids.
+// ExportGroups includes visual order independently of group identity and parent.
 func ExportGroups() ([]ExportGroup, error) {
 	var groups []Group
 	if err := db.Select(&groups, `SELECT * FROM cue_group ORDER BY group_id`); err != nil {
@@ -217,6 +232,7 @@ func ExportGroups() ([]ExportGroup, error) {
 	out := make([]ExportGroup, 0, len(groups))
 	for _, g := range groups {
 		out = append(out, ExportGroup{
+			SheetIndex:    &g.SheetIndex,
 			GroupID:       g.GroupID,
 			Name:          g.Name,
 			ParentGroupID: g.ParentGroupID,
@@ -232,52 +248,6 @@ func ExportGroups() ([]ExportGroup, error) {
 		})
 	}
 	return out, nil
-}
-
-// ImportGroups recreates the manifest's groups and returns the exported-id →
-// new-id map. Parents are created before children (ExportGroups' ordering
-// guarantee), so a child's parent_group_id resolves through the map as it is
-// filled. On a mid-way failure the groups created so far are removed — the
-// sheet must not keep half an import's group tree.
-func ImportGroups(groups []ExportGroup) (map[int]int, error) {
-	idMap := make(map[int]int, len(groups))
-	for _, eg := range groups {
-		newID, err := CreateGroup(eg.Name, idMap[eg.ParentGroupID])
-		if err != nil {
-			ImportGroupsRollback(idMap)
-			return nil, err
-		}
-		idMap[eg.GroupID] = newID
-		g := Group{
-			GroupID:       newID,
-			Name:          eg.Name,
-			ParentGroupID: idMap[eg.ParentGroupID],
-			Collapse:      eg.Collapse,
-			Slideshow:     eg.Slideshow,
-			AwardsMode:    eg.AwardsMode,
-			Shuffle:       eg.Shuffle,
-			Loop:          eg.Loop,
-			FadeMS:        eg.FadeMS,
-			DurationMS:    eg.DurationMS,
-			Color:         sanitizeColor(eg.Color),
-		}
-		if g.CueNum, err = freeCueNum(db, eg.CueNum); err != nil {
-			ImportGroupsRollback(idMap)
-			return nil, err
-		}
-		if err := UpdateGroup(g); err != nil {
-			ImportGroupsRollback(idMap)
-			return nil, err
-		}
-	}
-	return idMap, nil
-}
-
-// ImportGroupsRollback removes the groups created by a failed ImportGroups.
-func ImportGroupsRollback(idMap map[int]int) {
-	for _, newID := range idMap {
-		_ = DeleteGroup(newID) // best-effort; DeleteGroup also releases members
-	}
 }
 
 // CueCount returns the number of cues currently in the cuesheet (used to
@@ -332,15 +302,6 @@ func AddCueFull(c ExportCue) (int, error) {
 	return pos, nil
 }
 
-// SelectedCuePosFor re-targets the selection after an import, remapping the
-// exported position: append mode must offset it past pre-existing cues.
-func SelectedCuePosFor(exported, exportedTotal, appendedOffset int) {
-	if exported <= 0 || exported > exportedTotal {
-		return
-	}
-	_ = setSelectedCuePos(exported + appendedOffset) // best-effort
-}
-
 // sanitizeColor drops a colour that is not a CSS hex value: imported .CTP
 // files are foreign input and a bad colour must not reach a style attribute.
 func sanitizeColor(c string) string {
@@ -350,13 +311,12 @@ func sanitizeColor(c string) string {
 	return ""
 }
 
-// importOpacity maps a manifest opacity to the stored percentage: shows
-// exported before opacity existed carry none (0), which means fully opaque.
-func importOpacity(v float64) float64 {
-	if v <= 0 || v > 100 {
+// importOpacity preserves explicit zero while defaulting older manifests.
+func importOpacity(v *float64) float64 {
+	if v == nil || *v < 0 || *v > 100 {
 		return 100
 	}
-	return v
+	return *v
 }
 
 func importCueTx(tx *sqlx.Tx, c ExportCue) (cuePos int, err error) {
@@ -371,6 +331,9 @@ func importCueTx(tx *sqlx.Tx, c ExportCue) (cuePos int, err error) {
 		if err = tx.Get(&mediaID, `SELECT media_id FROM mediapool WHERE source_kind = 'file' AND filename = ?`, c.Filename); err != nil {
 			return 0, fmt.Errorf("media %q not found", c.Filename)
 		}
+	}
+	if c.ScheduleDays < 0 || c.ScheduleDays > 127 || c.ScheduleTimeMs < 0 || c.ScheduleTimeMs >= 86400000 || (c.ScheduleEnabled && c.ScheduleDays == 0) {
+		return 0, fmt.Errorf("invalid cue schedule")
 	}
 	if c.Rate == 0 {
 		c.Rate = 1
@@ -413,10 +376,10 @@ func importCueTx(tx *sqlx.Tx, c ExportCue) (cuePos int, err error) {
 	_, err = tx.Exec(`
 			INSERT INTO cuesheet (cuePos, cueNum, media_id, title, posStart, posEnd,
 			preWait, cueDuration, postWait, hold, loop, loop_count, color,
-			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, align, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index, stop_others, layer)
+			parent, fadeOut, fadeAction, fade_curve, fit_mode, rotation, flip, opacity, geom_x, geom_y, geom_w, geom_h, crop_l, crop_r, crop_t, crop_b, align, autoContinue, volume, fadeIn, rate, balance, mute, sheet_index, stop_others, layer, schedule_enabled, schedule_days, schedule_time_ms)
 		VALUES (:cuePos, :cueNum, :mediaID, :title, :posStart, :posEnd,
 			:preWait, :cueDuration, :postWait, :hold, :loop, :loop_count, :color,
-			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :align, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0, :stopOthers, :layer)
+			:parent, :fadeOut, :fadeAction, :fadeCurve, :fitMode, :rotation, :flip, :opacity, :geomX, :geomY, :geomW, :geomH, :cropL, :cropR, :cropT, :cropB, :align, :autoContinue, :volume, :fadeIn, :rate, :balance, :mute, :cuePos * 1000.0, :stopOthers, :layer, :scheduleEnabled, :scheduleDays, :scheduleTimeMs)
 	`,
 		sql.Named("cuePos", cuePos),
 		sql.Named("mediaID", mediaID),
@@ -456,6 +419,9 @@ func importCueTx(tx *sqlx.Tx, c ExportCue) (cuePos int, err error) {
 		sql.Named("mute", boolInt(c.Mute)),
 		sql.Named("stopOthers", stopOthers),
 		sql.Named("layer", layer),
+		sql.Named("scheduleEnabled", boolInt(c.ScheduleEnabled)),
+		sql.Named("scheduleDays", c.ScheduleDays),
+		sql.Named("scheduleTimeMs", c.ScheduleTimeMs),
 	)
 	if err != nil {
 		log.Printf("Error adding imported cue: %v", err)
@@ -488,7 +454,12 @@ func ImportShow(groups []ExportGroup, cues []ExportCue, selected int, overwrite 
 		return err
 	}
 	defer tx.Rollback()
-	offset := 0
+	baseIndex := 0.0
+	if !overwrite {
+		if err = tx.Get(&baseIndex, `SELECT COALESCE(MAX(sheet_index),0) FROM (SELECT sheet_index FROM cuesheet UNION ALL SELECT sheet_index FROM cue_group)`); err != nil {
+			return err
+		}
+	}
 	if overwrite {
 		for _, q := range []string{`DELETE FROM cuesheet`, `DELETE FROM cue_group`} {
 			if _, err = tx.Exec(q); err != nil {
@@ -501,8 +472,6 @@ func ImportShow(groups []ExportGroup, cues []ExportCue, selected int, overwrite 
 		if _, err = tx.Exec(`INSERT INTO state (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, stateKeySelectedCue, "0"); err != nil {
 			return err
 		}
-	} else if err = tx.Get(&offset, `SELECT COUNT(*) FROM cuesheet`); err != nil {
-		return err
 	}
 	ids := make(map[int]int, len(groups))
 	for _, g := range groups {
@@ -518,7 +487,7 @@ func ImportShow(groups []ExportGroup, cues []ExportCue, selected int, overwrite 
 		if e != nil {
 			return e
 		}
-		res, e := tx.Exec(`INSERT INTO cue_group (name,parent_group_id,sheet_index,collapse,slideshow,awards_mode,shuffle,loop,fade_ms,duration_ms,cue_num,color) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, name, ids[g.ParentGroupID], max+sheetIndexStep, boolInt(g.Collapse), boolInt(g.Slideshow), boolInt(g.AwardsMode), boolInt(g.Shuffle), boolInt(g.Loop), g.FadeMS, g.DurationMS, num, sanitizeColor(g.Color))
+		res, e := tx.Exec(`INSERT INTO cue_group (name,parent_group_id,sheet_index,collapse,slideshow,awards_mode,shuffle,loop,fade_ms,duration_ms,cue_num,color) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, name, 0, max+sheetIndexStep, boolInt(g.Collapse), boolInt(g.Slideshow), boolInt(g.AwardsMode), boolInt(g.Shuffle), boolInt(g.Loop), g.FadeMS, g.DurationMS, num, sanitizeColor(g.Color))
 		if e != nil {
 			return e
 		}
@@ -526,12 +495,21 @@ func ImportShow(groups []ExportGroup, cues []ExportCue, selected int, overwrite 
 		if e != nil {
 			return e
 		}
+		if _, duplicate := ids[g.GroupID]; duplicate {
+			return fmt.Errorf("duplicate group id %d", g.GroupID)
+		}
 		ids[g.GroupID] = int(id)
 	}
+	if err := importGroupParents(tx, groups, ids); err != nil {
+		return err
+	}
 	positions := make(map[string]int, len(cues))
+	oldPositions := make(map[int]int, len(cues))
+	newPositions := make([]int, 0, len(cues))
 	type link struct {
-		pos int
-		num string
+		pos    int
+		num    string
+		oldPos int
 	}
 	var links []link
 	for _, c := range cues {
@@ -541,22 +519,44 @@ func ImportShow(groups []ExportGroup, cues []ExportCue, selected int, overwrite 
 			return e
 		}
 		positions[c.CueNum] = pos
-		if c.LayerUnder != "" {
-			links = append(links, link{pos, c.LayerUnder})
+		newPositions = append(newPositions, pos)
+		if c.CuePos > 0 {
+			if _, duplicate := oldPositions[c.CuePos]; duplicate {
+				return fmt.Errorf("duplicate cue position %d", c.CuePos)
+			}
+			oldPositions[c.CuePos] = pos
+		}
+		if c.LayerUnderPos > 0 || c.LayerUnder != "" {
+			links = append(links, link{pos, c.LayerUnder, c.LayerUnderPos})
 		}
 	}
 	for _, l := range links {
-		if target := positions[l.num]; target > 0 {
+		target := positions[l.num]
+		if l.oldPos > 0 {
+			target = oldPositions[l.oldPos]
+		}
+		if target > 0 {
 			if _, err = tx.Exec(`UPDATE cuesheet SET layer_under = COALESCE((SELECT cue_id FROM cuesheet WHERE cuePos = ?), 0) WHERE cuePos = ?`, target, l.pos); err != nil {
 				return err
 			}
 		}
 	}
-	if selected > 0 && selected <= len(cues) {
-		if _, err = tx.Exec(`DELETE FROM state WHERE key = ?`, stateKeySelectedSet); err != nil {
+	if err := importSheetOrder(tx, groups, cues, ids, newPositions, baseIndex); err != nil {
+		return err
+	}
+	chosen := 0
+	if selected < 0 {
+		chosen = -ids[-selected]
+	} else if pos := oldPositions[selected]; pos > 0 {
+		chosen = pos
+	} else if len(oldPositions) == 0 && selected > 0 && selected <= len(newPositions) {
+		chosen = newPositions[selected-1]
+	}
+	if chosen != 0 || overwrite {
+		if _, err = tx.Exec("DELETE FROM state WHERE key = ?", stateKeySelectedSet); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`INSERT INTO state (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, stateKeySelectedCue, strconv.Itoa(selected+offset)); err != nil {
+		if _, err = tx.Exec("INSERT INTO state (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", stateKeySelectedCue, strconv.Itoa(chosen)); err != nil {
 			return err
 		}
 	}
@@ -608,4 +608,83 @@ func importEndpointTx(tx *sqlx.Tx, title, rawURL string) (int, error) {
 	var id int
 	err = tx.QueryRow(`INSERT INTO mediapool (filename,source_kind,endpoint_url,endpoint_title,mimetype,size,duration,resolution,thumbnail_pending,waveform,waveform_pending,missing,media_meta) VALUES (NULL,?,?,?,?,0,0,?,0,?,0,0,?) RETURNING media_id`, "endpoint", u.String(), title, "application/x-cutepi-endpoint", "", "", "").Scan(&id)
 	return id, err
+}
+
+func importGroupParents(tx *sqlx.Tx, groups []ExportGroup, ids map[int]int) error {
+	parents := make(map[int]int, len(groups))
+	for _, g := range groups {
+		parents[g.GroupID] = g.ParentGroupID
+	}
+	for _, g := range groups {
+		seen := map[int]bool{g.GroupID: true}
+		for p, depth := g.ParentGroupID, 1; p != 0; depth++ {
+			if seen[p] || depth > 8 {
+				return fmt.Errorf("invalid group nesting")
+			}
+			parent, exists := parents[p]
+			if !exists {
+				return fmt.Errorf("missing parent group %d", p)
+			}
+			seen[p] = true
+			p = parent
+		}
+		if _, err := tx.Exec("UPDATE cue_group SET parent_group_id = ? WHERE group_id = ?", ids[g.ParentGroupID], ids[g.GroupID]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// New manifests carry both cue and header indices; old manifests retain their legacy placement.
+func importSheetOrder(tx *sqlx.Tx, groups []ExportGroup, cues []ExportCue, ids map[int]int, positions []int, base float64) error {
+	type item struct {
+		index float64
+		group bool
+		id    int
+	}
+	var items []item
+	add := func(index *float64, group bool, id int) error {
+		if index == nil {
+			return nil
+		}
+		if math.IsNaN(*index) || math.IsInf(*index, 0) {
+			return fmt.Errorf("invalid sheet index")
+		}
+		items = append(items, item{*index, group, id})
+		return nil
+	}
+	for _, g := range groups {
+		if err := add(g.SheetIndex, true, ids[g.GroupID]); err != nil {
+			return err
+		}
+	}
+	for i, c := range cues {
+		if err := add(c.SheetIndex, false, positions[i]); err != nil {
+			return err
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	if len(items) != len(groups)+len(cues) {
+		return fmt.Errorf("incomplete sheet order")
+	}
+	minimum := items[0].index
+	for _, row := range items {
+		minimum = min(minimum, row.index)
+	}
+	for _, row := range items {
+		index := base + sheetIndexStep + (row.index - minimum)
+		if math.IsInf(index, 0) {
+			return fmt.Errorf("sheet index out of range")
+		}
+		q := "UPDATE cuesheet SET sheet_index = ? WHERE cuePos = ?"
+		if row.group {
+			q = "UPDATE cue_group SET sheet_index = ? WHERE group_id = ?"
+		}
+		if _, err := tx.Exec(q, index, row.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }

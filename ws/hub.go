@@ -82,12 +82,11 @@ func SameOrigin(r *http.Request) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	return strings.EqualFold(u.Host, r.Host) || (AllowOrigin != nil && AllowOrigin(u.Scheme+"://"+u.Host))
+	return strings.EqualFold(u.Host, r.Host) || (AllowRequest != nil && AllowRequest(r))
 }
 
-// AllowOrigin, when set, admits other origins: a paired unit's failover
-// pages (routes, DESIGN §6.8c).
-var AllowOrigin func(origin string) bool
+// AllowRequest authenticates cross-origin requests from paired failover pages.
+var AllowRequest func(*http.Request) bool
 
 // client is one connected browser. Broadcasts never write to the socket
 // directly: they set a pending flag and wake the client's own writer

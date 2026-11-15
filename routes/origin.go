@@ -15,7 +15,7 @@ import (
 //     so the operator password alone does not stop a hostile page from
 //     POSTing /api/shutdown. Requests with neither header (curl, Companion,
 //     scripts) are not browser-driven and pass. The origins of a paired
-//     unit's failover pages pass too (ws.AllowOrigin, DESIGN §6.8c).
+//     unit's failover pages pass too (ws.AllowRequest, DESIGN §6.8c).
 //
 // The Host header is not restricted: the server answers under any name, so
 // any reverse proxy in front of it works without configuration.

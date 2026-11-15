@@ -112,3 +112,20 @@ func TestScheduledCueIsAvailableBeforeItsWholeSecond(t *testing.T) {
 		}
 	}
 }
+
+func TestScheduleRegressionDSTNextSchedule(t *testing.T) {
+	ClearCueSheet()
+	mustRegisterMedia(t, "audit-dst.mp4")
+	AddCue("audit-dst.mp4", "")
+	SetCueSchedule(1, true, 7, 14*3600)
+	loc, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 3, 29, 0, 30, 0, 0, loc)
+	d, _, _, ok := NextSchedule(now)
+	want := time.Date(2026, 3, 29, 14, 0, 0, 0, loc)
+	if !ok || !now.Add(d).Equal(want) {
+		t.Fatalf("next schedule %v, want %v", now.Add(d), want)
+	}
+}

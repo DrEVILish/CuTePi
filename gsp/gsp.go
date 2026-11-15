@@ -81,6 +81,7 @@ type clip struct {
 type manager struct {
 	clip              // the focus cue
 	mu                sync.Mutex
+	callbacks         sync.WaitGroup
 	onEndpointFailure func(pos int, title string, generation uint64)
 	version           uint64        // bumped on every client-visible state change/position tick
 	onCueEnd          func(pos int) // invoked (in a goroutine) when an active cue reaches its end
@@ -461,10 +462,13 @@ func (m *manager) endpointFailed(p *gst.Pipeline) {
 		return
 	}
 	pos, title, cb := m.cuePos, strings.TrimPrefix(m.currentFile, "Live: "), m.onEndpointFailure
+	if cb != nil {
+		m.callbacks.Add(1)
+	}
 	m.mu.Unlock()
 	m.clearIfCurrent(p)
 	if cb != nil {
-		go cb(pos, title, Generation())
+		go func() { defer m.callbacks.Done(); cb(pos, title, Generation()) }()
 	}
 }
 
@@ -499,6 +503,7 @@ type LoadOpts struct {
 	// Wall layer (KMS): opacity 0..1 (0 = unset = fully opaque) and the
 	// picture's box on the display — each "" (fill), pixels, or "N%".
 	Opacity                    float64
+	OpacitySet                 bool // distinguishes an explicit zero from the direct-load default
 	GeomX, GeomY, GeomW, GeomH string
 	// Crop per edge of the source picture: "", pixels, or "N%".
 	CropL, CropR, CropT, CropB string
@@ -1269,6 +1274,9 @@ func (m *manager) passEnd(p *gst.Pipeline, segmentDone bool) bool {
 			return true
 		}
 	}
+	if pos > 0 && cb != nil {
+		m.callbacks.Add(1)
+	}
 	m.mu.Unlock()
 
 	if hold {
@@ -1285,7 +1293,7 @@ func (m *manager) passEnd(p *gst.Pipeline, segmentDone bool) bool {
 	// AutoFollow hook: if a cue just finished (not looping), let the app
 	// layer advance the selection to the next cue.
 	if pos > 0 && cb != nil {
-		go cb(pos)
+		go func() { defer m.callbacks.Done(); cb(pos) }()
 	}
 	return false
 }
@@ -1630,6 +1638,7 @@ func retirePipeline(p *gst.Pipeline) {
 	noteRetired(p)
 	p.GetPipelineBus().RemoveWatch()
 	padHandlers.Delete(pipeKey(p))
+	warmSources.Delete(p)
 	liveLoaded.Delete(p) // after the watch: it stores here
 	liveFromStandby.Delete(p)
 	warmSeeked.Delete(p)
@@ -1668,3 +1677,6 @@ func watchTrim(p *gst.Pipeline) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// WaitCallbacks drains app hooks after the caller detached them and stopped playback.
+func WaitCallbacks() { mgr.callbacks.Wait() }

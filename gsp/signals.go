@@ -4,6 +4,11 @@ package gsp
 #cgo pkg-config: gstreamer-1.0
 #include <gst/gst.h>
 
+// Unlike the generic Go value marshaller, this never treats a format list as a string.
+static const gchar *cutepi_caps_format(GstCaps *caps) {
+ if (!caps || gst_caps_get_size(caps) == 0) return NULL;
+ return gst_structure_get_string(gst_caps_get_structure(caps, 0), "format");
+}
 extern void cutepiDeepElementAdded(GstElement *el, int kind);
 extern void cutepiPadAdded(GstElement *el, GstPad *pad, gpointer key);
 
@@ -21,6 +26,7 @@ static void cutepi_connect_pad_added(GstElement *el, gpointer key) {
 import "C"
 
 import (
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -71,3 +77,13 @@ func onPadAdded(p *gst.Pipeline, el *gst.Element, f func(self *gst.Element, srcP
 }
 
 func pipeKey(p *gst.Pipeline) uintptr { return uintptr(unsafe.Pointer(p.Instance())) }
+
+// capsFormat reads a fixed format without go-gst's unsafe value-list marshaller.
+func capsFormat(caps *gst.Caps) string {
+	if caps == nil {
+		return ""
+	}
+	format := C.GoString(C.cutepi_caps_format((*C.GstCaps)(unsafe.Pointer(caps.Instance()))))
+	runtime.KeepAlive(caps)
+	return format
+}

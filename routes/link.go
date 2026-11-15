@@ -137,9 +137,10 @@ var link struct {
 // Following (backup): the last version applied, how it reads back here, and
 // as of which local sheet version that was checked.
 var (
-	seqMu   sync.Mutex
-	seqVer  uint64
-	seqSnap []byte
+	linkElectionJobs sync.WaitGroup
+	seqMu            sync.Mutex
+	seqVer           uint64
+	seqSnap          []byte
 
 	applyMu      sync.Mutex
 	appliedSnap  []byte
@@ -152,7 +153,9 @@ func init() {
 	link.incoming = map[string]pairRequest{}
 	link.outgoing = map[string]string{}
 	link.origins = map[string]string{}
-	ws.AllowOrigin = linkOriginAllowed
+	ws.AllowRequest = func(r *http.Request) bool {
+		return linkOriginAllowed(r.Header.Get("Origin")) && pageTokenOK(r)
+	}
 }
 
 // RunLink loads the link state, migrates the old linked_peers setting,
@@ -236,6 +239,11 @@ func reloadPeers() {
 		if !keep[id] {
 			close(st.queue)
 			delete(link.peers, id)
+			for origin, owner := range link.origins {
+				if owner == id {
+					delete(link.origins, origin)
+				}
+			}
 		}
 	}
 }
@@ -430,8 +438,8 @@ func pageTokenOK(r *http.Request) bool {
 func linkOriginAllowed(origin string) bool {
 	link.mu.Lock()
 	defer link.mu.Unlock()
-	_, ok := link.origins[strings.ToLower(origin)]
-	return ok
+	id, ok := link.origins[strings.ToLower(origin)]
+	return ok && link.peers[id] != nil
 }
 
 // linkCORS answers for a paired unit's page origin: CORS headers, and the
@@ -440,6 +448,13 @@ func linkCORS(c *gin.Context) bool {
 	origin := c.GetHeader("Origin")
 	if origin == "" || !linkOriginAllowed(origin) {
 		return false
+	}
+	if u, err := url.Parse(origin); err == nil && strings.EqualFold(u.Host, c.Request.Host) {
+		return false
+	}
+	if c.Request.Method != http.MethodOptions && !pageTokenOK(c.Request) {
+		c.AbortWithStatus(http.StatusForbidden)
+		return true
 	}
 	h := c.Writer.Header()
 	h.Set("Access-Control-Allow-Origin", origin)
@@ -889,7 +904,9 @@ func linkElect() {
 	}
 	link.term, link.primary, link.lostAt = term+1, link.self, time.Time{}
 	logs.Printf(logs.LNKInfo, "linked units: this unit is primary (term %d)", link.term)
+	linkElectionJobs.Add(1)
 	goSafe(func() {
+		defer linkElectionJobs.Done()
 		saveLinkVersion()
 		seqMu.Lock()
 		seqSnap, seqVer = nil, 0 // the next sequence pass starts from the show held here
@@ -1117,6 +1134,10 @@ func registerLinkRoutes(rg *gin.RouterGroup) {
 	// The failover page's peers: their address and a token bound to the
 	// page's origin (phase 2). Each peer is told the origin.
 	rg.GET("/link/page", func(c *gin.Context) {
+		if !ws.SameOrigin(c.Request) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
 		origin := c.GetHeader("Origin")
 		if origin == "" {
 			scheme := "http"

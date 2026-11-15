@@ -265,8 +265,9 @@ func fireScheduledAttempt(armed ctp.ScheduleInfo, key string, at time.Time, opts
 	// The warm slot was built from the armed snapshot; it only matches if
 	// the cue's playback settings are unchanged (InstallWarm compares file
 	// and opts), otherwise the fresh cue is built cold.
+	opts = cueOpts(cue, false)
 	if !(tryWarm && cue.SourceKind != "endpoint" && gsp.InstallWarm(cue.Filename, opts)) {
-		if err := scheduledLoad(cue, cueOpts(cue, false)); err != nil {
+		if err := scheduledLoad(cue, opts); err != nil {
 			ctp.SetCueResult(cue.CuePos, ctp.CueResultError)
 			logs.PrintfWarn(logs.SCHFireFailed, "scheduled cue %d %q, attempt %d: %v", cue.CuePos, cue.Title, attempt, err)
 			if attempt == 1 {

@@ -146,11 +146,12 @@ func NextSchedule(now time.Time) (dueIn time.Duration, num, title string, ok boo
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	best := time.Duration(1 << 62)
 	for _, r := range rows {
-		for d := 0; d < 7; d++ {
+		for d := 0; d <= 7; d++ {
 			if r.Days&(1<<((todayBit+d)%7)) == 0 {
 				continue
 			}
-			at := midnight.Add(time.Duration(d)*24*time.Hour + time.Duration(r.TimeMs)*time.Millisecond)
+			date := midnight.AddDate(0, 0, d)
+			at := time.Date(date.Year(), date.Month(), date.Day(), r.TimeMs/3600000, (r.TimeMs/60000)%60, (r.TimeMs/1000)%60, (r.TimeMs%1000)*int(time.Millisecond), now.Location())
 			if !at.After(now) {
 				continue
 			}

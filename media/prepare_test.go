@@ -115,3 +115,76 @@ func TestPreparerQueue(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestPrepareRegressionPrepareWhileBusy(t *testing.T) {
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "started")
+	fake := "#!/bin/sh\necho started > '" + mark + "'\nexec /bin/sleep 3\n"
+	if err := os.WriteFile(filepath.Join(dir, "ffmpeg"), []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	old := PlaybackBusy
+	PlaybackBusy = func() bool { return true }
+	defer func() { PlaybackBusy = old }()
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := os.WriteFile(filepath.Join(dir, "src"), []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- PrepareVideo(ctx, filepath.Join(dir, "src"), filepath.Join(dir, "out"), &MediaVideoInfo{Width: 64, Height: 64, FPS: 30}, 64, 64, 60)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	_, err := os.Stat(mark)
+	cancel()
+	<-done
+	if err == nil {
+		t.Fatal("encoder launched while playback was already busy")
+	}
+}
+
+func TestPrepareRejectsSourceReplacedDuringEncode(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "source"), filepath.Join(dir, "prepared")
+	started, release := filepath.Join(dir, "started"), filepath.Join(dir, "release")
+	if err := os.WriteFile(src, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake := "#!/bin/sh\nfor last; do :; done\ntouch '" + started + "'\nwhile [ ! -e '" + release + "' ]; do sleep 0.01; done\nprintf prepared > \"$last\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "ffmpeg"), []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- PrepareVideo(ctx, src, dst, &MediaVideoInfo{Width: 64, Height: 64, FPS: 30}, 64, 64, 60)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("encoder never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.WriteFile(src+".new", []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(src+".new", src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("obsolete encode was reported successful")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("obsolete prepared copy was published: %v", err)
+	}
+}

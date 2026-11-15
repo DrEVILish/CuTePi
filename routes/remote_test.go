@@ -25,7 +25,9 @@ import (
 // deck tests run against the same in-memory DB the HTTP tests use.
 func setupTestDB(t *testing.T) {
 	t.Helper()
+	drainTestWork()
 	dir := t.TempDir()
+	t.Cleanup(drainTestWork)
 	config.SetDbLocation(":memory:")
 	config.SetConfigFilePath(dir + "/config.json")
 	config.SetDirsForTesting(dir)

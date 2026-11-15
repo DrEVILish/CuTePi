@@ -115,3 +115,12 @@ func TestAlignLayout(t *testing.T) {
 		t.Errorf("explicit X must win: %d", x)
 	}
 }
+
+func TestExplicitZeroOpacity(t *testing.T) {
+	if got := opacityOf(LoadOpts{Opacity: 0, OpacitySet: true}); got != 0 {
+		t.Fatalf("explicit zero became %v", got)
+	}
+	if got := opacityOf(LoadOpts{}); got != 1 {
+		t.Fatalf("default opacity %v", got)
+	}
+}

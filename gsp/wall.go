@@ -273,7 +273,7 @@ func newWallLayer(p *gst.Pipeline, opts LoadOpts) (*wallLayer, error) {
 }
 
 func opacityOf(opts LoadOpts) float64 {
-	if opts.Opacity <= 0 || opts.Opacity > 1 {
+	if (!opts.OpacitySet && opts.Opacity == 0) || opts.Opacity < 0 || opts.Opacity > 1 {
 		return 1
 	}
 	return opts.Opacity
@@ -1096,18 +1096,6 @@ func readFileTrim(path string) (string, error) {
 }
 
 // capsSize reads width/height from the first caps structure (0s if absent).
-// capsFormat reads the raw video format name from caps ("" when unknown).
-func capsFormat(caps *gst.Caps) string {
-	if caps == nil || caps.GetSize() == 0 {
-		return ""
-	}
-	if v, err := caps.GetStructureAt(0).GetValue("format"); err == nil {
-		f, _ := v.(string)
-		return f
-	}
-	return ""
-}
-
 func capsSize(caps *gst.Caps) (w, h int) {
 	if caps == nil || caps.GetSize() == 0 {
 		return 0, 0

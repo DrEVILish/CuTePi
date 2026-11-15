@@ -26,7 +26,8 @@ import (
 // v2 adds the groups table (membership, nesting, slideshow settings); v1
 // manifests import fine — their cue Parent values resolve to nothing and
 // every cue lands top-level, matching pre-group behaviour.
-const manifestVersion = 2
+// v3 preserves cue/header order, archive-local cue references, schedules and explicit opacity.
+const manifestVersion = 3
 
 // showManifest is cutepi.json: every cue and group plus the audit trail and
 // the exported selection, so import can rebuild order, structure, selection,
