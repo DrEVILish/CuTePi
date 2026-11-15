@@ -20,7 +20,7 @@ The owner directed TimerPi to perform correct hardware tests and finish delivery
 - Radio stage: temporary TimerPi PRODUCT profile timerpi/ch13/GB, with wired management retained. TimerPi is the sole network writer and captures baselines/rollback before transport changes. The .55 radio-transition handover was requested for 15:31:00 UTC; follower stop was verified at 15:31:11.868 UTC. The separate .73 display handover was requested for 15:46:00 UTC and verified at 15:46:07.769 UTC.
 - Display stage, if required: exclusive .73 DRM handover after the real cutepi service is stopped and its processes have released the display. Never run competing DRM tools while CuTePi playback is active.
 - No reboot is planned. Existing .55 reboot restrictions and .73 software-install/disabled-service restrictions remain.
-- CuTePi performed the service-only .55 and .73 handovers below. Both playback services are paused pending their respective handbacks. Earlier inventory tables remain dated preflight observations, not a live session-state report.
+- CuTePi performed the service-only .55 and .73 handovers below. The .73 service was restored after explicit DRM handback; .55 remains paused pending its separate network handback. Earlier inventory tables remain dated preflight observations, not a live session-state report.
 
 ### .55 follower pause completed: 15:31:11 UTC
 
@@ -40,7 +40,19 @@ CuTePi captured a private exact service definition/properties, binary identity a
 
 CuTePi issued only systemctl stop cutepi.service at 15:46:07.515 UTC, 7.5 seconds after the requested boundary. Verification at 15:46:07.769 UTC found inactive/dead, MainPID=0, ControlPID=0, the original PID absent and no service-cgroup members. A scan of /proc file-descriptor symlinks found no primary /dev/dri/cardN handles across processes and no permission errors. No DRM device was opened and no debug DRM state was read. TimerPi received the explicit STOPPED / DRM RELEASED acknowledgment before display access.
 
-The original show/data/binary/unit were not replaced or edited. Private baseline and shutdown evidence are in CT110 /var/lib/cutepi-work/handover-20261115/73-*. CuTePi remains stopped until TimerPi explicitly releases every DRM handle and child process. The .55 follower remains separately paused pending its original-network/controller handback. No mesh/radio/network changes or reboot were performed by CuTePi.
+The original show/data/binary/unit were not replaced or edited. Private baseline and shutdown evidence are in CT110 /var/lib/cutepi-work/handover-20261115/73-*. At that stage CuTePi remained stopped until TimerPi explicitly released every DRM handle and child process; the completed .73 restoration is recorded below. The .55 follower remains separately paused pending its original-network/controller handback. No mesh/radio/network changes or reboot were performed by CuTePi.
+
+### .73 original service and 1080p60 mode restored: 15:58:27 UTC
+
+TimerPi explicitly released .73 DRM at 15:56:16 UTC after its corrected native test passed 1920x1080@50Hz with200 changed frames in9.339s. Its first test had failed and incorrectly skipped; TimerPi reports correcting pointer-array capacities, the connected enum and opt-in failure classification before the successful rerun. Its evidence is PVE /var/tmp/timerpi-hw-20261115/drm-hardware-final.log. These are TimerPi-reported results, separate from CuTePi restoration checks.
+
+CuTePi independently found no primary DRM-card holders, verified the captured unit-definition hash and original binary SHA256, then started only the original cutepi.service at 15:57:46.393 UTC. By15:57:47.203 it was active/running as PID6545 with HTTP200 and a card1 handle. No unit/binary/show replacement or deployment was performed.
+
+After the service opened the card, a one-shot read-only libdrm query at15:58:27.599 verified the active CRTC at1920x1080,60.0Hz; the inspection descriptor was not DRM master. Existing plane127 framebuffer728 read back as1920x1080 AB24, nonblack fraction1.0, and the presenter was on. No DRM debug-state read or cue GO/show edit was issued. This verifies restored mode and framebuffer content, not a new physical picture/audio latency or AV-sync acceptance run.
+
+Exact cuesheet, cue_group and mediapool contents matched the pre-pause snapshot:12cues,2groups,36media records. All15 waveform IDs and peak payloads matched; only three automatic cache updated timestamps changed during startup. Private snapshots and restoration evidence remain in CT110 /var/lib/cutepi-work/handover-20261115/73-*.
+
+TimerPi received the restored1080p60 acknowledgment. CuTePi owns .73 DRM again; no further TimerPi DRM stage is planned. The session remains reserved for TimerPi's final display-off radio/election retest, with Ethernet retained. The .55 follower stays paused until explicit final network/controller restoration handback. CuTePi made no mesh/radio/network changes or reboot.
 
 ### Controlled pause and restore handover
 
