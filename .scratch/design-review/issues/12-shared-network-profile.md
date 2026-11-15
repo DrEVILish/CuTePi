@@ -22,10 +22,12 @@ Use one named network writer across projects, retain CuTePi playback/deploy/DRM 
 
 ## Evidence to inspect
 
-[Verified shared Pi inventory and allocation](../../../docs/SHARED_PI_ALLOCATION.md). CuTePi tools/mesh/batman-wifi.sh currently uses cutepi-mesh/2412/bat0 10.77.0.x and leaves eth0 unbridged. TimerPi lead reports its product profile uses timerpi, ch13/5GHz36 radio policy and br0 with eth0. Both physical Pis (.73 and .55) are now allocated. The owner-directed temporary qualification session is reserved in the canonical allocation record: timerpi/ch13/GB, retained Ethernet, captured rollback and timed playback handovers. Permanent shared-profile convergence remains open.
+[Verified shared Pi inventory and allocation](../../../docs/SHARED_PI_ALLOCATION.md). CuTePi tools/mesh/batman-wifi.sh currently uses cutepi-mesh/2412/bat0 10.77.0.x and leaves eth0 unbridged. TimerPi lead reports its product profile uses timerpi, ch13/5GHz36 radio policy and br0 with eth0. Both physical Pis (.73 and .55) are now allocated. The owner-directed temporary qualification session is complete in the canonical allocation record: timerpi/ch13/GB, retained Ethernet, captured rollback and timed playback handovers. Permanent shared-profile convergence remains open.
 
 ## Comments
 
 2026-11-15 — Both project leads acknowledged the owner-authorised coordination, single network writer and Ethernet/rollback constraints. This is a decision ticket, not permission to convert either device or rewrite either product spec.
 
 2026-11-15, 15:16:39 UTC — CuTePi accepted TimerPi's owner-directed qualification session until explicit release/rollback handback. TimerPi alone owns network changes; CuTePi owns playback/deploy/DRM pause and restoration. Exact disruptive-stage times remain to be exchanged. Temporary qualification does not resolve this permanent-profile decision.
+
+2026-11-15, 16:14:03 UTC — Final network handback received; original CuTePi playback and follower restored. Temporary qualification did not convert either permanent profile. TimerPi reports wireless1000-client delivery complete but operator p95=1.38s exceeded250ms, so that load remains unqualified. TimerPi subsequently confirmed temporary-file/unit cleanup and explicitly released the slot at16:15:02UTC.
