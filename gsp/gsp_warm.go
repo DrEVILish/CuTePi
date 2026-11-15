@@ -13,36 +13,39 @@ import (
 	"CuTePi/logs"
 )
 
-// takeWarm empties the warm slot and returns its pipeline (nil if none) for
-// the caller to retire AFTER releasing mu. Caller holds m.mu.
-func (m *manager) takeWarm() *gst.Pipeline {
-	p := m.warm
-	m.warm = nil
-	m.warmFile = ""
-	m.warmOpts = LoadOpts{}
+// warmSlot owns an armed pipeline and the identity it must still match.
+// Access and transfers are guarded by mgr.mu.
+type warmSlot struct {
+	p      *gst.Pipeline
+	file   string
+	opts   LoadOpts
+	source warmSource
+}
+
+func (s warmSlot) matches(file string, opts LoadOpts) bool {
+	if s.p == nil || s.file != file || s.opts != opts {
+		return false
+	}
+	now := snapshotWarmSource(file)
+	was := s.source
+	return was.info != nil && now.info != nil && was.path == now.path && os.SameFile(was.info, now.info) && was.info.Size() == now.info.Size() && was.info.ModTime().Equal(now.info.ModTime())
+}
+
+// take clears the complete arm; retire the returned pipeline after unlocking.
+func (s *warmSlot) take() *gst.Pipeline {
+	p := s.p
+	*s = warmSlot{}
 	return p
 }
 
-// spare is a second armed cue (WarmNext): the one after the selected cue,
-// so GO, GO finds the next cue armed too. KMS wall only. Guarded by mgr.mu.
-var spare struct {
-	p    *gst.Pipeline
-	file string
-	opts LoadOpts
-}
-
-// takeSpare empties the spare slot (caller holds mgr.mu; retire the
-// pipeline after releasing it).
-func takeSpare() *gst.Pipeline {
-	p := spare.p
-	spare.p, spare.file, spare.opts = nil, "", LoadOpts{}
-	return p
-}
+// spare is the cue after the selected cue, so GO, GO finds both armed.
+// KMS wall only; guarded by mgr.mu.
+var spare warmSlot
 
 // armedLocked reports whether either slot holds file+opts (mgr.mu held).
 func armedLocked(file string, opts LoadOpts) bool {
-	return (mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts && warmSourceMatches(mgr.warm, file)) ||
-		(spare.p != nil && spare.file == file && spare.opts == opts && warmSourceMatches(spare.p, file))
+	return mgr.warm.matches(file, opts) ||
+		spare.matches(file, opts)
 }
 
 // retireAll retires every non-nil pipeline. Never call it holding mgr.mu.
@@ -107,16 +110,15 @@ func Warm(file string, opts LoadOpts) error {
 	warmMu.Lock() // one build at a time: a second arm of the same cue finds it armed
 	defer warmMu.Unlock()
 	mgr.mu.Lock()
-	if mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts && warmSourceMatches(mgr.warm, file) {
+	if mgr.warm.matches(file, opts) {
 		mgr.mu.Unlock()
 		return nil
 	}
-	if spare.p != nil && spare.file == file && spare.opts == opts && warmSourceMatches(spare.p, file) {
+	if spare.matches(file, opts) {
 		// Armed as the next cue: it becomes the slot (the selection moved
 		// onto it), and what the slot held goes.
-		old := mgr.takeWarm()
-		mgr.warm, mgr.warmFile, mgr.warmOpts = spare.p, file, opts
-		spare.p, spare.file, spare.opts = nil, "", LoadOpts{}
+		old := mgr.warm.take()
+		mgr.warm, spare = spare, warmSlot{}
 		mgr.mu.Unlock()
 		if old != nil {
 			go retirePipeline(old)
@@ -124,7 +126,7 @@ func Warm(file string, opts LoadOpts) error {
 		return nil
 	}
 	buildGen := mgr.gen
-	stale := mgr.takeWarm()
+	stale := mgr.warm.take()
 	done := make(chan struct{})
 	warmBuild.file, warmBuild.opts, warmBuild.done = file, opts, done
 	mgr.mu.Unlock()
@@ -139,7 +141,6 @@ func Warm(file string, opts LoadOpts) error {
 	if err != nil {
 		return err
 	}
-	warmSources.Store(p, source)
 	// Preroll parked (paused): first buffers decoded, nothing displayed, no
 	// audible output until a later activation starts the pipeline.
 	p.SetState(gst.StatePaused)
@@ -158,10 +159,8 @@ func Warm(file string, opts LoadOpts) error {
 	current := mgr.gen == buildGen
 	var displaced *gst.Pipeline
 	if current {
-		displaced = mgr.takeWarm() // a concurrent Warm may have filled it
-		mgr.warm = p
-		mgr.warmFile = file
-		mgr.warmOpts = opts
+		displaced = mgr.warm.take() // a concurrent Warm may have filled it
+		mgr.warm = warmSlot{p: p, file: file, opts: opts, source: source}
 	}
 	mgr.mu.Unlock()
 	retireAll(displaced)
@@ -193,7 +192,7 @@ func WarmNext(file string, opts LoadOpts) error {
 		mgr.mu.Unlock()
 		return nil
 	}
-	stale := takeSpare()
+	stale := spare.take()
 	done := make(chan struct{})
 	warmBuild.file, warmBuild.opts, warmBuild.done = file, opts, done
 	mgr.mu.Unlock()
@@ -208,7 +207,6 @@ func WarmNext(file string, opts LoadOpts) error {
 	if err != nil {
 		return err
 	}
-	warmSources.Store(p, source)
 	p.SetState(gst.StatePaused)
 	if result, _ := p.GetState(gst.StateNull, gst.ClockTime(5*time.Second)); result != gst.StateChangeSuccess {
 		retirePipeline(p) // as Warm: an arm that did not preroll is not kept
@@ -219,8 +217,8 @@ func WarmNext(file string, opts LoadOpts) error {
 		return fmt.Errorf("prewarm seek to the in-point failed")
 	}
 	mgr.mu.Lock()
-	displaced := takeSpare()
-	spare.p, spare.file, spare.opts = p, file, opts
+	displaced := spare.take()
+	spare = warmSlot{p: p, file: file, opts: opts, source: source}
 	mgr.mu.Unlock()
 	retireAll(displaced)
 	watchWarm(p)
@@ -233,7 +231,7 @@ func WarmNext(file string, opts LoadOpts) error {
 func watchWarm(p *gst.Pipeline) {
 	p.GetPipelineBus().AddWatch(func(msg *gst.Message) bool {
 		mgr.mu.Lock()
-		current := mgr.warm == p || spare.p == p
+		current := mgr.warm.p == p || spare.p == p
 		mgr.mu.Unlock()
 		if !current {
 			return false
@@ -242,10 +240,10 @@ func watchWarm(p *gst.Pipeline) {
 			logs.Printf(logs.GSPPipeDebug, "gsp: warm pipeline error debug: %s", msg.ParseError().DebugString())
 			mgr.mu.Lock()
 			var dead *gst.Pipeline
-			if mgr.warm == p {
-				dead = mgr.takeWarm()
+			if mgr.warm.p == p {
+				dead = mgr.warm.take()
 			} else if spare.p == p {
-				dead = takeSpare()
+				dead = spare.take()
 			}
 			mgr.mu.Unlock()
 			retireAll(dead)
@@ -289,7 +287,7 @@ func IsWarm(file string, opts LoadOpts) bool {
 func IsWarmSlot(file string, opts LoadOpts) bool {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	return mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts && warmSourceMatches(mgr.warm, file)
+	return mgr.warm.matches(file, opts)
 }
 
 // InstallWarm activates the prewarmed pipeline for file+opts if the slot is
@@ -300,14 +298,14 @@ func InstallWarm(file string, opts LoadOpts) bool {
 		return false
 	}
 	mgr.mu.Lock()
-	p, ok := mgr.warm, mgr.warm != nil && mgr.warmFile == file && mgr.warmOpts == opts && warmSourceMatches(mgr.warm, file)
-	if ok {
-		mgr.warm, mgr.warmFile, mgr.warmOpts = nil, "", LoadOpts{} // claim before retiring anything else
-	} else if spare.p != nil && spare.file == file && spare.opts == opts && warmSourceMatches(spare.p, file) {
-		p, ok = takeSpare(), true
+	var p *gst.Pipeline
+	if mgr.warm.matches(file, opts) {
+		p = mgr.warm.take() // claim before retiring anything else
+	} else if spare.matches(file, opts) {
+		p = spare.take()
 	}
 	mgr.mu.Unlock()
-	if !ok {
+	if p == nil {
 		return false
 	}
 	// The slot's own error watch: a bus takes one watch, and watchAndPlay's
@@ -616,19 +614,8 @@ type warmSource struct {
 	info os.FileInfo
 }
 
-var warmSources sync.Map // pipeline -> source identity captured before it was built
-
 func snapshotWarmSource(file string) warmSource {
 	path := sourcePath(file)
 	info, _ := os.Stat(path)
 	return warmSource{path, info}
-}
-func warmSourceMatches(p *gst.Pipeline, file string) bool {
-	value, ok := warmSources.Load(p)
-	if !ok {
-		return false
-	}
-	was := value.(warmSource)
-	now := snapshotWarmSource(file)
-	return was.info != nil && now.info != nil && was.path == now.path && os.SameFile(was.info, now.info) && was.info.Size() == now.info.Size() && was.info.ModTime().Equal(now.info.ModTime())
 }

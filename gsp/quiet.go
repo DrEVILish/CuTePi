@@ -20,7 +20,7 @@ func NoteBusy() { lastBusy.Store(time.Now().UnixNano()) }
 // shown (test pattern), and that nothing has for at least d.
 func PlaybackQuiet(d time.Duration) bool {
 	mgr.mu.Lock()
-	armed := mgr.warm != nil || spare.p != nil
+	armed := mgr.warm.p != nil || spare.p != nil
 	mgr.mu.Unlock()
 	armed = armed || StandbyLiveCount() > 0 // a standby page is a WebKit already running
 	if armed || !WallIdle() || len(RunningCues()) > 0 {

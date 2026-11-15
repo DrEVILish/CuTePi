@@ -62,7 +62,7 @@ func TestWarmAudioRelinkedAtActivation(t *testing.T) {
 		t.Fatalf("Warm: %v", err)
 	}
 	mgr.mu.Lock()
-	slot := mgr.warm
+	slot := mgr.warm.p
 	mgr.mu.Unlock()
 	if slot == nil {
 		t.Fatal("no slot armed")

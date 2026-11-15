@@ -34,7 +34,7 @@ func warmFixture(t *testing.T, name string, data []byte) string {
 func slotState() (string, LoadOpts, *gst.Pipeline) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	return mgr.warmFile, mgr.warmOpts, mgr.warm
+	return mgr.warm.file, mgr.warm.opts, mgr.warm.p
 }
 
 // The core deck-style path: Warm arms the slot, LoadWithOpts with the same
@@ -142,7 +142,7 @@ func TestWarmWireVideoAudioSlotNoop(t *testing.T) {
 		t.Fatalf("Warm: %v", err)
 	}
 	mgr.mu.Lock()
-	warm := mgr.warm
+	warm := mgr.warm.p
 	mgr.mu.Unlock()
 	if warm == nil {
 		t.Fatalf("no slot armed")
@@ -203,7 +203,7 @@ func TestWarmVideoPrewarmAndRelink(t *testing.T) {
 		t.Fatalf("Warm video: %v", err)
 	}
 	mgr.mu.Lock()
-	warm := mgr.warm
+	warm := mgr.warm.p
 	mgr.mu.Unlock()
 	if warm == nil {
 		t.Fatalf("no slot armed after video Warm")
@@ -227,10 +227,10 @@ func TestWarmVideoPrewarmAndRelink(t *testing.T) {
 		t.Errorf("CurrentPlaying = %q, want warm-video.mp4", got)
 	}
 	mgr.mu.Lock()
-	p, warmAfter := mgr.pipeline, mgr.warm
+	p, warmAfter := mgr.pipeline, mgr.warm.p
 	mgr.mu.Unlock()
 	if warmAfter != nil {
-		t.Errorf("slot not cleared by activation: file %q", mgr.warmFile)
+		t.Errorf("slot not cleared by activation: file %q", mgr.warm.file)
 	}
 	if p != nil && warmContains(p, "warm-video-sink") {
 		t.Errorf("active pipeline still contains the fake sink — relink did not run")
@@ -335,8 +335,8 @@ func TestWarmSparePromoteAndInstall(t *testing.T) {
 		t.Fatalf("Warm: %v", err)
 	}
 	mgr.mu.Lock() // as WarmNext leaves it (WarmNext itself needs a KMS wall)
-	p := mgr.takeWarm()
-	spare.p, spare.file, spare.opts = p, file, opts
+	p := mgr.warm.p
+	spare, mgr.warm = mgr.warm, warmSlot{}
 	mgr.mu.Unlock()
 	if !IsWarm(file, opts) || IsWarmSlot(file, opts) {
 		t.Fatal("a spare arm must count as armed but not as the slot")
@@ -344,12 +344,11 @@ func TestWarmSparePromoteAndInstall(t *testing.T) {
 	if err := Warm(file, opts); err != nil {
 		t.Fatalf("Warm (promote): %v", err)
 	}
-	if _, _, w := slotState(); w != p || spare.p != nil {
+	if _, _, w := slotState(); w != p || spare.p != nil || !IsWarmSlot(file, opts) {
 		t.Fatal("arming the spare's cue must move its pipeline into the slot")
 	}
 	mgr.mu.Lock()
-	p = mgr.takeWarm()
-	spare.p, spare.file, spare.opts = p, file, opts
+	spare, mgr.warm = mgr.warm, warmSlot{}
 	mgr.mu.Unlock()
 	if !InstallWarm(file, opts) {
 		t.Fatal("GO did not take the spare's cue")
@@ -382,5 +381,65 @@ func TestWarmRegressionWarmSourceReplacement(t *testing.T) {
 	_, _, now := slotState()
 	if old == now {
 		t.Fatal("replaced source still uses the pipeline prerolled from the old inode")
+	}
+}
+
+// Source replacement invalidates either armed slot without disturbing the
+// current cue. The spare setup mirrors WarmNext on a headless test wall.
+func TestWarmStaleSourceRefusesInstall(t *testing.T) {
+	gstAvailable(t)
+	for _, slot := range []string{"selected", "spare"} {
+		t.Run(slot, func(t *testing.T) {
+			quiescePlayback(t)
+			defer Panic()
+			file := warmFixture(t, "stale-"+slot+".wav", tinyWav(2))
+			active := "active.wav"
+			if err := os.WriteFile(filepath.Join(config.MediaLocation(), active), tinyWav(10), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := LoadWithOpts(active, LoadOpts{Hold: true}); err != nil {
+				t.Fatal(err)
+			}
+			opts := LoadOpts{WarmPreroll: true}
+			if err := Warm(file, opts); err != nil {
+				t.Fatal(err)
+			}
+			_, _, armed := slotState()
+			if slot == "spare" {
+				mgr.mu.Lock()
+				spare, mgr.warm = mgr.warm, warmSlot{}
+				mgr.mu.Unlock()
+			}
+			if !IsWarm(file, opts) || IsWarmSlot(file, opts) != (slot == "selected") {
+				t.Fatal("fresh arm has incorrect readiness")
+			}
+			mgr.mu.Lock()
+			playing := mgr.pipeline
+			mgr.mu.Unlock()
+			generation, loads := Generation(), Loads()
+			path := filepath.Join(config.MediaLocation(), file)
+			if err := os.WriteFile(path+".new", tinyWav(1), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(path+".new", path); err != nil {
+				t.Fatal(err)
+			}
+			if IsWarm(file, opts) || IsWarmSlot(file, opts) {
+				t.Error("replaced source is still reported ready")
+			}
+			if InstallWarm(file, opts) {
+				t.Error("installed an arm made from the replaced source")
+			}
+			mgr.mu.Lock()
+			samePipeline := mgr.pipeline == playing
+			retained := mgr.warm.p == armed || spare.p == armed
+			mgr.mu.Unlock()
+			if !retained {
+				t.Error("refusing a stale arm lost ownership before cleanup")
+			}
+			if !samePipeline || CurrentPlaying() != active || Generation() != generation || Loads() != loads {
+				t.Fatal("refusing a stale arm changed active playback")
+			}
+		})
 	}
 }

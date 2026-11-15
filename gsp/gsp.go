@@ -88,9 +88,7 @@ type manager struct {
 	gen               uint64        // bumped on every playback-decision change (load/stop/panic/teardown)
 	halts             uint64        // bumped by every operator Stop/Panic call, whether or not a pipeline was running
 	loads             uint64        // bumped whenever a new pipeline is installed (swap)
-	warm              *gst.Pipeline // prebuilt+prerolled next cue (see Warm): on the KMS wall on
-	warmFile          string        // its own plane at alpha 0, outside the visible stack;
-	warmOpts          LoadOpts      // elsewhere on fakesinks (realtime-first rule)
+	warm              warmSlot      // prebuilt+prerolled next cue, hidden and silent (see Warm)
 	warmBuildGen      uint64        // generation the arm was made under (stale-arm check)
 	voices            []*voice      // running cues other than the focus (§6.1.2)
 	fireSeq           uint64        // fire order counter (clip.fired)
@@ -293,7 +291,7 @@ func (m *manager) swap(newPipeline *gst.Pipeline, currentFile string, opts LoadO
 	// A warm slot from a previous decision is somebody else's memory. It
 	// goes in the background: its plane comes off with a display commit,
 	// which GO need not wait for.
-	if w := m.takeWarm(); w != nil {
+	if w := m.warm.take(); w != nil {
 		go retirePipeline(w)
 	}
 	var retire []*gst.Pipeline
@@ -740,7 +738,7 @@ func Panic() {
 		mgr.testShowing = false
 		mgr.version++
 	}
-	retire = append(retire, mgr.takeWarm(), takeSpare()) // PANIC tears everything down, including the armed cues
+	retire = append(retire, mgr.warm.take(), spare.take()) // PANIC tears everything down, including the armed cues
 	mgr.mu.Unlock()
 	retireAll(retire...)
 	blankWall(0)
@@ -907,7 +905,7 @@ func LoadWithOpts(filename string, opts LoadOpts) error {
 		return nil
 	}
 	mgr.mu.Lock()
-	warm := mgr.takeWarm()
+	warm := mgr.warm.take()
 	mgr.mu.Unlock()
 	retireAll(warm)
 	newPipeline, err := buildPipeline(pipelineSpec{isTest: false, filename: filename, opts: opts})
@@ -1638,7 +1636,6 @@ func retirePipeline(p *gst.Pipeline) {
 	noteRetired(p)
 	p.GetPipelineBus().RemoveWatch()
 	padHandlers.Delete(pipeKey(p))
-	warmSources.Delete(p)
 	liveLoaded.Delete(p) // after the watch: it stores here
 	liveFromStandby.Delete(p)
 	warmSeeked.Delete(p)
