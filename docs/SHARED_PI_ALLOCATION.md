@@ -17,10 +17,20 @@ Status: 2026-11-15. The owner authorised both physical Pis for TimerPi/shared-Pi
 The owner directed TimerPi to perform correct hardware tests and finish delivery. CuTePi accepted TimerPi's requested shared session from 15:16:39 UTC until explicit release/rollback handback. This reservation supersedes the earlier no-slot status for temporary qualification only. It is not a permanent network-profile decision or a claim that tests have passed.
 
 - Initial stage: isolated TimerPi build/data on temporary port18080, display off, no CuTePi data/service changes. Existing playback continues.
-- Radio stage: temporary TimerPi PRODUCT profile timerpi/ch13/GB, with wired management retained. TimerPi is the sole network writer and captures baselines/rollback before transport changes. Exact disruptive-stage start times have not yet been exchanged.
+- Radio stage: temporary TimerPi PRODUCT profile timerpi/ch13/GB, with wired management retained. TimerPi is the sole network writer and captures baselines/rollback before transport changes. The .55 radio-transition handover was requested for 15:31:00 UTC; follower stop was verified at 15:31:11.868 UTC. The later .73 display handover remains separate.
 - Display stage, if required: exclusive .73 DRM handover after the real cutepi service is stopped and its processes have released the display. Never run competing DRM tools while CuTePi playback is active.
 - No reboot is planned. Existing .55 reboot restrictions and .73 software-install/disabled-service restrictions remain.
-- These are coordination records, not fresh device observations. CuTePi has issued no Pi commands or service changes for this reservation.
+- CuTePi performed the service-only .55 handover below. Earlier inventory tables remain dated preflight observations, not a live session-state report.
+
+### .55 follower pause completed: 15:31:11 UTC
+
+TimerPi confirmed private baseline/rollback archives at PVE /var/tmp/timerpi-hw-20261115, an exact .55 runtime unit/env backup, isolated port18080/display-off test services and no DRM tools. It owns controller stop/masking, timed network-only rollback and the radio transition; Ethernet addresses/routes remain untouched for the first transport drill. Its captured .73 rollback state is rfkill-blocked/down/managed/no bat0, power saving on, MTU1500; .55 restores the original controller/profile/bat0 with power saving off.
+
+CuTePi requested only systemctl stop cutepi-follower.service on .55 at 15:31:11.731 UTC, 11.7 seconds after the agreed boundary. Verification at 15:31:11.868 UTC found inactive/dead, MainPID=0, ControlPID=0, original PID1707227 absent and no service-cgroup members. No custom ExecStop/ExecStopPost hooks were present. TimerPi received an explicit STOPPED acknowledgment before its radio transition.
+
+The transient unit unloaded (LoadState=not-found). Recreate the exact saved runtime definition/env on restoration; a plain systemctl start cannot be assumed to work. A second private definition/properties backup and command evidence are held in CT110 /var/lib/cutepi-work/handover-20261115; do not commit raw configuration or environment.
+
+Follower restoration is pending TimerPi's confirmation that its original .55 network/controller baseline is restored. CuTePi issued no mesh-unit, radio/network, DRM or .73 commands during this handover. The session remains reserved; .73 playback has not been paused.
 
 ### Controlled pause and restore handover
 
