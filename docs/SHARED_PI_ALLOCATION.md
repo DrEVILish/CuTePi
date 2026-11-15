@@ -1,6 +1,6 @@
 # Shared CuTePi / TimerPi Pi allocation
 
-Status: 2026-11-15, 19:18:05 UTC. A fresh Ethernet-only performance-diagnosis slot is reserved; the .55 follower is paused for isolated Ethernet profiling; .73 playback remains running. The prior sessions remain fully released at 16:15:02 and 16:59:29 UTC, with original services and networks restored.
+Status: 2026-11-15, 19:30:54 UTC. Ethernet-only performance testing is complete and the original .55 follower is restored; .73 playback was untouched. Temporary TimerPi cleanup/session-release acknowledgment is pending. The prior sessions remain separately released.
 
 The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
 
@@ -14,7 +14,7 @@ The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You
 - The separate .55 reboot restriction remains: explicit owner approval is required. Do not run the TimerPi installer on a CuTePi playback Pi.
 - Existing direct PVE-root SSH access to root@192.168.10.73 and root@192.168.10.55 was verified by TimerPi's fresh preflight. Use the existing SSH identity and host-key trust; no new credentials are needed or shared here.
 
-## Ethernet-only performance diagnosis: reserved from 2026-11-15 19:18:05 UTC
+## Ethernet-only performance diagnosis: from 2026-11-15 19:18:05 UTC
 
 The owner clarified that clients reach the main Pi over Ethernet; BATMAN is the inter-Pi synchronisation path only. TimerPi requested continued latency diagnosis and speed fixes. CuTePi reserved a fresh slot until follower restoration and explicit temporary-cleanup/release handback. No competing CuTePi hardware measurement or deployment is scheduled.
 
@@ -24,7 +24,7 @@ The owner clarified that clients reach the main Pi over Ethernet; BATMAN is the 
 - TimerPi supplied an exact 19:20:00 UTC pause after fresh private unit/process/network/storage capture. CuTePi independently captured the current transient unit/PID, stopped only cutepi-follower, verified PID/cgroup release and acknowledged before CPU-isolated measurements.
 - Follower restoration uses that fresh baseline after explicit test-stopped handback, followed by temporary cleanup and full slot release. .73 playback is never part of the pause.
 - Identify baseline versus patched build, request/storage/queue waits, load-generator path and concurrent validation for each measurement. Fast development-host results are not Pi qualification or evidence for a language rewrite.
-- No new Pi result is available and no earlier threshold/result has changed. CuTePi issued no Pi commands for reservation; its later timed service-only handover is recorded below.
+- The attributed results below do not change earlier thresholds/results. CuTePi issued no Pi commands for reservation; its later timed service-only handover is recorded below.
 
 ### Ethernet-profile handover completed: 19:20:00 UTC
 
@@ -34,7 +34,30 @@ CuTePi independently captured the current .55 unit/properties/process argv/env/c
 
 Only systemctl stop cutepi-follower.service was issued at 19:20:00.050 UTC, guarded by the fresh PID/active state. Verification at 19:20:00.186 UTC found inactive/dead, MainPID=0, ControlPID=0, original PID  1716778 absent and the cgroup empty/removed. The transient unit unloaded as expected. TimerPi received STOPPED acknowledgment before CPU-isolated profiling.
 
-The follower remains paused pending explicit test/profiler-stopped handback and restoration from this fresh private baseline. No .73 service, network/controller/radio/filter or DRM commands were issued by CuTePi. No new Pi performance result or threshold change is recorded.
+At that stage the follower remained paused pending test/profiler-stopped handback; restoration from this fresh baseline is recorded below. No .73 service, network/controller/radio/filter or DRM commands were issued by CuTePi. The later attributed performance results are recorded below; thresholds are unchanged.
+
+### Ethernet-session test-stopped handback and follower restoration
+
+TimerPi explicitly handed back .55 at 19:29:50 UTC: its qualification service was inactive/dead with MainPID 0, no own test executable remained in /proc, no 18080/18081 listener remained, and CPU/strace/profile jobs and other test children had ended. It reported original .55 Ethernet/wlan0/cutepi-mesh/bat0 unchanged, with zero network/controller/radio/filter/routing commands during this session; .73 was entirely untouched.
+
+CuTePi recreated only the original .55 cutepi-follower from the fresh handover-20261115-1920 capture. Start was 19:30:54.132 UTC; verification at 19:30:54.508 UTC found active/running PID 1718065, Transient=yes. Original binary SHA, actual argv, captured environment, working directory and lifecycle properties matched the fresh baseline. Its own original port 80 listener returned HTTP 200. No CuTePi deployment/show/data replacement or .73/network/controller/DRM/reboot command occurred.
+
+TimerPi received the follower RESTORATION ACK and may remove only its own stopped temporary units/files. CuTePi restoration is complete; final temporary-cleanup/session-release acknowledgment remains pending. No further Pi commands are planned by CuTePi for this session.
+
+### TimerPi-reported Ethernet diagnosis results and limits
+
+Client traffic was direct Ethernet to .55, not synthetic audience traffic over BATMAN. TimerPi reports profiles showing operator authorization reads waiting for the sole SQLite connection. A deterministic read-during-write regression failed before its patch and passed after separating one writer from four bounded query-only WAL readers, retaining original durability and private transaction reads. These are TimerPi's code/test findings, not an independently repeated CuTePi audit.
+
+Final ordinary non-profiled patched build, original 250 ms operator-p95 gate:
+
+| Clients | Run 1 p95 (ms) | Run 2 p95 (ms) | Run 3 p95 (ms) | Reported outcome |
+|---|---:|---:|---:|---|
+|1000 |149.240 |114.331 |139.771 | All passed |
+|500 |65.134 |112.700 |136.996 | All passed |
+
+All final patched runs joined/voted/counted/delivered 100%, with zero disconnects and successful cleanup. Baseline reversal 1000-client runs also passed at 111.602/105.202/143.218 ms. Therefore these runs do not establish a robust operator speedup, fixed multiplier or full qualification. TimerPi reports join latency generally reduced; the proven code finding is removal of deterministic read blocking behind a write.
+
+The first clean baseline 1000-client second run failed at 1303.9 ms operator p95 and 1145.422 ms fanout. Profiled and strace-overlapped runs were diagnostic only, not ordinary acceptance runs. Preserve those intermittent failures and the earlier session results. This evidence does not justify a Rust rewrite or a claim that radio alone caused the original delay.
 
 ## Network-only experiment: 2026-11-15, 16:52:14 to 16:59:29 UTC
 
