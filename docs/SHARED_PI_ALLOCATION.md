@@ -1,6 +1,6 @@
 # Shared CuTePi / TimerPi Pi allocation
 
-Status: 2026-11-15, 19:18:05 UTC. A fresh Ethernet-only performance-diagnosis slot is reserved; no services are paused for this new slot. The prior sessions remain fully released at 16:15:02 and 16:59:29 UTC, with original services and networks restored.
+Status: 2026-11-15, 19:18:05 UTC. A fresh Ethernet-only performance-diagnosis slot is reserved; the .55 follower is paused for isolated Ethernet profiling; .73 playback remains running. The prior sessions remain fully released at 16:15:02 and 16:59:29 UTC, with original services and networks restored.
 
 The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
 
@@ -21,10 +21,20 @@ The owner clarified that clients reach the main Pi over Ethernet; BATMAN is the 
 - Scope: isolated /tmp data, port 18080 and display-off TimerPi on .55. Optional equivalent comparison on .73 must keep the real cutepi service/playback running and label that concurrent workload.
 - Client traffic is Ethernet-only, directly to the serving Pi. Earlier synthetic client traffic routed over BATMAN is a different topology; retain its measured failures without treating them as capacity proof for this deployment.
 - Current networks, controllers and wired management remain unchanged. No radio/controller/filter/routing changes, DRM access, reboot, installer, CuTePi binary/unit/show/data changes or permanent profile conversion are included.
-- Do not pause .55 yet. TimerPi will capture fresh private follower unit/properties/argv/env/cwd/binary and baseline state, then request an exact UTC pause. CuTePi independently recaptures the current transient unit/PID, stops only cutepi-follower, verifies PID/cgroup release and acknowledges before CPU-isolated measurements.
+- TimerPi supplied an exact 19:20:00 UTC pause after fresh private unit/process/network/storage capture. CuTePi independently captured the current transient unit/PID, stopped only cutepi-follower, verified PID/cgroup release and acknowledged before CPU-isolated measurements.
 - Follower restoration uses that fresh baseline after explicit test-stopped handback, followed by temporary cleanup and full slot release. .73 playback is never part of the pause.
 - Identify baseline versus patched build, request/storage/queue waits, load-generator path and concurrent validation for each measurement. Fast development-host results are not Pi qualification or evidence for a language rewrite.
-- No new Pi result is available and no earlier threshold/result has changed. CuTePi issued no Pi commands for this reservation.
+- No new Pi result is available and no earlier threshold/result has changed. CuTePi issued no Pi commands for reservation; its later timed service-only handover is recorded below.
+
+### Ethernet-profile handover completed: 19:20:00 UTC
+
+TimerPi confirmed isolated /tmp staging, direct Ethernet port 18080 and display-off operation; its development-only pprof listener is loopback 127.0.0.1:18081, not a production feature. No controller/radio/routing/filter changes are planned. Baseline/patched comparisons retain app/storage settings, and all test processes must stop before follower handback.
+
+CuTePi independently captured the current .55 unit/properties/process argv/env/cwd/binary SHA at 19:19:20.105 UTC in private CT110 /var/lib/cutepi-work/handover-20261115-1920. The follower was active/running PID 1716778, Transient=yes, with no custom stop hooks. Do not use either earlier session's capture for restoration.
+
+Only systemctl stop cutepi-follower.service was issued at 19:20:00.050 UTC, guarded by the fresh PID/active state. Verification at 19:20:00.186 UTC found inactive/dead, MainPID=0, ControlPID=0, original PID  1716778 absent and the cgroup empty/removed. The transient unit unloaded as expected. TimerPi received STOPPED acknowledgment before CPU-isolated profiling.
+
+The follower remains paused pending explicit test/profiler-stopped handback and restoration from this fresh private baseline. No .73 service, network/controller/radio/filter or DRM commands were issued by CuTePi. No new Pi performance result or threshold change is recorded.
 
 ## Network-only experiment: 2026-11-15, 16:52:14 to 16:59:29 UTC
 
