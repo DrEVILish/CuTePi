@@ -48,21 +48,15 @@ type showManifest struct {
 func Show(rg *gin.RouterGroup) {
 	registerPrepareRoutes(rg)
 	rg.GET("/show/export", func(c *gin.Context) {
-		cues, selected, err := ctp.ExportCues()
+		show, err := ctp.ExportShow()
 		if err != nil {
 			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
 			return
 		}
-		if len(cues) == 0 {
+		if len(show.Cues) == 0 {
 			c.String(http.StatusBadRequest, "the cuesheet is empty - nothing to export")
 			return
 		}
-		groups, err := ctp.ExportGroups()
-		if err != nil {
-			c.String(http.StatusInternalServerError, "%s", redactPaths(err.Error()))
-			return
-		}
-
 		filename := fmt.Sprintf("show-%s.ctp", time.Now().Format("20060102-150405"))
 		c.Header("Content-Type", "application/zip")
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
@@ -73,9 +67,9 @@ func Show(rg *gin.RouterGroup) {
 			App:            "CuTePi",
 			Version:        manifestVersion,
 			ExportedAt:     time.Now().Format(time.RFC3339),
-			SelectedCuePos: selected,
-			Cues:           cues,
-			Groups:         groups,
+			SelectedCuePos: show.SelectedCuePos,
+			Cues:           show.Cues,
+			Groups:         show.Groups,
 			Audit:          logs.AuditTrail(),
 		}); err != nil {
 			logs.PrintfWarn("EXPORT", "show export failed: %v", err)

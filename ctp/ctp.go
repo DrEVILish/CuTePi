@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"CuTePi/config"
 	"CuTePi/ws"
 )
@@ -166,8 +168,12 @@ const stateKeySelectedCue = "selectedCuePos"
 
 // SelectedCuePos returns the persisted position of the selected cue (0 = none).
 func SelectedCuePos() (int, error) {
+	return selectedCuePos(db)
+}
+
+func selectedCuePos(q sqlx.Queryer) (int, error) {
 	var val string
-	err := db.Get(&val, `SELECT value FROM state WHERE key = ?;`, stateKeySelectedCue)
+	err := sqlx.Get(q, &val, `SELECT value FROM state WHERE key = ?;`, stateKeySelectedCue)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}

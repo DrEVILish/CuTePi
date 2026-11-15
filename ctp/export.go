@@ -65,9 +65,53 @@ type ExportCue struct {
 	Mute            bool     `json:"mute"`
 }
 
+// ExportedShow is the durable show state carried in a .CTP manifest.
+type ExportedShow struct {
+	Cues           []ExportCue
+	Groups         []ExportGroup
+	SelectedCuePos int
+}
+
+// ExportShow reads cues, groups and selection from one database snapshot.
+// The transaction ends before the caller streams any media files.
+func ExportShow() (ExportedShow, error) {
+	tx, err := db.Beginx()
+	if err != nil {
+		return ExportedShow{}, err
+	}
+	defer tx.Rollback()
+	var show ExportedShow
+	if show.Cues, err = exportCues(tx); err != nil {
+		return ExportedShow{}, err
+	}
+	if show.Groups, err = exportGroups(tx); err != nil {
+		return ExportedShow{}, err
+	}
+	if show.SelectedCuePos, err = selectedCuePos(tx); err != nil {
+		return ExportedShow{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ExportedShow{}, err
+	}
+	return show, nil
+}
+
 // ExportCues lists every cue (sheet order) as an ExportCue plus the currently
-// selected cue position, for building a .CTP manifest.
+// selected cue position. ExportShow also includes groups in the same snapshot.
 func ExportCues() (cues []ExportCue, selected int, err error) {
+	cues, err = exportCues(db)
+	if err != nil {
+		return nil, 0, err
+	}
+	selected, err = SelectedCuePos()
+	if err != nil {
+		log.Printf("Error reading selected cue: %v", err)
+		return nil, 0, err
+	}
+	return cues, selected, nil
+}
+
+func exportCues(q sqlx.Queryer) ([]ExportCue, error) {
 	type row struct {
 		CuePos          int     `db:"cuePos"`
 		SheetIndex      float64 `db:"sheet_index"`
@@ -118,7 +162,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 		Mute            bool    `db:"mute"`
 	}
 	var rows []row
-	err = db.Select(&rows, `
+	err := sqlx.Select(q, &rows, `
 		SELECT cuesheet.cuePos, cuesheet.sheet_index, cuesheet.schedule_enabled, cuesheet.schedule_days, cuesheet.schedule_time_ms,
  COALESCE((SELECT u.cuePos FROM cuesheet u WHERE u.cue_id = cuesheet.layer_under), 0) AS layer_under_pos,
  cuesheet.cueNum, cuesheet.title, COALESCE(mediapool.filename,'') AS filename,
@@ -136,9 +180,9 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 	`)
 	if err != nil {
 		log.Printf("Error ExportCues: %v", err)
-		return nil, 0, err
+		return nil, err
 	}
-	cues = make([]ExportCue, 0, len(rows))
+	cues := make([]ExportCue, 0, len(rows))
 	for _, r := range rows {
 		cues = append(cues, ExportCue{
 			CuePos: r.CuePos, SheetIndex: &r.SheetIndex,
@@ -186,11 +230,7 @@ func ExportCues() (cues []ExportCue, selected int, err error) {
 			Mute:          r.Mute,
 		})
 	}
-	selected, err = SelectedCuePos()
-	if err != nil {
-		log.Printf("Error reading selected cue: %v", err)
-	}
-	return cues, selected, nil
+	return cues, nil
 }
 
 // MediaRegistered reports whether filename is already in the media pool.
@@ -224,8 +264,12 @@ type ExportGroup struct {
 
 // ExportGroups includes visual order independently of group identity and parent.
 func ExportGroups() ([]ExportGroup, error) {
+	return exportGroups(db)
+}
+
+func exportGroups(q sqlx.Queryer) ([]ExportGroup, error) {
 	var groups []Group
-	if err := db.Select(&groups, `SELECT * FROM cue_group ORDER BY group_id`); err != nil {
+	if err := sqlx.Select(q, &groups, `SELECT * FROM cue_group ORDER BY group_id`); err != nil {
 		log.Printf("Error ExportGroups: %v", err)
 		return nil, err
 	}

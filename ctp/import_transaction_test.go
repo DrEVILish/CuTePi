@@ -154,11 +154,7 @@ func TestShowRoundTripPreservesMergedOrderAndSelection(t *testing.T) {
 			return out
 		}
 		want := labels(before)
-		cues, selected, err := ExportCues()
-		if err != nil {
-			t.Fatal(err)
-		}
-		groups, err := ExportGroups()
+		show, err := ExportShow()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -167,7 +163,7 @@ func TestShowRoundTripPreservesMergedOrderAndSelection(t *testing.T) {
 			mustRegisterMedia(t, "existing.mp4")
 			AddCue("existing.mp4", "")
 		}
-		if err := ImportShow(groups, cues, selected, !appendMode); err != nil {
+		if err := ImportShow(show.Groups, show.Cues, show.SelectedCuePos, !appendMode); err != nil {
 			t.Fatal(err)
 		}
 		after, _ := loadSheetSequence()
