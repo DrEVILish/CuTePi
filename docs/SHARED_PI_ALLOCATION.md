@@ -1,6 +1,6 @@
 # Shared CuTePi / TimerPi Pi allocation
 
-Status: 2026-11-15, 16:59:29 UTC. The second network-only experiment is complete and its session is released. Both CuTePi services and original networks are restored; TimerPi confirmed temporary cleanup. The first session remains separately released at 16:15:02 UTC.
+Status: 2026-11-15, 19:18:05 UTC. A fresh Ethernet-only performance-diagnosis slot is reserved; no services are paused for this new slot. The prior sessions remain fully released at 16:15:02 and 16:59:29 UTC, with original services and networks restored.
 
 The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You are allowed to use both pi’s.” The [TimerPi lead](t3-thread://v2/9083cb1a-e6ff-40c7-869a-a43f5d9bcad6/69b2fa00-1ced-49b2-aba2-5c87a8238f1e) subsequently verified both by read-only SSH. Fresh identity/network/service observations below come from that preflight; older OS, build and tooling facts are dated separately. This record update involved no Pi commands or device changes.
 
@@ -13,6 +13,18 @@ The owner authorised both physical Pis for TimerPi/shared-Pi preparation: “You
 - The original allocation grant did not settle the shared network profile or grant a disruptive slot. The later owner-directed qualification session below reserves a temporary timerpi/ch13/GB test window, subject to captured baselines, rollback and timed service handovers. Permanent profile convergence remains undecided. Preserve Ethernet management throughout; TimerPi alone changes network controllers.
 - The separate .55 reboot restriction remains: explicit owner approval is required. Do not run the TimerPi installer on a CuTePi playback Pi.
 - Existing direct PVE-root SSH access to root@192.168.10.73 and root@192.168.10.55 was verified by TimerPi's fresh preflight. Use the existing SSH identity and host-key trust; no new credentials are needed or shared here.
+
+## Ethernet-only performance diagnosis: reserved from 2026-11-15 19:18:05 UTC
+
+The owner clarified that clients reach the main Pi over Ethernet; BATMAN is the inter-Pi synchronisation path only. TimerPi requested continued latency diagnosis and speed fixes. CuTePi reserved a fresh slot until follower restoration and explicit temporary-cleanup/release handback. No competing CuTePi hardware measurement or deployment is scheduled.
+
+- Scope: isolated /tmp data, port 18080 and display-off TimerPi on .55. Optional equivalent comparison on .73 must keep the real cutepi service/playback running and label that concurrent workload.
+- Client traffic is Ethernet-only, directly to the serving Pi. Earlier synthetic client traffic routed over BATMAN is a different topology; retain its measured failures without treating them as capacity proof for this deployment.
+- Current networks, controllers and wired management remain unchanged. No radio/controller/filter/routing changes, DRM access, reboot, installer, CuTePi binary/unit/show/data changes or permanent profile conversion are included.
+- Do not pause .55 yet. TimerPi will capture fresh private follower unit/properties/argv/env/cwd/binary and baseline state, then request an exact UTC pause. CuTePi independently recaptures the current transient unit/PID, stops only cutepi-follower, verifies PID/cgroup release and acknowledges before CPU-isolated measurements.
+- Follower restoration uses that fresh baseline after explicit test-stopped handback, followed by temporary cleanup and full slot release. .73 playback is never part of the pause.
+- Identify baseline versus patched build, request/storage/queue waits, load-generator path and concurrent validation for each measurement. Fast development-host results are not Pi qualification or evidence for a language rewrite.
+- No new Pi result is available and no earlier threshold/result has changed. CuTePi issued no Pi commands for this reservation.
 
 ## Network-only experiment: 2026-11-15, 16:52:14 to 16:59:29 UTC
 
