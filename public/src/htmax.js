@@ -1,9 +1,9 @@
-/* Vendored htmx 4.0.1 with local changes. Keep this list current so the next
+/* Vendored htmx 4.0.2 with local changes. Keep this list current so the next
  * upstream sync does not drop them (diff against upstream to find any others):
  *  - RequestQueue.continue(abortRequest): returns early unless the finished
  *    request is still the current one (a replaced request must not advance the queue).
- *  - #parseHTML: falls back to DOMParser when Document.parseHTMLUnsafe(html, {})
- *    throws (Chromium 141 rejects the options argument).
+ *  - #initRequestIndicatorCss: insert a style element if adopted stylesheets fail.
+ *  - Bundled extensions: retain the existing local behavior; compare against dist/htmax.js.
  */
 var htmx = (() => {
 
@@ -189,7 +189,7 @@ var htmx = (() => {
         }
 
         #initHtmxConfig() {
-            this.version = '4.0.1'
+            this.version = '4.0.2'
             this.config = {
                 logAll: false,
                 prefix: "data-hx-",
@@ -822,9 +822,9 @@ var htmx = (() => {
                         let evtArgs = {}; for (let k in evt) if (/^[a-z]+$/i.test(k)) evtArgs[k] = evt[k];
                         if (!this.#executeJavaScript(elt, evtArgs, filter, true, false)) return;
                     }
-                    // a new trigger replaces any pending delayed or throttled trigger on this element
+                    // a new trigger replaces any pending delayed or throttled trigger from the same hx-trigger value
                     if (eventName !== 'every') {
-                        for (let other of this.#htmxProp(elt).triggerSpecs) {
+                        for (let other of specs) {
                             clearTimeout(other.timeout);
                             other.throttledEvent = null;
                         }
@@ -1064,14 +1064,7 @@ var htmx = (() => {
 
         #parseHTML(resp) {
             let trusted = this.#ttPolicy.createHTML(resp);
-            // {} works around Chrome 150-156 dropping comments :/
-            // Older Chromium (e.g. 141) rejects the options argument with "Overload
-            // resolution failed", which failed every swap there: fall back to DOMParser.
-            try {
-                let doc = Document.parseHTMLUnsafe?.(trusted, {});
-                if (doc) return doc;
-            } catch {}
-            return new DOMParser().parseFromString(trusted, 'text/html');
+            return Document.parseHTMLUnsafe?.(trusted) || new DOMParser().parseFromString(trusted, 'text/html');
         }
 
         #makeFragment(text) {
@@ -1092,7 +1085,7 @@ var htmx = (() => {
             }
 
             if (!title) {
-                let titleElt = fragment.querySelector('title:not(svg title)');
+                let titleElt = [...fragment.querySelectorAll('title')].find(t => !t.closest('svg'));
                 if (titleElt) {
                     title = titleElt.textContent;
                     titleElt.remove();
@@ -1269,7 +1262,9 @@ var htmx = (() => {
         initialize() {
             if (this.config.history && !this.#historyInitialized) {
                 this.#historyInitialized = true;
-                if (window.navigation && !/firefox/i.test(navigator.userAgent)) {
+                /* c8 ignore next 2 */
+                const ffVer = navigator.userAgent.match(/Firefox\/(\d+)/)?.[1];
+                if (window.navigation && (!ffVer || +ffVer >= 159)) {
                     navigation.addEventListener('navigate', (event) => {
                         if (event.navigationType === 'traverse' && event.canIntercept && !event.hashChange)
                             event.intercept({handler: () => this.#restoreHistory()});
@@ -2394,7 +2389,6 @@ htmx.version += "-htmax";
 htmx.config.historyCache ??= { disable: true };
 (() => {
     let api;
-    let warnedLegacyAttributes = new Set();
 
     // ========================================
     // HELPERS
@@ -2751,23 +2745,6 @@ htmx.config.historyCache ??= { disable: true };
     }
 
     // ========================================
-    // BACKWARD COMPATIBILITY
-    // ========================================
-
-    function checkLegacyAttributes(element) {
-        for (let attribute of ['sse-connect', 'sse-close', 'sse-swap']) {
-            if (!element.hasAttribute(attribute) || warnedLegacyAttributes.has(attribute)) continue;
-
-            if (attribute === 'sse-swap') {
-                console.warn('htmx: [hx-sse] sse-swap is removed in htmx 4. Unnamed SSE messages are swapped automatically. Named events are dispatched as DOM events.');
-            } else {
-                console.warn(`htmx: [hx-sse] legacy attribute ${attribute} is deprecated; use hx-sse:${attribute.slice(4)} instead`);
-            }
-            warnedLegacyAttributes.add(attribute);
-        }
-    }
-
-    // ========================================
     // EXTENSION REGISTRATION
     // ========================================
 
@@ -2802,23 +2779,11 @@ htmx.config.historyCache ??= { disable: true };
 
         htmx_after_process: (element) => {
             let mc = htmx.config.metaCharacter || ':';
-            let processSSEElement = (element) => {
-                checkLegacyAttributes(element);
-                for (let name of ['connect', 'close']) {
-                    let legacyAttr = `sse-${name}`;
-                    if (!element.hasAttribute(legacyAttr)) continue;
-
-                    let attr = (htmx.config.prefix || 'hx-') + 'sse' + mc + name;
-                    if (!element.hasAttribute(attr)) element.setAttribute(attr, element.getAttribute(legacyAttr));
-                }
-                processElement(element);
-            };
-
-            processSSEElement(element);
+            processElement(element);
             let sseAttr = CSS.escape('hx-sse' + mc + 'connect');
             let sseSelector = `[${sseAttr}]`;
             if (htmx.config.prefix) sseSelector += `,[${CSS.escape(htmx.config.prefix + 'sse' + mc + 'connect')}]`;
-            element.querySelectorAll(`${sseSelector},[sse-connect],[sse-close],[sse-swap]`).forEach(processSSEElement);
+            element.querySelectorAll(sseSelector).forEach(processElement);
         },
 
         htmx_before_cleanup: (element) => {
@@ -3337,33 +3302,6 @@ htmx.config.historyCache ??= { disable: true };
     }
     
     // ========================================
-    // BACKWARD COMPATIBILITY
-    // ========================================
-    
-    function checkLegacyAttributes(element) {
-        if (element.hasAttribute('ws-connect') || element.hasAttribute('ws-send')) {
-            console.warn('htmx: [hx-ws] legacy attributes ws-connect and ws-send are deprecated; use hx-ws:connect and hx-ws:send instead');
-
-            if (element.hasAttribute('ws-connect')) {
-                let url = element.getAttribute('ws-connect');
-                let mc = htmx.config.metaCharacter || ':';
-                let attr = (htmx.config.prefix || 'hx-') + 'ws' + mc + 'connect';
-                if (!element.hasAttribute(attr)) {
-                    element.setAttribute(attr, url);
-                }
-            }
-
-            if (element.hasAttribute('ws-send')) {
-                let mc = htmx.config.metaCharacter || ':';
-                let attr = (htmx.config.prefix || 'hx-') + 'ws' + mc + 'send';
-                if (!element.hasAttribute(attr)) {
-                    element.setAttribute(attr, '');
-                }
-            }
-        }
-    }
-    
-    // ========================================
     // EXTENSION REGISTRATION
     // ========================================
     
@@ -3379,8 +3317,6 @@ htmx.config.historyCache ??= { disable: true };
         
         htmx_after_process: (element) => {
             const processNode = (node) => {
-                checkLegacyAttributes(node);
-
                 let send = api.attributeValue(node, 'hx-ws:send');
                 if (api.attributeValue(node, 'hx-ws:connect') != null) {
                     initializeElement(node);
@@ -3393,7 +3329,7 @@ htmx.config.historyCache ??= { disable: true };
 
             processNode(element);
 
-            let sel = wsSelector('connect') + ',' + wsSelector('send') + ',[ws-connect],[ws-send]';
+            let sel = wsSelector('connect') + ',' + wsSelector('send');
             element.querySelectorAll(sel).forEach(processNode);
         },
         
@@ -4632,20 +4568,20 @@ htmx.config.historyCache ??= { disable: true };
         writeAttr(elt, attrName, value);
     }
 
-    htmx.live = {
-        q: s => makeQ(document.documentElement)(s),
-        debounce: makeDebounce(),
-        refresh: () => schedule(),
-        take: (target, name, scope) => applyTake(htmx.live.q(target).arr(), name, scope),
-        toggle: (target, name, ...values) => htmx.live.q(target).forEach(e => applyToggle(e, name, ...values)),
-        forEvent: (...args) => forEvent(null, ...args),
-        nextFrame: () => new Promise(r => requestAnimationFrame(r))
-    };
-    htmx.live.$ = htmx.live.q;
-
     htmx.registerExtension('hx-live', {
         init: (internalAPI) => {
             api = internalAPI;
+
+            htmx.live = {
+                q: s => makeQ(document.documentElement)(s),
+                debounce: makeDebounce(),
+                refresh: () => schedule(),
+                take: (target, name, scope) => applyTake(htmx.live.q(target).arr(), name, scope),
+                toggle: (target, name, ...values) => htmx.live.q(target).forEach(e => applyToggle(e, name, ...values)),
+                forEvent: (...args) => forEvent(null, ...args),
+                nextFrame: () => new Promise(r => requestAnimationFrame(r))
+            };
+            htmx.live.$ = htmx.live.q;
         },
         htmx_before_cleanup: (elt) => {
             cleanupLive(elt);
