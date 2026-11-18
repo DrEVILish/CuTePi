@@ -899,7 +899,13 @@ func LoadWithOpts(filename string, opts LoadOpts) error {
 	gstInit()
 	t0 := time.Now()
 	noteFire()
-	awaitWarmBuild(filename, opts, 6*time.Second) // Warm's own preroll bound is 5 s
+	halt := Halts()
+	if !awaitWarmBuild(filename, opts, 6*time.Second) {
+		return fmt.Errorf("loading %q: prewarm is still using the decoder", filename)
+	}
+	if Halts() != halt {
+		return fmt.Errorf("loading %q: playback halted while waiting for prewarm", filename)
+	}
 	if InstallWarm(filename, opts) {
 		logs.Printf(logs.GSPFireTiming, "cue load %q: warm swap %.1fms", filename, time.Since(t0).Seconds()*1000)
 		return nil

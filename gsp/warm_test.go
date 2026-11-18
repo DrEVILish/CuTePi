@@ -443,3 +443,28 @@ func TestWarmStaleSourceRefusesInstall(t *testing.T) {
 		})
 	}
 }
+
+func TestAwaitWarmBuildTimeoutBlocksDuplicateLoad(t *testing.T) {
+	const file = "arming.wav"
+	opts := LoadOpts{WarmPreroll: true}
+	done := make(chan struct{})
+	mgr.mu.Lock()
+	warmBuild.file, warmBuild.opts, warmBuild.done = file, opts, done
+	mgr.mu.Unlock()
+	t.Cleanup(func() {
+		mgr.mu.Lock()
+		warmBuild.done = nil
+		mgr.mu.Unlock()
+	})
+
+	if awaitWarmBuild(file, opts, 0) {
+		t.Fatal("timed-out matching build allowed a second decoder build")
+	}
+	if !awaitWarmBuild("other.wav", opts, 0) {
+		t.Fatal("unrelated build blocked the cue")
+	}
+	close(done)
+	if !awaitWarmBuild(file, opts, time.Second) {
+		t.Fatal("finished build still blocked the cue")
+	}
+}

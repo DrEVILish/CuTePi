@@ -69,19 +69,21 @@ var warmBuild struct {
 
 // awaitWarmBuild waits (at most max) for an arm of file+opts that is being
 // built: a GO that lands mid-arm takes the arm when it is ready rather than
-// building the same cue again beside it (it started earlier, so it is ready
-// sooner, and two decodes at once slow both).
-func awaitWarmBuild(file string, opts LoadOpts, max time.Duration) {
+// building the same cue again beside it. False means the caller must
+// report a timeout instead of starting a competing decoder.
+func awaitWarmBuild(file string, opts LoadOpts, max time.Duration) bool {
 	mgr.mu.Lock()
 	done := warmBuild.done
 	same := done != nil && warmBuild.file == file && warmBuild.opts == opts
 	mgr.mu.Unlock()
 	if !same {
-		return
+		return true
 	}
 	select {
 	case <-done:
+		return true
 	case <-time.After(max):
+		return false
 	}
 }
 
@@ -99,6 +101,7 @@ func awaitWarmBuild(file string, opts LoadOpts, max time.Duration) {
 // is retired, never installed.
 func Warm(file string, opts LoadOpts) error {
 	gstInit()
+	halt := Halts()
 	source := snapshotWarmSource(file)
 	if glOpen {
 		return nil // GL wall: prewarm not wired yet; cold builds are quick
@@ -110,7 +113,7 @@ func Warm(file string, opts LoadOpts) error {
 	warmMu.Lock() // one build at a time: a second arm of the same cue finds it armed
 	defer warmMu.Unlock()
 	mgr.mu.Lock()
-	if mgr.warm.matches(file, opts) {
+	if mgr.halts != halt || mgr.warm.matches(file, opts) {
 		mgr.mu.Unlock()
 		return nil
 	}
@@ -156,7 +159,7 @@ func Warm(file string, opts LoadOpts) error {
 		return fmt.Errorf("prewarm seek to the in-point failed")
 	}
 	mgr.mu.Lock()
-	current := mgr.gen == buildGen
+	current := mgr.gen == buildGen && mgr.halts == halt
 	var displaced *gst.Pipeline
 	if current {
 		displaced = mgr.warm.take() // a concurrent Warm may have filled it
@@ -181,6 +184,7 @@ func Warm(file string, opts LoadOpts) error {
 // stale-arm rule for its other callers).
 func WarmNext(file string, opts LoadOpts) error {
 	gstInit()
+	halt := Halts()
 	source := snapshotWarmSource(file)
 	if glOpen || !Layered() {
 		return nil
@@ -188,7 +192,7 @@ func WarmNext(file string, opts LoadOpts) error {
 	warmMu.Lock()
 	defer warmMu.Unlock()
 	mgr.mu.Lock()
-	if armedLocked(file, opts) {
+	if mgr.halts != halt || armedLocked(file, opts) {
 		mgr.mu.Unlock()
 		return nil
 	}
@@ -217,6 +221,11 @@ func WarmNext(file string, opts LoadOpts) error {
 		return fmt.Errorf("prewarm seek to the in-point failed")
 	}
 	mgr.mu.Lock()
+	if mgr.halts != halt {
+		mgr.mu.Unlock()
+		retirePipeline(p)
+		return nil
+	}
 	displaced := spare.take()
 	spare = warmSlot{p: p, file: file, opts: opts, source: source}
 	mgr.mu.Unlock()
